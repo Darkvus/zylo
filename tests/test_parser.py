@@ -30,7 +30,7 @@ def test_compound_operator_tokens():
     assert ops == ["+="]
 
 
-# ---- asignación ----------------------------------------------------------------
+# ---- assignment ----------------------------------------------------------------
 
 def test_assign_plain():
     s = stmt("x = 1")
@@ -60,7 +60,7 @@ def test_assign_to_literal_is_error():
         parse("1 = 2")
 
 
-# ---- control de flujo -------------------------------------------------------------
+# ---- control flow -------------------------------------------------------------
 
 def test_if_elif_else():
     s = stmt("if a:\n    x = 1\nelif b:\n    x = 2\nelse:\n    x = 3\n")
@@ -118,7 +118,7 @@ def test_param_requires_type():
     assert e.value.line == 1
 
 
-# ---- operadores lógicos -------------------------------------------------------------
+# ---- logical operators -------------------------------------------------------------
 
 def test_and_binds_tighter_than_or():
     e = expr("a or b and c")
@@ -136,7 +136,7 @@ def test_not_then_and():
     assert e.op == "and" and isinstance(e.left, ast.UnaryOp)
 
 
-# ---- errores con posición -----------------------------------------------------------
+# ---- errors with a position -----------------------------------------------------------
 
 def test_missing_colon():
     with pytest.raises(ZyloError) as e:
@@ -145,12 +145,12 @@ def test_missing_colon():
 
 
 def test_else_without_if():
-    with pytest.raises(ZyloError, match="sin 'if'"):
+    with pytest.raises(ZyloError, match="without a preceding 'if'"):
         parse("else:\n    x = 1\n")
 
 
 def test_unexpected_indent():
-    with pytest.raises(ZyloError, match="indentación inesperada"):
+    with pytest.raises(ZyloError, match="unexpected indentation"):
         parse("x = 1\n    y = 2\n")
 
 

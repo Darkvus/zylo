@@ -1,4 +1,4 @@
-# Máximo común divisor y mínimo común múltiplo
+# Greatest common divisor and least common multiple
 fn gcd(a: int, b: int) -> int:
     while b != 0:
         t = a % b

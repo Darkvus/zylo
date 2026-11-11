@@ -1,0 +1,9 @@
+30
+0
+User(name="ana", age=Some(30))
+User(name="bob", age=None)
+false
+41
+true
+Some(31)
+None

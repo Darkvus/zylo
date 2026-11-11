@@ -1,4 +1,4 @@
-# Álgebra de vectores 2D: métodos que devuelven structs nuevos y se llaman entre sí
+# 2D vector algebra: methods that return new structs and call each other
 struct Vec2:
     x: float
     y: float

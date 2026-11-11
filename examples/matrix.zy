@@ -1,4 +1,4 @@
-# Producto de matrices 3x3 con listas anidadas
+# 3x3 matrix product with nested lists
 fn multiply(a: list[list[int]], b: list[list[int]], n: int) -> list[list[int]]:
     result = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
     for i in range(n):

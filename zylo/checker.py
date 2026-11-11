@@ -1,23 +1,24 @@
-"""Chequeo de tipos: inferencia local, tabla de símbolos y anotación del AST.
+"""Type checker: local inference, symbol table and AST annotation.
 
 Reglas:
-- Sin coerción implícita (`int + float` es error; usa `float(x)`).
-- `x = v` declara si `x` no existe en el ámbito visible; si existe, reasigna (mismo tipo)
+- No implicit coercion (`int + float` is an error; use `float(x)`).
+- `x = v` declares `x` if it is not visible in scope; otherwise it reassigns (same type)
   y la variable queda marcada como mutable.
 - Ámbito de bloque: una variable declarada dentro de un `if`/`while`/`for` no existe fuera.
-- Las funciones solo ven sus parámetros, sus locales y otras funciones (no globales).
-- `int / int` es división entera.
-- Los structs son valores (como las listas): copiar o pasar a una función clona. Los métodos
-  reciben `self` por referencia; el checker infiere si lo modifican (`self_mut`), también
-  cuando lo hacen llamando a otro método modificador (punto fijo en `check`).
+- Functions only see their parameters, their locals and other functions (no globals).
+- `int / int` is integer division.
+- Structs are values (like lists): copying or passing them to a function clones. Methods
+  receive `self` by reference; the checker infers whether they modify it (`self_mut`), also
+  when they do so by calling another modifying method (fixed point in `check`).
 """
 from dataclasses import dataclass, field
 
 from . import ast
 from .errors import ZyloError
-from .types import BOOL, FLOAT, INT, PRIMS, STR, UNIT, FnT, ListT, StructT, Type, VarInfo
+from .types import BOOL, FLOAT, INT, PRIMS, STR, UNIT, FnT, ListT, OptionT, ResultT, StructT, Type, VarInfo
 
-BUILTINS = {"print", "range", "len", "int", "float", "str", "append", "exit"}
+BUILTINS = {"print", "range", "len", "int", "float", "str", "append", "exit",
+            "some", "ok", "err", "parse_int", "parse_float"}
 ARITH = {"+", "-", "*", "/", "%"}
 EQ = {"==", "!="}
 ORDER = {"<", ">", "<=", ">="}
@@ -61,10 +62,10 @@ class Checker:
     def __init__(self, mutating: set[tuple[str, str]] | None = None) -> None:
         self.fns: dict[str, FnT] = {}
         self.structs: dict[str, StructInfo] = {}
-        self.mutating: set[tuple[str, str]] = set(mutating or ())  # (struct, método) que modifican self
+        self.mutating: set[tuple[str, str]] = set(mutating or ())  # (struct, method) pairs that modify self
         self.scopes = Scopes()
-        self.ret: Type | None = None  # tipo de retorno de la función actual (None = top level)
-        self.owner: str | None = None  # struct del método actual
+        self.ret: Type | None = None  # return type of the current function (None = top level)
+        self.owner: str | None = None  # struct of the current method
         self.loops = 0
 
     # ---- entrada ---------------------------------------------------------------------
@@ -76,7 +77,7 @@ class Checker:
         for d in defs:
             self.resolve_struct(d)
         self.check_cycles(defs)
-        for s in prog.body:  # firmas de funciones, para permitir uso antes de la definición
+        for s in prog.body:  # function signatures, so they can be used before their definition
             if isinstance(s, ast.FnDef):
                 self.declare_fn(s)
         for d in defs:
@@ -95,28 +96,32 @@ class Checker:
     def resolve(self, t: ast.TypeRef) -> Type:
         if t.name == "list":
             return ListT(self.resolve(t.args[0]))
+        if t.name == "?":
+            return OptionT(self.resolve(t.args[0]))
+        if t.name == "Result":
+            return ResultT(self.resolve(t.args[0]), self.resolve(t.args[1]))
         if t.name in PRIMS:
             return PRIMS[t.name]
         if t.name in self.structs:
             return StructT(t.name)
-        raise err(f"tipo desconocido {t.name!r}", t)
+        raise err(f"unknown type {t.name!r}", t)
 
     # ---- structs ----------------------------------------------------------------------
 
     def register_struct(self, d: ast.StructDef) -> None:
         if d.name in self.structs:
-            raise err(f"struct {d.name!r} ya definido", d)
-        if d.name in BUILTINS or d.name in PRIMS or d.name in ("list", "unit"):
-            raise err(f"{d.name!r} es un nombre reservado", d)
+            raise err(f"struct {d.name!r} is already defined", d)
+        if d.name in BUILTINS or d.name in PRIMS or d.name in ("list", "unit", "Result"):
+            raise err(f"{d.name!r} is a reserved name", d)
         self.structs[d.name] = StructInfo(d.name, d)
 
     def resolve_struct(self, d: ast.StructDef) -> None:
         info = self.structs[d.name]
         if not d.fields:
-            raise err(f"el struct {d.name!r} necesita al menos un campo", d)
+            raise err(f"struct {d.name!r} needs at least one field", d)
         for f in d.fields:
             if f.name in info.fields:
-                raise err(f"campo {f.name!r} repetido en {d.name!r}", f)
+                raise err(f"duplicate field {f.name!r} in {d.name!r}", f)
             f.ty = info.fields[f.name] = self.resolve(f.type)
 
     def check_cycles(self, defs: list[ast.StructDef]) -> None:
@@ -133,17 +138,17 @@ class Checker:
 
         for d in defs:
             if reaches(d.name, d.name, set()):
-                raise err(f"el struct {d.name!r} se contiene a sí mismo (directa o indirectamente); usa una lista", d)
+                raise err(f"struct {d.name!r} contains itself (directly or indirectly); use a list", d)
 
     def declare_methods(self, d: ast.StructDef) -> None:
         info = self.structs[d.name]
         for m in d.methods:
             if not m.has_self:
-                raise err(f"el método {m.name!r} debe recibir `self` como primer parámetro", m)
+                raise err(f"method {m.name!r} must take `self` as its first parameter", m)
             if m.name in info.fields:
-                raise err(f"{m.name!r} es a la vez un campo y un método de {d.name!r}", m)
+                raise err(f"{m.name!r} is both a field and a method of {d.name!r}", m)
             if m.name in info.methods:
-                raise err(f"método {m.name!r} ya definido en {d.name!r}", m)
+                raise err(f"method {m.name!r} is already defined in {d.name!r}", m)
             m.ty = info.methods[m.name] = self.signature(m)
 
     # ---- funciones ------------------------------------------------------------------
@@ -152,20 +157,20 @@ class Checker:
         seen: set[str] = set()
         for p in f.params:
             if p.name == "self":
-                raise err("`self` solo puede ser el primer parámetro de un método", p)
+                raise err("`self` can only be the first parameter of a method", p)
             if p.name in seen:
-                raise err(f"parámetro {p.name!r} repetido", p)
+                raise err(f"duplicate parameter {p.name!r}", p)
             seen.add(p.name)
         ret = self.resolve(f.ret) if f.ret else UNIT
         return FnT(tuple(self.resolve(p.type) for p in f.params), ret)
 
     def declare_fn(self, f: ast.FnDef) -> None:
         if f.name in BUILTINS:
-            raise err(f"{f.name!r} es una función integrada", f)
+            raise err(f"{f.name!r} is a built-in function", f)
         if f.name in self.structs:
-            raise err(f"{f.name!r} ya es un struct", f)
+            raise err(f"{f.name!r} is already a struct", f)
         if f.name in self.fns:
-            raise err(f"función {f.name!r} ya definida", f)
+            raise err(f"function {f.name!r} is already defined", f)
         f.ty = self.fns[f.name] = self.signature(f)
 
     def check_fn(self, f: ast.FnDef, owner: str | None = None) -> None:
@@ -177,7 +182,7 @@ class Checker:
             p.info = self.scopes.declare(p.name, pt)
         self.block(f.body)
         if sig.ret != UNIT and not always_returns(f.body):
-            raise err(f"la función {f.name!r} puede terminar sin `return`", f)
+            raise err(f"function {f.name!r} can finish without a `return`", f)
         if owner:
             if self_info.mutable:
                 self.mutating.add((owner, f.name))
@@ -186,11 +191,42 @@ class Checker:
 
     # ---- sentencias ------------------------------------------------------------------
 
-    def block(self, body: list[ast.Stmt]) -> None:
+    def block(self, body: list[ast.Stmt], bind: tuple[str | None, Type | None] | None = None) -> VarInfo | None:
+        """Check a block in its own scope. `bind` = (name, type) rebinds a variable with a narrowed
+        type for the whole block (see `is` narrowing); returns that new VarInfo."""
         self.scopes.push()
+        info = None
+        if bind and bind[1] is not None:
+            info = self.scopes.declare(bind[0], bind[1])
+            info.narrowed = True
         for s in body:
             self.stmt(s)
         self.scopes.pop()
+        return info
+
+    def narrowing(self, cond: ast.Expr) -> tuple[str, Type | None, Type | None] | None:
+        """For `x is K` on a plain variable: (name, type of x inside the then-branch, type inside
+        the else-branch); None means "no information"."""
+        if not (isinstance(cond, ast.IsCheck) and isinstance(cond.value, ast.Name)):
+            return None
+        t, k = cond.value.ty, cond.kind
+        if isinstance(t, OptionT):
+            then_t, else_t = (t.inner, None) if k == "some" else (None, t.inner)
+        else:
+            then_t, else_t = (t.ok, t.err) if k == "ok" else (t.err, t.ok)
+        return cond.value.id, then_t, else_t
+
+    def if_stmt(self, s: ast.If) -> None:
+        self.expect_bool(s.cond, "the `if` condition")
+        nar = self.narrowing(s.cond)
+        name, then_t, else_t = nar if nar else (None, None, None)
+        s.then_bind = self.block(s.then, (name, then_t))
+        s.else_bind = self.block(s.else_, (name, else_t))
+        if nar and not s.else_ and else_t is not None and exits(s.then):
+            # early exit: `if x is none: return ...` narrows x for the rest of the enclosing block
+            info = self.scopes.declare(name, else_t)
+            info.narrowed = True
+            s.after_bind = info
 
     def stmt(self, s: ast.Stmt) -> None:
         match s:
@@ -198,12 +234,10 @@ class Checker:
                 self.expr(e)
             case ast.Assign():
                 self.assign(s)
-            case ast.If(cond, then, else_):
-                self.expect_bool(cond, "la condición del `if`")
-                self.block(then)
-                self.block(else_)
+            case ast.If():
+                self.if_stmt(s)
             case ast.While(cond, body):
-                self.expect_bool(cond, "la condición del `while`")
+                self.expect_bool(cond, "the `while` condition")
                 self.loops += 1
                 self.block(body)
                 self.loops -= 1
@@ -214,47 +248,47 @@ class Checker:
             case ast.Break() | ast.Continue():
                 if not self.loops:
                     kw = "break" if isinstance(s, ast.Break) else "continue"
-                    raise err(f"`{kw}` fuera de un bucle", s)
+                    raise err(f"`{kw}` outside a loop", s)
             case ast.FnDef():
-                raise err("las funciones solo pueden definirse a nivel superior", s)
+                raise err("functions can only be defined at the top level", s)
             case ast.StructDef():
-                raise err("los structs solo pueden definirse a nivel superior", s)
+                raise err("structs can only be defined at the top level", s)
 
     def expect_bool(self, e: ast.Expr, what: str) -> None:
         t = self.expr(e)
         if t != BOOL:
-            raise err(f"{what} debe ser bool, no {t}", e)
+            raise err(f"{what} must be bool, not {t}", e)
 
     def return_(self, s: ast.Return, value: ast.Expr | None) -> None:
         if self.ret is None:
-            raise err("`return` fuera de una función", s)
+            raise err("`return` outside a function", s)
         if value is None:
             if self.ret != UNIT:
-                raise err(f"`return` sin valor en una función que devuelve {self.ret}", s)
+                raise err(f"`return` without a value in a function that returns {self.ret}", s)
             return
         if self.ret == UNIT:
-            raise err("la función no declara tipo de retorno (`-> T`) pero devuelve un valor", s)
+            raise err("the function declares no return type (`-> T`) but returns a value", s)
         t = self.expr(value, self.ret)
         if t != self.ret:
-            raise err(f"se devuelve {t} pero la función declara {self.ret}", value)
+            raise err(f"returning {t} but the function declares {self.ret}", value)
 
     def for_loop(self, s: ast.For) -> None:
         if s.var == "self":
-            raise err("`self` no puede usarse como variable de bucle", s)
+            raise err("`self` cannot be used as a loop variable", s)
         it = s.iter
         if isinstance(it, ast.Call) and it.func == "range":
             if not 1 <= len(it.args) <= 2:
-                raise err("range espera 1 o 2 argumentos", it)
+                raise err("range takes 1 or 2 arguments", it)
             for a in it.args:
                 t = self.expr(a)
                 if t != INT:
-                    raise err(f"range espera int, no {t}", a)
+                    raise err(f"range expects int, not {t}", a)
             it.ty = ListT(INT)
             var_t: Type = INT
         else:
             t = self.expr(it)
             if not isinstance(t, ListT):
-                raise err(f"solo se puede iterar sobre range(...) o list, no {t}", it)
+                raise err(f"can only iterate over range(...) or a list, not {t}", it)
             var_t = t.elem
         self.scopes.push()
         s.info = self.scopes.declare(s.var, var_t)
@@ -269,11 +303,11 @@ class Checker:
         if isinstance(target, ast.Index):
             base_t = self.expr(target.value)
             if not isinstance(base_t, ListT):
-                raise err(f"no se puede asignar por índice a {base_t}", target)
+                raise err(f"cannot assign by index to {base_t}", target)
             self.expect_int(target.index)
             vt = self.expr(s.value, base_t.elem)
             if vt != base_t.elem:
-                raise err(f"se asigna {vt} a un elemento de {base_t}", s.value)
+                raise err(f"assigning {vt} to an element of {base_t}", s.value)
             target.ty = base_t.elem
             self.mark_mutable(target.value)
             return
@@ -281,36 +315,38 @@ class Checker:
             ft = self.expr(target)
             vt = self.expr(s.value, ft)
             if vt != ft:
-                raise err(f"el campo {target.name!r} es {ft} pero se asigna {vt}", s.value)
+                raise err(f"field {target.name!r} is {ft} but {vt} is assigned", s.value)
             self.mark_mutable(target)
             return
         if target.id == "self":
-            raise err("`self` no se puede declarar ni reasignar" if self.owner is None
-                      else "no se puede reasignar `self`; modifica sus campos (`self.x = ...`)", s)
+            raise err("`self` cannot be declared or reassigned" if self.owner is None
+                      else "cannot reassign `self`; modify its fields (`self.x = ...`)", s)
         existing = self.scopes.lookup(target.id)
         if s.annotation:
             if existing:
-                raise err(f"{target.id!r} ya está declarada", s)
+                raise err(f"{target.id!r} is already declared", s)
             declared = self.resolve(s.annotation)
             vt = self.expr(s.value, declared)
             if vt != declared:
-                raise err(f"{target.id!r} es {declared} pero se asigna {vt}", s.value)
+                raise err(f"{target.id!r} is {declared} but {vt} is assigned", s.value)
             s.declares, s.var = True, self.scopes.declare(target.id, declared)
         elif existing:
+            if existing.narrowed:
+                raise err(f"{target.id!r} is narrowed to {existing.ty} by an `is` check here and cannot be reassigned", s)
             vt = self.expr(s.value, existing.ty)
             if vt != existing.ty:
-                raise err(f"{target.id!r} es {existing.ty} pero se asigna {vt}", s.value)
+                raise err(f"{target.id!r} is {existing.ty} but {vt} is assigned", s.value)
             existing.mutable = True
             s.var = existing
         else:
             vt = self.expr(s.value)
             if vt == UNIT:
-                raise err("la expresión no produce ningún valor", s.value)
+                raise err("the expression produces no value", s.value)
             s.declares, s.var = True, self.scopes.declare(target.id, vt)
         target.ty = s.var.ty
 
     def mark_mutable(self, e: ast.Expr) -> None:
-        """Marca como mutable la variable raíz de un lugar (`xs[i]`, `p.x`, `p.items[0]`...)."""
+        """Mark the root variable of a place (`xs[i]`, `p.x`, `p.items[0]`...) as mutable."""
         while isinstance(e, (ast.Index, ast.Attr)):
             e = e.value
         if isinstance(e, ast.Name) and (info := self.scopes.lookup(e.id)):
@@ -319,7 +355,7 @@ class Checker:
     def expect_int(self, e: ast.Expr) -> None:
         t = self.expr(e)
         if t != INT:
-            raise err(f"se esperaba int, no {t}", e)
+            raise err(f"expected int, not {t}", e)
 
     # ---- expresiones -----------------------------------------------------------------
 
@@ -341,17 +377,31 @@ class Checker:
                 info = self.scopes.lookup(id)
                 if info is None:
                     if id in self.structs:
-                        raise err(f"{id!r} es un struct; constrúyelo con paréntesis: {id}(...)", e)
+                        raise err(f"{id!r} is a struct; build it with parentheses: {id}(...)", e)
                     if id in self.fns or id in BUILTINS:
-                        raise err(f"{id!r} es una función; llámala con paréntesis", e)
-                    raise err(f"variable {id!r} no definida", e)
+                        raise err(f"{id!r} is a function; call it with parentheses", e)
+                    raise err(f"undefined variable {id!r}", e)
                 return info.ty
             case ast.UnaryOp(op, x):
                 return self.unary(e, op, x)
             case ast.BinOp(op, l, r):
                 return self.binop(e, op, l, r)
             case ast.Call():
-                return self.call(e)
+                return self.call(e, expected)
+            case ast.NoneLit():
+                if isinstance(expected, OptionT):
+                    return expected
+                raise err("cannot infer the type of `none`; annotate it, e.g. `x: int? = none`", e)
+            case ast.IsCheck(v, kind):
+                t = self.expr(v)
+                allowed = {"some", "none"} if isinstance(t, OptionT) else {"ok", "err"} if isinstance(t, ResultT) else None
+                if allowed is None:
+                    raise err(f"`is {kind}` needs an Option or a Result, not {t}", e)
+                if kind not in allowed:
+                    raise err(f"`is {kind}` cannot be applied to {t}; use `is {'` or `is '.join(sorted(allowed))}`", e)
+                return BOOL
+            case ast.Try(v):
+                return self.try_op(e, v)
             case ast.MethodCall():
                 return self.method_call(e)
             case ast.Attr(v, name):
@@ -361,84 +411,120 @@ class Checker:
             case ast.Index(v, i):
                 vt = self.expr(v)
                 if not isinstance(vt, ListT):
-                    raise err(f"no se puede indexar {vt}", e)
+                    raise err(f"cannot index {vt}", e)
                 self.expect_int(i)
                 return vt.elem
-        raise err(f"expresión no soportada: {type(e).__name__}", e)
+        raise err(f"unsupported expression: {type(e).__name__}", e)
 
     def unary(self, e: ast.UnaryOp, op: str, x: ast.Expr) -> Type:
         t = self.expr(x)
         if op == "not":
             if t != BOOL:
-                raise err(f"`not` espera bool, no {t}", e)
+                raise err(f"`not` expects bool, not {t}", e)
             return BOOL
         if t not in (INT, FLOAT):
-            raise err(f"`-` espera int o float, no {t}", e)
+            raise err(f"`-` expects int or float, not {t}", e)
         return t
 
     def binop(self, e: ast.BinOp, op: str, l: ast.Expr, r: ast.Expr) -> Type:
-        lt, rt = self.expr(l), self.expr(r)
+        if isinstance(l, ast.NoneLit):  # `none == x`: the other side gives the type
+            rt = self.expr(r)
+            lt = self.expr(l, rt)
+        else:
+            lt = self.expr(l)
+            rt = self.expr(r, lt)
         if op in ("and", "or"):
             if lt != BOOL or rt != BOOL:
-                raise err(f"`{op}` espera bool y bool, no {lt} y {rt}", e)
+                raise err(f"`{op}` expects bool and bool, not {lt} and {rt}", e)
             return BOOL
         if lt != rt:
-            hint = " (usa float(x) o int(x) para convertir)" if {lt, rt} == {INT, FLOAT} else ""
-            raise err(f"`{op}` entre {lt} y {rt}: los tipos deben coincidir{hint}", e)
+            hint = " (use float(x) or int(x) to convert)" if {lt, rt} == {INT, FLOAT} else ""
+            raise err(f"`{op}` between {lt} and {rt}: types must match{hint}", e)
         if op in ARITH:
             if lt in (INT, FLOAT) or (op == "+" and lt == STR):
                 return lt
-            raise err(f"`{op}` no está definido para {lt}", e)
+            raise err(f"`{op}` is not defined for {lt}", e)
         if op in ORDER:
             if lt in (INT, FLOAT, STR):
                 return BOOL
-            raise err(f"`{op}` no está definido para {lt}", e)
+            raise err(f"`{op}` is not defined for {lt}", e)
         if op in EQ:
             return BOOL
-        raise err(f"operador desconocido {op!r}", e)
+        raise err(f"unknown operator {op!r}", e)
 
     def list_lit(self, e: ast.ListLit, items: list[ast.Expr], expected: Type | None) -> Type:
         if not items:
             if isinstance(expected, ListT):
                 return expected
-            raise err("no se puede inferir el tipo de una lista vacía; anótala: `xs: list[int] = []`", e)
+            raise err("cannot infer the type of an empty list; annotate it: `xs: list[int] = []`", e)
         elem = expected.elem if isinstance(expected, ListT) else None
         first = self.expr(items[0], elem)
         for it in items[1:]:
             t = self.expr(it, first)
             if t != first:
-                raise err(f"la lista mezcla {first} y {t}", it)
+                raise err(f"the list mixes {first} and {t}", it)
         return ListT(first)
 
-    # ---- structs: campos y métodos -----------------------------------------------------
+    # ---- structs: fields and methods -----------------------------------------------------
 
     def struct_of(self, t: Type, node: ast.Node, what: str) -> StructInfo:
         if not isinstance(t, StructT):
-            raise err(f"{t} no tiene {what}", node)
+            raise err(f"{t} has no {what}", node)
         return self.structs[t.name]
 
     def attr(self, e: ast.Attr, v: ast.Expr, name: str) -> Type:
         t = self.expr(v)
-        info = self.struct_of(t, e, "campos")
+        info = self.struct_of(t, e, "fields")
         ft = info.fields.get(name)
         if ft is None:
             have = ", ".join(info.fields)
-            hint = f" (tiene: {have})" if info.fields else ""
+            hint = f" (has: {have})" if info.fields else ""
             if name in info.methods:
-                raise err(f"{name!r} es un método de {t}; llámalo con paréntesis: .{name}(...)", e)
-            raise err(f"{t} no tiene el campo {name!r}{hint}", e)
+                raise err(f"{name!r} is a method of {t}; call it with parentheses: .{name}(...)", e)
+            raise err(f"{t} has no field {name!r}{hint}", e)
         return ft
+
+    def try_op(self, e: ast.Try, v: ast.Expr) -> Type:
+        t = self.expr(v)
+        if self.ret is None:
+            raise err("`?` can only be used inside a function", e)
+        if isinstance(t, OptionT):
+            if not isinstance(self.ret, OptionT):
+                raise err(f"`?` on {t} requires the function to return an Option, but it returns {self.ret}", e)
+            return t.inner
+        if isinstance(t, ResultT):
+            if not isinstance(self.ret, ResultT) or self.ret.err != t.err:
+                raise err(f"`?` on {t} requires the function to return Result[..., {t.err}], but it returns {self.ret}", e)
+            return t.ok
+        raise err(f"`?` can only be applied to an Option or a Result, not {t}", e)
+
+    def builtin_method(self, e: ast.MethodCall, rt: Type) -> Type:
+        inner = rt.inner if isinstance(rt, OptionT) else rt.ok
+        if e.name == "unwrap":
+            if e.args:
+                raise err("unwrap takes no arguments", e)
+            return inner
+        if e.name == "unwrap_or":
+            if len(e.args) != 1:
+                raise err("unwrap_or takes exactly 1 argument", e)
+            t = self.expr(e.args[0], inner)
+            if t != inner:
+                raise err(f"unwrap_or on {rt} expects {inner}, got {t}", e.args[0])
+            return inner
+        raise err(f"{rt} has no method {e.name!r} (available: unwrap, unwrap_or)", e)
 
     def method_call(self, e: ast.MethodCall) -> Type:
         rt = self.expr(e.value)
-        info = self.struct_of(rt, e, "métodos")
+        if isinstance(rt, (OptionT, ResultT)):
+            return self.builtin_method(e, rt)
+        info = self.struct_of(rt, e, "methods")
         sig = info.methods.get(e.name)
         if sig is None:
             if e.name in info.fields:
-                raise err(f"{e.name!r} es un campo de {rt}, no un método", e)
+                raise err(f"{e.name!r} is a field of {rt}, not a method", e)
             have = ", ".join(info.methods)
-            hint = f" (tiene: {have})" if info.methods else ""
-            raise err(f"{rt} no tiene el método {e.name!r}{hint}", e)
+            hint = f" (has: {have})" if info.methods else ""
+            raise err(f"{rt} has no method {e.name!r}{hint}", e)
         self.check_args(e, f"{rt}.{e.name}", e.args, sig)
         if (rt.name, e.name) in self.mutating:
             self.mark_mutable(e.value)
@@ -455,29 +541,29 @@ class Checker:
 
     def check_args(self, e: ast.Node, name: str, args: list[ast.Expr], sig: FnT) -> None:
         if len(args) != len(sig.params):
-            raise err(f"{name} espera {len(sig.params)} argumento(s), recibió {len(args)}", e)
+            raise err(f"{name} takes {len(sig.params)} argument(s), got {len(args)}", e)
         for i, (a, pt) in enumerate(zip(args, sig.params), start=1):
             t = self.expr(a, pt)
             if t != pt:
-                raise err(f"argumento {i} de {name}: se esperaba {pt}, se pasó {t}", a)
+                raise err(f"argument {i} of {name}: expected {pt}, got {t}", a)
 
-    def call(self, e: ast.Call) -> Type:
+    def call(self, e: ast.Call, expected: Type | None = None) -> Type:
         if e.func in self.structs:
             return self.ctor(e)
         if e.func in BUILTINS:
-            return self.builtin(e)
+            return self.builtin(e, expected)
         sig = self.fns.get(e.func)
         if sig is None:
-            raise err(f"función {e.func!r} no definida", e)
+            raise err(f"undefined function {e.func!r}", e)
         self.check_args(e, e.func, e.args, sig)
         return sig.ret
 
-    def builtin(self, e: ast.Call) -> Type:
+    def builtin(self, e: ast.Call, expected: Type | None = None) -> Type:
         name, args = e.func, e.args
 
         def arity(n: int) -> None:
             if len(args) != n:
-                raise err(f"{name} espera {n} argumento(s), recibió {len(args)}", e)
+                raise err(f"{name} takes {n} argument(s), got {len(args)}", e)
 
         match name:
             case "print":
@@ -488,37 +574,58 @@ class Checker:
                 arity(1)
                 t = self.expr(args[0])
                 if t != STR and not isinstance(t, ListT):
-                    raise err(f"len espera str o list, no {t}", args[0])
+                    raise err(f"len expects str or list, not {t}", args[0])
                 return INT
             case "int" | "float":
                 arity(1)
                 t = self.expr(args[0])
                 if t not in (INT, FLOAT, STR):
-                    raise err(f"{name}() no convierte {t}", args[0])
+                    raise err(f"{name}() cannot convert {t}", args[0])
                 return INT if name == "int" else FLOAT
             case "str":
                 arity(1)
                 t = self.expr(args[0])
                 if t not in (INT, FLOAT, BOOL, STR):
-                    raise err(f"str() no convierte {t}", args[0])
+                    raise err(f"str() cannot convert {t}", args[0])
                 return STR
             case "append":
                 arity(2)
                 lt = self.expr(args[0])
                 if not isinstance(lt, ListT):
-                    raise err(f"append espera una list, no {lt}", args[0])
+                    raise err(f"append expects a list, not {lt}", args[0])
                 vt = self.expr(args[1], lt.elem)
                 if vt != lt.elem:
-                    raise err(f"no se puede añadir {vt} a {lt}", args[1])
+                    raise err(f"cannot append {vt} to {lt}", args[1])
                 self.mark_mutable(args[0])
                 return UNIT
             case "exit":
                 arity(1)
                 self.expect_int(args[0])
                 return UNIT
+            case "some":
+                arity(1)
+                t = self.expr(args[0], expected.inner if isinstance(expected, OptionT) else None)
+                if isinstance(t, OptionT):
+                    raise err("nested Option types are not allowed", args[0])
+                return OptionT(t)
+            case "ok" | "err":
+                arity(1)
+                if not isinstance(expected, ResultT):
+                    raise err(f"cannot infer the type of `{name}(...)`; annotate it, e.g. `r: Result[int, str] = {name}(...)`", e)
+                want = expected.ok if name == "ok" else expected.err
+                t = self.expr(args[0], want)
+                if t != want:
+                    raise err(f"{name}(...) expects {want}, got {t}", args[0])
+                return expected
+            case "parse_int" | "parse_float":
+                arity(1)
+                t = self.expr(args[0])
+                if t != STR:
+                    raise err(f"{name} expects str, not {t}", args[0])
+                return OptionT(INT if name == "parse_int" else FLOAT)
             case "range":
-                raise err("range(...) solo puede usarse en un `for`", e)
-        raise err(f"función integrada desconocida {name!r}", e)
+                raise err("range(...) can only be used in a `for`", e)
+        raise err(f"unknown built-in function {name!r}", e)
 
 
 def always_returns(body: list[ast.Stmt]) -> bool:
@@ -532,9 +639,23 @@ def always_returns(body: list[ast.Stmt]) -> bool:
     return False
 
 
+def exits(body: list[ast.Stmt]) -> bool:
+    """True if control never falls out of the end of `body` (return/break/continue/exit)."""
+    if not body:
+        return False
+    last = body[-1]
+    if isinstance(last, (ast.Return, ast.Break, ast.Continue)):
+        return True
+    if isinstance(last, ast.ExprStmt) and isinstance(last.expr, ast.Call) and last.expr.func == "exit":
+        return True
+    if isinstance(last, ast.If):
+        return exits(last.then) and exits(last.else_)
+    return False
+
+
 def check(prog: ast.Program) -> ast.Program:
-    """Comprueba el programa. Repite hasta que el conjunto de métodos que modifican `self` se
-    estabiliza (un método que llama a otro modificador también lo es); converge en pocas vueltas."""
+    """Check the program. Repeats until the set of methods that modify `self`
+    stabilizes (a method that calls a modifying method is one too); converges in a few rounds."""
     mutating: set[tuple[str, str]] = set()
     while True:
         c = Checker(mutating)

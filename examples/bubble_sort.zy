@@ -1,4 +1,4 @@
-# Ordenación burbuja. Las listas se pasan por valor: `data` no cambia.
+# Bubble sort. Lists are passed by value: `data` does not change.
 fn bubble_sort(xs: list[int]) -> list[int]:
     n = len(xs)
     for i in range(n):

@@ -23,10 +23,10 @@ def write(tmp_path: Path, src: str, name: str = "prog.zy") -> Path:
 # ---- diagnostics ---------------------------------------------------------------------
 
 def test_format_error_snippet_and_caret():
-    e = ZyloError("algo falló", 2, 5)
+    e = ZyloError("something failed", 2, 5)
     out = format_error(e, "a = 1\nb = oops\n", "x.zy")
     assert out.splitlines() == [
-        "x.zy:2:5: error: algo falló",
+        "x.zy:2:5: error: something failed",
         "  |",
         "2 | b = oops",
         "  |     ^",
@@ -60,30 +60,30 @@ def test_backend_error_has_no_snippet():
     assert out == "x.zy: error: rustc roto"
 
 
-# ---- mensajes de parseo ----------------------------------------------------------------------
+# ---- parse messages ----------------------------------------------------------------------
 
 def test_error_at_end_of_file_has_real_position():
     with pytest.raises(ZyloError) as e:
         parse("fn f():\n")
-    assert e.value.line == 1 and "bloque indentado" in e.value.msg
+    assert e.value.line == 1 and "an indented block" in e.value.msg
 
 
 def test_friendly_token_names():
-    with pytest.raises(ZyloError, match="se esperaba ':', encontrado fin de línea"):
+    with pytest.raises(ZyloError, match="expected ':', found end of line"):
         parse("if a\n    x = 1\n")
-    with pytest.raises(ZyloError, match="se esperaba '\\)'"):
+    with pytest.raises(ZyloError, match="expected '\\)'"):
         parse("print(1\n")
 
 
 # ---- exit() ---------------------------------------------------------------------------------
 
 def test_exit_requires_int():
-    with pytest.raises(ZyloError, match="se esperaba int"):
+    with pytest.raises(ZyloError, match="expected int"):
         check(parse('exit("a")\n'))
 
 
 def test_exit_arity():
-    with pytest.raises(ZyloError, match="espera 1 argumento"):
+    with pytest.raises(ZyloError, match="takes 1 argument"):
         check(parse("exit()\n"))
 
 
@@ -124,7 +124,7 @@ def test_emit_does_not_print_on_error(tmp_path, capsys):
 
 def test_missing_file(tmp_path, capsys):
     assert main(["check", str(tmp_path / "nope.zy")]) == 1
-    assert "no se puede leer" in capsys.readouterr().err
+    assert "cannot read" in capsys.readouterr().err
 
 
 def test_non_utf8_file(tmp_path, capsys):
@@ -144,18 +144,18 @@ def test_rustc_missing_is_reported(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(cli.shutil, "which", lambda _: None)
     assert main(["run", str(write(tmp_path, "print(1)\n"))]) == 1
     err = capsys.readouterr().err
-    assert "rustc no encontrado" in err and "rustup.rs" in err
+    assert "rustc not found" in err and "rustup.rs" in err
 
 
 def test_build_refuses_to_overwrite_source(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(cli.shutil, "which", lambda _: "/usr/bin/true")
-    f = write(tmp_path, "print(1)\n", name="prog")  # sin extensión: salida por defecto == fuente
+    f = write(tmp_path, "print(1)\n", name="prog")  # no extension: the default output == the source
     assert main(["build", str(f)]) == 1
-    assert "sobrescribiría" in capsys.readouterr().err
+    assert "would overwrite" in capsys.readouterr().err
     assert f.read_text() == "print(1)\n"
 
 
-# ---- comandos con rustc -----------------------------------------------------------------------
+# ---- commands that need rustc -----------------------------------------------------------------------
 
 @needs_rustc
 def test_build_and_emit_rs(tmp_path, capsys):

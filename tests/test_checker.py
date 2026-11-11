@@ -90,7 +90,7 @@ def test_reassign_inside_block_hits_outer_variable():
 
 
 def test_block_scope_var_not_visible_outside():
-    fails("if true:\n    y = 1\nprint(y)\n", "no definida", line=3)
+    fails("if true:\n    y = 1\nprint(y)\n", "undefined", line=3)
 
 
 def test_top_level_vars_survive_fn_definitions():
@@ -98,7 +98,7 @@ def test_top_level_vars_survive_fn_definitions():
 
 
 def test_fn_cannot_see_globals():
-    fails("x = 1\nfn f() -> int:\n    return x\n", "no definida", line=3)
+    fails("x = 1\nfn f() -> int:\n    return x\n", "undefined", line=3)
 
 
 def test_param_reassign_marks_mutable():
@@ -109,85 +109,85 @@ def test_param_reassign_marks_mutable():
 # ---- errores de tipos -----------------------------------------------------------------
 
 def test_no_implicit_coercion():
-    e = fails("x = 1 + 2.0\n", "deben coincidir", line=1)
+    e = fails("x = 1 + 2.0\n", "types must match", line=1)
     assert "float(x)" in e.msg
 
 
 def test_reassign_different_type():
-    fails("x = 1\nx = \"a\"\n", "es int pero se asigna str", line=2)
+    fails("x = 1\nx = \"a\"\n", "is int but str is assigned", line=2)
 
 
 def test_annotation_mismatch():
-    fails("x: int = \"a\"\n", "es int pero se asigna str")
+    fails("x: int = \"a\"\n", "is int but str is assigned")
 
 
 def test_annotated_redeclaration():
-    fails("x = 1\nx: int = 2\n", "ya está declarada")
+    fails("x = 1\nx: int = 2\n", "is already declared")
 
 
 def test_condition_must_be_bool():
-    fails("if 1:\n    print(1)\n", "debe ser bool", line=1)
-    fails("while \"a\":\n    print(1)\n", "debe ser bool")
+    fails("if 1:\n    print(1)\n", "must be bool", line=1)
+    fails("while \"a\":\n    print(1)\n", "must be bool")
 
 
 def test_logic_ops_need_bool():
-    fails("x = 1 and 2\n", "espera bool")
-    fails("x = not 1\n", "espera bool")
+    fails("x = 1 and 2\n", "expects bool")
+    fails("x = not 1\n", "expects bool")
 
 
 def test_undefined_variable_position():
-    e = fails("print(1)\nprint(zzz)\n", "no definida")
+    e = fails("print(1)\nprint(zzz)\n", "undefined")
     assert (e.line, e.col) == (2, 7)
 
 
 def test_function_used_without_call():
-    fails("fn f():\n    return\nx = f\n", "llámala con paréntesis")
+    fails("fn f():\n    return\nx = f\n", "call it with parentheses")
 
 
 def test_empty_list_needs_annotation():
-    fails("xs = []\n", "lista vacía")
+    fails("xs = []\n", "empty list")
 
 
 def test_mixed_list():
-    fails("xs = [1, \"a\"]\n", "mezcla")
+    fails("xs = [1, \"a\"]\n", "mixes")
 
 
 def test_index_errors():
-    fails("x = 1\ny = x[0]\n", "no se puede indexar")
-    fails("xs = [1]\ny = xs[1.5]\n", "se esperaba int")
+    fails("x = 1\ny = x[0]\n", "cannot index")
+    fails("xs = [1]\ny = xs[1.5]\n", "expected int")
 
 
 def test_unit_value_cannot_be_assigned():
-    fails("x = print(1)\n", "no produce ningún valor")
+    fails("x = print(1)\n", "produces no value")
 
 
 def test_comparisons_and_equality():
     checked("a = \"a\" < \"b\"\nb = [1] == [1]\nc = true == false\n")
-    fails("x = true < false\n", "no está definido para bool")
+    fails("x = true < false\n", "is not defined for bool")
 
 
 def test_str_arith_only_plus():
-    fails("x = \"a\" - \"b\"\n", "no está definido para str")
+    fails("x = \"a\" - \"b\"\n", "is not defined for str")
 
 
 # ---- funciones ---------------------------------------------------------------------------
 
 def test_wrong_arity_and_arg_type():
-    fails("fn f(a: int):\n    return\nf(1, 2)\n", "espera 1 argumento")
-    e = fails("fn f(a: int):\n    return\nf(\"x\")\n", "argumento 1 de f")
+    fails("fn f(a: int):\n    return\nf(1, 2)\n", "takes 1 argument")
+    e = fails("fn f(a: int):\n    return\nf(\"x\")\n", "argument 1 of f")
     assert e.line == 3
 
 
 def test_undefined_function():
-    fails("g(1)\n", "no definida")
+    fails("g(1)\n", "undefined")
 
 
 def test_return_type_mismatch():
-    fails("fn f() -> int:\n    return \"a\"\n", "pero la función declara int", line=2)
+    fails("fn f() -> int:\n    return \"a\"\n", "but the function declares int", line=2)
 
 
 def test_missing_return():
-    fails("fn f(a: int) -> int:\n    if a > 0:\n        return 1\n", "sin `return`", line=1)
+    fails("fn f(a: int) -> int:\n    if a > 0:\n        return 1\n", "without a `return`", line=1)
 
 
 def test_if_else_both_return_is_ok():
@@ -195,9 +195,9 @@ def test_if_else_both_return_is_ok():
 
 
 def test_return_outside_fn_and_bare_return():
-    fails("return 1\n", "fuera de una función", line=1)
-    fails("fn f() -> int:\n    return\n", "sin valor")
-    fails("fn f():\n    return 1\n", "no declara tipo de retorno")
+    fails("return 1\n", "outside a function", line=1)
+    fails("fn f() -> int:\n    return\n", "without a value")
+    fails("fn f():\n    return 1\n", "declares no return type")
 
 
 def test_unit_fn_call_type():
@@ -206,36 +206,36 @@ def test_unit_fn_call_type():
 
 
 def test_duplicate_fn_and_param_and_builtin_shadow():
-    fails("fn f():\n    return\nfn f():\n    return\n", "ya definida", line=3)
-    fails("fn f(a: int, a: int):\n    return\n", "repetido")
-    fails("fn print():\n    return\n", "integrada")
+    fails("fn f():\n    return\nfn f():\n    return\n", "is already defined", line=3)
+    fails("fn f(a: int, a: int):\n    return\n", "duplicate parameter")
+    fails("fn print():\n    return\n", "built-in")
 
 
 def test_nested_fn_rejected():
-    fails("fn f():\n    fn g():\n        return\n", "nivel superior", line=2)
+    fails("fn f():\n    fn g():\n        return\n", "top level", line=2)
 
 
 # ---- bucles -----------------------------------------------------------------------------------
 
 def test_break_continue_outside_loop():
-    fails("break\n", "fuera de un bucle", line=1)
-    fails("fn f():\n    continue\n", "fuera de un bucle")
+    fails("break\n", "outside a loop", line=1)
+    fails("fn f():\n    continue\n", "outside a loop")
     checked("while true:\n    break\n")
 
 
 def test_break_inside_fn_inside_loop_context_resets():
-    fails("while true:\n    print(1)\nfn f():\n    break\n", "fuera de un bucle")
+    fails("while true:\n    print(1)\nfn f():\n    break\n", "outside a loop")
 
 
 def test_for_over_non_iterable():
-    fails("for i in 5:\n    print(i)\n", "solo se puede iterar")
+    fails("for i in 5:\n    print(i)\n", "can only iterate")
 
 
 def test_range_outside_for_and_bad_args():
-    fails("x = range(3)\n", "solo puede usarse en un `for`")
-    fails("for i in range(1.5):\n    print(i)\n", "range espera int")
-    fails("for i in range(1, 2, 3):\n    print(i)\n", "1 o 2 argumentos")
+    fails("x = range(3)\n", "can only be used in a `for`")
+    fails("for i in range(1.5):\n    print(i)\n", "range expects int")
+    fails("for i in range(1, 2, 3):\n    print(i)\n", "1 or 2 arguments")
 
 
 def test_append_type_mismatch():
-    fails("xs = [1]\nappend(xs, \"a\")\n", "no se puede añadir")
+    fails("xs = [1]\nappend(xs, \"a\")\n", "cannot append")

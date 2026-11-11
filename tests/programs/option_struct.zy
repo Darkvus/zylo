@@ -1,0 +1,26 @@
+struct User:
+    name: str
+    age: int?
+
+    fn age_or_zero(self) -> int:
+        return self.age.unwrap_or(0)
+
+    fn has_age(self) -> bool:
+        return self.age is some
+
+    fn next_age(self) -> int?:
+        a = self.age?
+        return some(a + 1)
+
+u = User("ana", some(30))
+v = User("bob", none)
+print(u.age_or_zero())
+print(v.age_or_zero())
+print(u)
+print(v)
+print(v.has_age())
+v.age = some(41)
+print(v.age_or_zero())
+print(v.has_age())
+print(u.next_age())
+print(User("cy", none).next_age())

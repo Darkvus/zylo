@@ -26,6 +26,23 @@ class StructT:
 
 
 @dataclass(frozen=True)
+class OptionT:
+    inner: "Type"
+
+    def __str__(self) -> str:
+        return f"{self.inner}?"
+
+
+@dataclass(frozen=True)
+class ResultT:
+    ok: "Type"
+    err: "Type"
+
+    def __str__(self) -> str:
+        return f"Result[{self.ok}, {self.err}]"
+
+
+@dataclass(frozen=True)
 class FnT:
     params: tuple["Type", ...]
     ret: "Type"
@@ -40,7 +57,7 @@ BOOL = Prim("bool")
 STR = Prim("str")
 UNIT = Prim("unit")
 
-Type = Prim | ListT | FnT | StructT
+Type = Prim | ListT | FnT | StructT | OptionT | ResultT
 
 PRIMS = {"int": INT, "float": FLOAT, "bool": BOOL, "str": STR}
 
@@ -52,3 +69,4 @@ class VarInfo:
     name: str
     ty: Type
     mutable: bool = False
+    narrowed: bool = False  # rebound by `is` narrowing; cannot be reassigned

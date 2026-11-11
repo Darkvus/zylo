@@ -1,0 +1,28 @@
+fn parse_pair(a: str, b: str) -> Result[int, str]:
+    x = parse_int(a)
+    y = parse_int(b)
+    if x is none:
+        return err("bad first: " + a)
+    if y is none:
+        return err("bad second: " + b)
+    return ok(x + y)
+
+fn double_sum(a: str, b: str) -> Result[int, str]:
+    s = parse_pair(a, b)?
+    return ok(s * 2)
+
+print(parse_pair("4", "5"))
+print(parse_pair("x", "5"))
+print(parse_pair("4", "y"))
+print(double_sum("4", "5"))
+print(double_sum("x", "5"))
+r = double_sum("1", "2")
+if r is err:
+    print("failed: " + r)
+else:
+    print(r)
+r2 = double_sum("a", "2")
+if r2 is err:
+    print("failed: " + r2)
+else:
+    print(r2)

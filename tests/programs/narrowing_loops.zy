@@ -1,0 +1,30 @@
+words = ["12", "abc", "7", "", "30"]
+total = 0
+for w in words:
+    n = parse_int(w)
+    if n is none:
+        continue
+    total += n
+print(total)
+
+fn first_valid(items: list[str]) -> int?:
+    for s in items:
+        n = parse_int(s)
+        if n is none:
+            continue
+        return some(n)
+    return none
+
+print(first_valid(["a", "b", "42", "7"]))
+print(first_valid(["a"]))
+
+i = 0
+while true:
+    v = parse_float("2.5")
+    if v is none:
+        break
+    i += 1
+    if i == 3:
+        break
+print(i)
+print(parse_float(" 1.5 ").unwrap_or(0.0))

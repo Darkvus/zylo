@@ -5,4 +5,4 @@ class ZyloError(Exception):
 
 
 class BackendError(ZyloError):
-    """rustc rechazó el Rust generado, o falta la toolchain: no es un error del programa del usuario."""
+    """rustc rejected the generated Rust, or the toolchain is missing: not an error in the user's program."""

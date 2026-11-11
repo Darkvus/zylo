@@ -1,4 +1,4 @@
-# Inicio menor que 1000 con la secuencia de Collatz más larga
+# Starting value below 1000 with the longest Collatz sequence
 fn steps(n: int) -> int:
     count = 0
     while n != 1:

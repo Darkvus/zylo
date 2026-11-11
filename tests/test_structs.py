@@ -64,17 +64,17 @@ def test_parse_float_literal_not_confused_with_attr():
 
 
 def test_struct_body_rejects_statements():
-    with pytest.raises(ZyloError, match="solo puede haber campos"):
+    with pytest.raises(ZyloError, match="can only contain fields"):
         parse("struct A:\n    x: int\n    print(1)\n")
 
 
 def test_struct_empty_body_is_error():
-    with pytest.raises(ZyloError, match="bloque indentado"):
+    with pytest.raises(ZyloError, match="an indented block"):
         parse("struct A:\nx = 1\n")
 
 
 def test_self_outside_struct_is_error():
-    with pytest.raises(ZyloError, match="solo puede ser el primer parámetro"):
+    with pytest.raises(ZyloError, match="can only be the first parameter"):
         parse("fn f(self):\n    return\n")
 
 
@@ -110,7 +110,7 @@ def test_struct_type_in_function_signature():
 
 def test_equality_of_structs_ok_ordering_not():
     checked(POINT + "a = Point(1.0, 2.0) == Point(1.0, 2.0)\n")
-    fails(POINT + "a = Point(1.0, 2.0) < Point(1.0, 2.0)\n", "no está definido para Point")
+    fails(POINT + "a = Point(1.0, 2.0) < Point(1.0, 2.0)\n", "is not defined for Point")
 
 
 def test_method_return_type_and_args():
@@ -123,99 +123,99 @@ def test_chained_nested_attr_and_method():
             "struct A:\n    b: B\nprint(A(B(1)).b.get())\n")
 
 
-# ---- errores de campos y constructores --------------------------------------------------------------
+# ---- field and constructor errors --------------------------------------------------------------
 
 def test_unknown_field_lists_available_ones():
-    e = fails(POINT + "p = Point(1.0, 2.0)\nprint(p.z)\n", "no tiene el campo 'z'", line=5)
+    e = fails(POINT + "p = Point(1.0, 2.0)\nprint(p.z)\n", "has no field 'z'", line=5)
     assert "x, y" in e.msg
 
 
 def test_field_access_on_non_struct():
-    fails("x = 1\nprint(x.y)\n", "int no tiene campos")
+    fails("x = 1\nprint(x.y)\n", "int has no fields")
 
 
 def test_method_used_as_field_and_field_as_method():
-    fails("struct A:\n    n: int\n\n    fn m(self):\n        return\na = A(1)\nprint(a.m)\n", "es un método")
-    fails("struct A:\n    n: int\na = A(1)\na.n()\n", "es un campo")
+    fails("struct A:\n    n: int\n\n    fn m(self):\n        return\na = A(1)\nprint(a.m)\n", "is a method")
+    fails("struct A:\n    n: int\na = A(1)\na.n()\n", "is a field")
 
 
 def test_unknown_method():
-    fails(POINT + "p = Point(1.0, 2.0)\np.fly()\n", "no tiene el método 'fly'")
+    fails(POINT + "p = Point(1.0, 2.0)\np.fly()\n", "has no method 'fly'")
 
 
 def test_method_call_on_non_struct():
-    fails("x = 1\nx.foo()\n", "int no tiene métodos")
+    fails("x = 1\nx.foo()\n", "int has no methods")
 
 
 def test_constructor_arity_and_types():
-    fails(POINT + "p = Point(1.0)\n", "Point espera 2 argumento", line=4)
-    e = fails(POINT + "p = Point(1.0, 2)\n", "argumento 2 de Point: se esperaba float, se pasó int")
+    fails(POINT + "p = Point(1.0)\n", "Point takes 2 argument", line=4)
+    e = fails(POINT + "p = Point(1.0, 2)\n", "argument 2 of Point: expected float, got int")
     assert e.line == 4
 
 
 def test_method_arity_and_types():
     src = "struct A:\n    n: int\n\n    fn add(self, k: int):\n        self.n += k\na = A(1)\n"
-    fails(src + "a.add()\n", "A.add espera 1 argumento")
-    fails(src + "a.add(\"x\")\n", "argumento 1 de A.add")
+    fails(src + "a.add()\n", "A.add takes 1 argument")
+    fails(src + "a.add(\"x\")\n", "argument 1 of A.add")
 
 
 def test_struct_name_used_as_value():
-    fails(POINT + "p = Point\n", "es un struct")
+    fails(POINT + "p = Point\n", "is a struct")
 
 
 def test_unknown_type_in_field_param_and_annotation():
-    e = fails("struct A:\n    n: banana\n", "tipo desconocido 'banana'", line=2)
+    e = fails("struct A:\n    n: banana\n", "unknown type 'banana'", line=2)
     assert e.col == 8
-    fails("fn f(a: Nope):\n    return\n", "tipo desconocido 'Nope'")
-    fails("x: Nope = 1\n", "tipo desconocido 'Nope'")
+    fails("fn f(a: Nope):\n    return\n", "unknown type 'Nope'")
+    fails("x: Nope = 1\n", "unknown type 'Nope'")
 
 
 def test_field_assignment_type_checked():
-    fails(POINT + "p = Point(1.0, 2.0)\np.x = 1\n", "el campo 'x' es float pero se asigna int", line=5)
-    fails("x = 1\nx.y = 2\n", "int no tiene campos")
+    fails(POINT + "p = Point(1.0, 2.0)\np.x = 1\n", "field 'x' is float but int is assigned", line=5)
+    fails("x = 1\nx.y = 2\n", "int has no fields")
 
 
-# ---- errores de definición ------------------------------------------------------------------------------
+# ---- definition errors ------------------------------------------------------------------------------
 
 def test_duplicate_struct_field_method():
-    fails(POINT + POINT, "ya definido", line=4)
-    fails("struct A:\n    x: int\n    x: int\n", "campo 'x' repetido", line=3)
-    fails("struct A:\n    n: int\n\n    fn m(self):\n        return\n\n    fn m(self):\n        return\n", "método 'm' ya definido")
-    fails("struct A:\n    m: int\n\n    fn m(self):\n        return\n", "a la vez un campo y un método")
+    fails(POINT + POINT, "is already defined", line=4)
+    fails("struct A:\n    x: int\n    x: int\n", "duplicate field 'x'", line=3)
+    fails("struct A:\n    n: int\n\n    fn m(self):\n        return\n\n    fn m(self):\n        return\n", "method 'm' is already defined")
+    fails("struct A:\n    m: int\n\n    fn m(self):\n        return\n", "both a field and a method")
 
 
 def test_empty_struct_and_method_without_self():
-    fails("struct A:\n    fn m(self):\n        return\n", "al menos un campo")
-    fails("struct A:\n    n: int\n\n    fn make() -> int:\n        return 1\n", "debe recibir `self`")
+    fails("struct A:\n    fn m(self):\n        return\n", "at least one field")
+    fails("struct A:\n    n: int\n\n    fn make() -> int:\n        return 1\n", "must take `self`")
 
 
 def test_reserved_and_clashing_names():
-    fails("struct int:\n    n: int\n", "nombre reservado")
-    fails("struct print:\n    n: int\n", "nombre reservado")
-    fails("struct A:\n    n: int\nfn A():\n    return\n", "ya es un struct")
+    fails("struct int:\n    n: int\n", "reserved name")
+    fails("struct print:\n    n: int\n", "reserved name")
+    fails("struct A:\n    n: int\nfn A():\n    return\n", "is already a struct")
 
 
 def test_recursive_struct_rejected_but_list_allowed():
-    fails("struct Node:\n    next: Node\n", "se contiene a sí mismo", line=1)
-    fails("struct A:\n    b: B\nstruct B:\n    a: A\n", "se contiene a sí mismo")
+    fails("struct Node:\n    next: Node\n", "contains itself", line=1)
+    fails("struct A:\n    b: B\nstruct B:\n    a: A\n", "contains itself")
     checked("struct Node:\n    children: list[Node]\n    n: int\n")
 
 
 def test_struct_only_at_top_level():
-    fails("if true:\n    struct A:\n        n: int\n", "nivel superior", line=2)
+    fails("if true:\n    struct A:\n        n: int\n", "top level", line=2)
 
 
 def test_self_cannot_be_reassigned_or_declared():
-    fails("struct A:\n    n: int\n\n    fn m(self):\n        self = A(1)\n", "no se puede reasignar `self`", line=5)
-    fails("self = 1\n", "no se puede declarar")
-    fails("for self in [1]:\n    print(self)\n", "variable de bucle")
+    fails("struct A:\n    n: int\n\n    fn m(self):\n        self = A(1)\n", "cannot reassign `self`", line=5)
+    fails("self = 1\n", "cannot be declared")
+    fails("for self in [1]:\n    print(self)\n", "loop variable")
 
 
 def test_self_is_undefined_outside_methods():
-    fails("fn f() -> int:\n    return self.n\n", "variable 'self' no definida")
+    fails("fn f() -> int:\n    return self.n\n", "undefined variable 'self'")
 
 
-# ---- inferencia de mutabilidad de self ------------------------------------------------------------------------
+# ---- inference of self mutability ------------------------------------------------------------------------
 
 def test_direct_mutation_marks_self_mut():
     p = checked("struct A:\n    n: int\n\n    fn inc(self):\n        self.n += 1\n\n    fn get(self) -> int:\n        return self.n\n")
@@ -231,7 +231,7 @@ def test_list_field_mutation_marks_self_mut():
 
 
 def test_mutation_propagates_through_method_calls_in_any_order():
-    # `twice` se define ANTES que `inc`, y `quad` depende de `twice`: requiere punto fijo
+    # `twice` is defined BEFORE `inc`, and `quad` depends on `twice`: needs the fixed point
     src = ("struct A:\n    n: int\n\n"
            "    fn quad(self):\n        self.twice()\n        self.twice()\n\n"
            "    fn twice(self):\n        self.inc()\n        self.inc()\n\n"
@@ -268,7 +268,7 @@ def test_loop_variable_field_assignment_is_allowed_on_the_copy():
 
 
 def test_unit_method_result_cannot_be_assigned():
-    fails("struct A:\n    n: int\n\n    fn m(self):\n        return\nx = A(1).m()\n", "no produce ningún valor")
+    fails("struct A:\n    n: int\n\n    fn m(self):\n        return\nx = A(1).m()\n", "produces no value")
 
 
 def test_fn_signature_types_for_methods():

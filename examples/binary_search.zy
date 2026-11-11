@@ -1,4 +1,4 @@
-# Búsqueda binaria: índice del elemento o -1
+# Binary search: index of the element, or -1
 fn search(xs: list[int], target: int) -> int:
     lo = 0
     hi = len(xs) - 1

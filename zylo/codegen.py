@@ -2,16 +2,16 @@
 
 Modelo de memoria: todo se comporta como valor. `int`/`float`/`bool` son `Copy`; `str`
 (`String`) y `list` (`Vec<T>`) se clonan al leerlos como valor (`x.clone()`). Las lecturas
-que no necesitan propiedad (len, print, índices, comparaciones, `for` sobre range) toman
+that do not need ownership (len, print, indexing, comparisons, `for` over range) take
 referencia y no clonan.
 
-Structs: `#[derive(Clone, PartialEq)] struct` + `impl` con sus métodos. `self` es `&self` o
-`&mut self` según lo que infirió el checker (`FnDef.self_mut`). `Debug` se escribe a mano para
+Structs: `#[derive(Clone, PartialEq)] struct` + an `impl` with their methods. `self` is `&self` or
+`&mut self` depending on what the checker inferred (`FnDef.self_mut`). `Debug` is written by hand to
 imprimir `Point(x=1.0, y=2.0)`.
 """
 from . import ast
 from .errors import ZyloError
-from .types import BOOL, FLOAT, INT, STR, UNIT, ListT, StructT, Type
+from .types import BOOL, FLOAT, INT, STR, UNIT, ListT, OptionT, ResultT, StructT, Type
 
 PRELUDE = "#![allow(unused, unused_parens, while_true, unused_mut)]\n"
 
@@ -24,7 +24,7 @@ RUST_KEYWORDS = {
 }
 
 
-# Nombres de tipos y de métodos que chocarían con el preludio o con traits que usamos.
+# Type and method names that would clash with the Rust prelude or with traits we rely on.
 RUST_TYPE_NAMES = {
     "String", "Vec", "Option", "Result", "Box", "Some", "None", "Ok", "Err", "Default", "Clone",
     "PartialEq", "Debug", "Display", "Copy", "Send", "Sync", "Drop", "Fn", "Iterator", "Ord", "Eq",
@@ -42,7 +42,7 @@ def ident(name: str) -> str:
 
 
 def mident(name: str) -> str:
-    """Nombre de método: además de las keywords, evita pisar métodos de traits (`clone`, `eq`...)."""
+    """Method name: besides keywords, avoid shadowing trait methods (`clone`, `eq`...)."""
     return name + "_" if name in RUST_KEYWORDS or name in METHOD_CLASHES else name
 
 
@@ -65,10 +65,18 @@ def rust_type(t: Type) -> str:
         return f"Vec<{rust_type(t.elem)}>"
     if isinstance(t, StructT):
         return tname(t.name)
-    raise ZyloError(f"tipo sin equivalente en Rust: {t}")
+    if isinstance(t, OptionT):
+        return f"Option<{rust_type(t.inner)}>"
+    if isinstance(t, ResultT):
+        return f"Result<{rust_type(t.ok)}, {rust_type(t.err)}>"
+    raise ZyloError(f"type has no Rust equivalent: {t}")
 
 
 def is_copy(t: Type) -> bool:
+    if isinstance(t, OptionT):
+        return is_copy(t.inner)
+    if isinstance(t, ResultT):
+        return is_copy(t.ok) and is_copy(t.err)
     return t in (INT, FLOAT, BOOL)
 
 
@@ -171,7 +179,7 @@ class Gen:
             case ast.Continue():
                 self.line("continue;")
             case _:
-                raise ZyloError(f"{type(s).__name__} no soportado en codegen", s.line, s.col)
+                raise ZyloError(f"{type(s).__name__} is not supported by codegen", s.line, s.col)
 
     def assign(self, s: ast.Assign) -> None:
         if isinstance(s.target, (ast.Index, ast.Attr)):
@@ -182,7 +190,47 @@ class Gen:
         else:
             self.line(f"{ident(s.target.id)} = {emit(s.value)};")
 
+    PATTERNS = {"some": "Some", "ok": "Ok", "err": "Err"}
+    OPPOSITE = {"some": "none", "none": "some", "ok": "err", "err": "ok"}
+
+    def pattern(self, kind: str, bind) -> str:
+        if kind == "none":
+            return "None"
+        inner = f"{'mut ' if bind.mutable else ''}{ident(bind.name)}" if bind else "_"
+        return f"{self.PATTERNS[kind]}({inner})"
+
+    def narrowed_if(self, s: ast.If) -> None:
+        """`if x is K:` with narrowing -> `match x { K(x) => {...}, other(x) => {...} }`.
+        With an early exit and no else it becomes `let x = match x { K(x) => {exit}, other(x) => x };`."""
+        kind, other = s.cond.kind, self.OPPOSITE[s.cond.kind]
+        scrutinee = emit(s.cond.value)
+        name = ident(s.cond.value.id)
+        if s.after_bind:
+            mut = "mut " if s.after_bind.mutable else ""
+            self.line(f"let {mut}{name}: {rust_type(s.after_bind.ty)} = match {scrutinee} {{")
+            self.depth += 1
+            self.line(f"{self.pattern(kind, s.then_bind)} => {{")
+            self.block(s.then)
+            self.line("}")
+            self.line(f"{self.pattern(other, s.after_bind)} => {name},")
+            self.depth -= 1
+            self.line("};")
+            return
+        self.line(f"match {scrutinee} {{")
+        self.depth += 1
+        self.line(f"{self.pattern(kind, s.then_bind)} => {{")
+        self.block(s.then)
+        self.line("}")
+        self.line(f"{self.pattern(other, s.else_bind)} => {{")
+        self.block(s.else_)
+        self.line("}")
+        self.depth -= 1
+        self.line("}")
+
     def if_(self, s: ast.If, kw: str) -> None:
+        if s.after_bind or s.then_bind or s.else_bind:
+            self.narrowed_if(s)
+            return
         self.line(f"{kw} {emit_ref(s.cond)} {{")
         self.block(s.then)
         self._else_tail(s)
@@ -206,7 +254,7 @@ class Gen:
             lo, hi = ("0i64", emit_ref(it.args[0])) if len(it.args) == 1 else (emit_ref(it.args[0]), emit_ref(it.args[1]))
             src = f"({lo})..({hi})"
         else:
-            src = emit(it)  # propiedad: clona la lista una vez, como Python permite mutarla dentro
+            src = emit(it)  # owned: clones the list once, so the body may mutate the original like in Python
         self.line(f"for {mut}{ident(s.var)} in {src} {{")
         self.block(s.body)
         self.line("}")
@@ -215,7 +263,7 @@ class Gen:
 # ---- expresiones ----------------------------------------------------------------------------
 
 def emit(e: ast.Expr) -> str:
-    """Expresión como valor con propiedad (clona lo que no es Copy al leerlo de una variable)."""
+    """Expression as an owned value (clones non-Copy values read from a variable)."""
     code = emit_ref(e)
     if isinstance(e, (ast.Name, ast.Index, ast.Attr)) and not is_copy(e.ty):
         return f"{code}.clone()"
@@ -223,7 +271,7 @@ def emit(e: ast.Expr) -> str:
 
 
 def emit_ref(e: ast.Expr) -> str:
-    """Expresión sin clonar: sirve para leer sin consumir (o como lugar asignable)."""
+    """Expression without cloning: reads without consuming (or an assignable place)."""
     match e:
         case ast.Int(v):
             return f"{v}i64"
@@ -239,6 +287,14 @@ def emit_ref(e: ast.Expr) -> str:
             return f"{emit_ref(v)}[({emit_ref(i)}) as usize]"
         case ast.Attr(v, name):
             return f"{emit_ref(v)}.{ident(name)}"
+        case ast.NoneLit():
+            return "None"
+        case ast.IsCheck(v, kind):
+            return f"{emit_ref(v)}.is_{kind}()"
+        case ast.Try(v):
+            return f"({emit(v)}?)"
+        case ast.MethodCall(v, name, args) if isinstance(v.ty, (OptionT, ResultT)):
+            return f"{emit(v)}.{name}({', '.join(emit(a) for a in args)})"
         case ast.MethodCall(v, name, args):
             return f"{emit_ref(v)}.{mident(name)}({', '.join(emit(a) for a in args)})"
         case ast.ListLit(items):
@@ -253,7 +309,7 @@ def emit_ref(e: ast.Expr) -> str:
             return binop(e, op, l, r)
         case ast.Call():
             return call(e)
-    raise ZyloError(f"nodo no soportado: {type(e).__name__}", e.line, e.col)
+    raise ZyloError(f"unsupported node: {type(e).__name__}", e.line, e.col)
 
 
 def binop(e: ast.BinOp, op: str, l: ast.Expr, r: ast.Expr) -> str:
@@ -272,7 +328,7 @@ def call(e: ast.Call) -> str:
     match e.func:
         case "print":
             t = args[0].ty
-            fmt = "{:?}" if t == FLOAT or isinstance(t, (ListT, StructT)) else "{}"
+            fmt = "{:?}" if t == FLOAT or isinstance(t, (ListT, StructT, OptionT, ResultT)) else "{}"
             return f'println!("{fmt}", {emit_ref(args[0])})'
         case "len":
             x = emit_ref(args[0])
@@ -285,14 +341,14 @@ def call(e: ast.Call) -> str:
                 return x
             if t == FLOAT:
                 return f"({x} as i64)"
-            return f'({x}.trim().parse::<i64>().expect("int(): cadena no numérica"))'
+            return f'({x}.trim().parse::<i64>().expect("int(): not a numeric string"))'
         case "float":
             x, t = emit_ref(args[0]), args[0].ty
             if t == FLOAT:
                 return x
             if t == INT:
                 return f"({x} as f64)"
-            return f'({x}.trim().parse::<f64>().expect("float(): cadena no numérica"))'
+            return f'({x}.trim().parse::<f64>().expect("float(): not a numeric string"))'
         case "str":
             x, t = emit_ref(args[0]), args[0].ty
             if t == STR:
@@ -300,10 +356,20 @@ def call(e: ast.Call) -> str:
             if t == FLOAT:
                 return f'format!("{{:?}}", {x})'
             return f"{x}.to_string()"
+        case "some":
+            return f"Some({emit(args[0])})"
+        case "ok":
+            return f"Ok({emit(args[0])})"
+        case "err":
+            return f"Err({emit(args[0])})"
+        case "parse_int":
+            return f"{emit_ref(args[0])}.trim().parse::<i64>().ok()"
+        case "parse_float":
+            return f"{emit_ref(args[0])}.trim().parse::<f64>().ok()"
         case "exit":
             return f"std::process::exit(({emit_ref(args[0])}) as i32)"
         case "range":
-            raise ZyloError("range(...) solo puede usarse en un `for`", e.line, e.col)
+            raise ZyloError("range(...) can only be used in a `for`", e.line, e.col)
         case name:
             return f"{ident(name)}({', '.join(emit(a) for a in args)})"
 

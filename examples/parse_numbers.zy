@@ -1,0 +1,34 @@
+# Option and Result: skip invalid numbers, or stop at the first one
+fn sum_valid(items: list[str]) -> int:
+    total = 0
+    for s in items:
+        n = parse_int(s)
+        if n is none:
+            continue
+        total += n
+    return total
+
+fn parse_all(items: list[str]) -> Result[int, str]:
+    total = 0
+    for s in items:
+        n = parse_int(s)
+        if n is none:
+            return err("not a number: " + s)
+        total += n
+    return ok(total)
+
+fn average(items: list[str]) -> Result[float, str]:
+    total = parse_all(items)?
+    if len(items) == 0:
+        return err("no items")
+    return ok(float(total) / float(len(items)))
+
+good = ["10", "20", "30"]
+mixed = ["10", "x", "30", "4.5", ""]
+print(sum_valid(good))
+print(sum_valid(mixed))
+print(parse_all(good))
+print(parse_all(mixed))
+print(average(good))
+print(average(mixed))
+print(average([]))

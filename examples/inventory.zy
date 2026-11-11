@@ -1,4 +1,4 @@
-# Lista de structs: valor total del inventario y reposición de stock
+# A list of structs: total inventory value and restocking
 struct Product:
     name: str
     quantity: int

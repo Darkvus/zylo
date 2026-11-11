@@ -2,7 +2,7 @@ from . import ast
 from .errors import ZyloError
 from .lexer import Token, tokenize
 
-# precedencia: mayor = se une antes. `not` es unario y se resuelve en parse_unary.
+# precedence: higher binds tighter. `not` is unary and handled in parse_unary.
 PRECEDENCE = {
     "or": 1,
     "and": 2,
@@ -11,12 +11,14 @@ PRECEDENCE = {
     "+": 5, "-": 5,
     "*": 6, "/": 6, "%": 6,
 }
-NOT_PREC = 3  # `not a == b` es `not (a == b)`
+NOT_PREC = 3  # `not a == b` is `not (a == b)`
+IS_PREC = 3  # `x is some and y` is `(x is some) and y`
+IS_KINDS = {"some", "none", "ok", "err"}
 AUG_OPS = {"+=": "+", "-=": "-", "*=": "*", "/=": "/", "%=": "%"}
 KIND_NAMES = {
-    "NEWLINE": "fin de línea", "EOF": "fin del archivo", "INDENT": "indentación",
-    "DEDENT": "fin de bloque", "IDENT": "un nombre", "INT": "un entero",
-    "FLOAT": "un decimal", "STR": "una cadena",
+    "NEWLINE": "end of line", "EOF": "end of file", "INDENT": "indentation",
+    "DEDENT": "end of block", "IDENT": "a name", "INT": "an integer",
+    "FLOAT": "a decimal", "STR": "a string",
 }
 
 
@@ -54,7 +56,7 @@ class Parser:
         tok = self.cur
         if tok.kind != kind or (value is not None and tok.value != value):
             want = repr(value) if value else KIND_NAMES.get(kind, kind)
-            raise ZyloError(f"se esperaba {want}, encontrado {describe(tok)}", tok.line, tok.col)
+            raise ZyloError(f"expected {want}, found {describe(tok)}", tok.line, tok.col)
         return self.advance()
 
     # ---- programa y bloques -------------------------------------------------------
@@ -69,12 +71,12 @@ class Parser:
         self.expect("OP", ":")
         self.expect("NEWLINE")
         if not self.check("INDENT"):
-            raise ZyloError("se esperaba un bloque indentado", self.cur.line, self.cur.col)
+            raise ZyloError("expected an indented block", self.cur.line, self.cur.col)
         self.advance()
         body = []
         while not self.check("DEDENT"):
             if self.check("EOF"):
-                raise ZyloError("bloque sin cerrar", self.cur.line, self.cur.col)
+                raise ZyloError("unclosed block", self.cur.line, self.cur.col)
             body.append(self.parse_stmt())
         self.expect("DEDENT")
         return body
@@ -84,7 +86,7 @@ class Parser:
     def parse_stmt(self) -> ast.Stmt:
         tok = self.cur
         if tok.kind == "INDENT":
-            raise ZyloError("indentación inesperada", tok.line, tok.col)
+            raise ZyloError("unexpected indentation", tok.line, tok.col)
         if tok.kind == "KW":
             match tok.value:
                 case "fn":
@@ -105,11 +107,11 @@ class Parser:
                     cls = ast.Break if tok.value == "break" else ast.Continue
                     return cls(line=tok.line, col=tok.col)
                 case "else" | "elif":
-                    raise ZyloError(f"{tok.value!r} sin 'if' previo", tok.line, tok.col)
+                    raise ZyloError(f"{tok.value!r} without a preceding 'if'", tok.line, tok.col)
         return self.parse_simple()
 
     def parse_simple(self) -> ast.Stmt:
-        """Expresión, asignación (`=`, `x: T =`) o asignación compuesta (`+=`)."""
+        """Expression, assignment (`=`, `x: T =`) or compound assignment (`+=`)."""
         start = self.cur
         expr = self.parse_expr()
         if isinstance(expr, ast.Name) and self.check("OP", ":"):
@@ -137,7 +139,7 @@ class Parser:
 
     def _check_target(self, expr: ast.Expr, start: Token) -> None:
         if not isinstance(expr, (ast.Name, ast.Index, ast.Attr)):
-            raise ZyloError("no se puede asignar a esta expresión", start.line, start.col)
+            raise ZyloError("cannot assign to this expression", start.line, start.col)
 
     def parse_if(self) -> ast.If:
         kw = self.advance()  # `if` o `elif`
@@ -199,14 +201,14 @@ class Parser:
         self.expect("OP", ":")
         self.expect("NEWLINE")
         if not self.check("INDENT"):
-            raise ZyloError("se esperaba un bloque indentado", self.cur.line, self.cur.col)
+            raise ZyloError("expected an indented block", self.cur.line, self.cur.col)
         self.advance()
         fields: list[ast.Field] = []
         methods: list[ast.FnDef] = []
         while not self.check("DEDENT"):
             tok = self.cur
             if tok.kind == "EOF":
-                raise ZyloError("bloque sin cerrar", tok.line, tok.col)
+                raise ZyloError("unclosed block", tok.line, tok.col)
             if self.check("KW", "fn"):
                 methods.append(self.parse_fn(in_struct=True))
             elif tok.kind == "IDENT" and self.peek().kind == "OP" and self.peek().value == ":":
@@ -216,16 +218,16 @@ class Parser:
                 self.expect("NEWLINE")
                 fields.append(ast.Field(tok.value, typ, line=tok.line, col=tok.col))
             else:
-                raise ZyloError("dentro de un struct solo puede haber campos (`nombre: tipo`) y métodos (`fn`)", tok.line, tok.col)
+                raise ZyloError("a struct body can only contain fields (`name: type`) and methods (`fn`)", tok.line, tok.col)
         self.expect("DEDENT")
         return ast.StructDef(name.value, fields, methods, line=name.line, col=name.col)
 
     def parse_param(self) -> ast.Param:
         name = self.expect("IDENT")
         if name.value == "self":
-            raise ZyloError("`self` solo puede ser el primer parámetro de un método, dentro de un struct", name.line, name.col)
+            raise ZyloError("`self` can only be the first parameter of a method, inside a struct", name.line, name.col)
         if not self.check("OP", ":"):
-            raise ZyloError(f"el parámetro {name.value!r} necesita tipo (`{name.value}: int`)", name.line, name.col)
+            raise ZyloError(f"parameter {name.value!r} needs a type (`{name.value}: int`)", name.line, name.col)
         self.advance()
         return ast.Param(name.value, self.parse_type(), line=name.line, col=name.col)
 
@@ -238,17 +240,41 @@ class Parser:
             self.expect("OP", "[")
             args.append(self.parse_type())
             self.expect("OP", "]")
-        return ast.TypeRef(tok.value, args, line=tok.line, col=tok.col)
+        elif tok.value == "Result":
+            self.expect("OP", "[")
+            args.append(self.parse_type())
+            self.expect("OP", ",")
+            args.append(self.parse_type())
+            self.expect("OP", "]")
+        t = ast.TypeRef(tok.value, args, line=tok.line, col=tok.col)
+        while self.check("OP", "?"):  # `T?` is Option; internally TypeRef("?", [T])
+            q = self.advance()
+            if t.name == "?":
+                raise ZyloError("nested Option types (`T??`) are not allowed", q.line, q.col)
+            t = ast.TypeRef("?", [t], line=t.line, col=t.col)
+        return t
 
     # ---- expresiones ----------------------------------------------------------------
 
     def parse_expr(self, min_prec: int = 1) -> ast.Expr:
         left = self.parse_unary()
-        while self._is_binop() and PRECEDENCE[self.cur.value] >= min_prec:
+        while True:
+            if self.check("KW", "is") and IS_PREC >= min_prec:
+                left = self.parse_is(left)
+                continue
+            if not (self._is_binop() and PRECEDENCE[self.cur.value] >= min_prec):
+                return left
             op = self.advance()
             right = self.parse_expr(PRECEDENCE[op.value] + 1)
             left = ast.BinOp(op.value, left, right, line=op.line, col=op.col)
-        return left
+
+    def parse_is(self, left: ast.Expr) -> ast.IsCheck:
+        kw = self.advance()
+        tok = self.cur
+        if tok.value not in IS_KINDS or tok.kind not in ("IDENT", "KW"):
+            raise ZyloError("`is` must be followed by some, none, ok or err", tok.line, tok.col)
+        self.advance()
+        return ast.IsCheck(left, tok.value, line=kw.line, col=kw.col)
 
     def _is_binop(self) -> bool:
         return self.cur.kind in ("OP", "KW") and self.cur.value in PRECEDENCE
@@ -271,6 +297,9 @@ class Parser:
                 idx = self.parse_expr()
                 self.expect("OP", "]")
                 expr = ast.Index(expr, idx, line=lb.line, col=lb.col)
+            elif self.check("OP", "?"):
+                q = self.advance()
+                expr = ast.Try(expr, line=q.line, col=q.col)
             elif self.check("OP", "."):
                 self.advance()
                 name = self.expect("IDENT")
@@ -292,6 +321,8 @@ class Parser:
             return ast.Str(tok.value, **pos)
         if tok.kind == "KW" and tok.value in ("true", "false"):
             return ast.Bool(tok.value == "true", **pos)
+        if tok.kind == "KW" and tok.value == "none":
+            return ast.NoneLit(**pos)
         if tok.kind == "IDENT":
             if self.check("OP", "("):
                 return self.parse_call(tok)
@@ -308,7 +339,7 @@ class Parser:
                     items.append(self.parse_expr())
             self.expect("OP", "]")
             return ast.ListLit(items, **pos)
-        raise ZyloError(f"expresión inesperada: {describe(tok)}", tok.line, tok.col)
+        raise ZyloError(f"unexpected expression: {describe(tok)}", tok.line, tok.col)
 
     def parse_args(self) -> list[ast.Expr]:
         self.expect("OP", "(")

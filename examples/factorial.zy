@@ -1,4 +1,4 @@
-# Factoriales hasta 20! (el último que cabe en un int de 64 bits)
+# Factorials up to 20! (the last one that fits in a 64-bit int)
 fn factorial(n: int) -> int:
     result = 1
     for i in range(2, n + 1):

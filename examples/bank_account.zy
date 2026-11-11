@@ -1,4 +1,4 @@
-# Una cuenta bancaria con métodos que modifican el struct
+# A bank account with methods that modify the struct
 struct Account:
     owner: str
     balance: int

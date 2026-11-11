@@ -1,39 +1,46 @@
-# Contribuir a Zylo
+# Contributing to Zylo
 
-## Entorno
+## Setup
 
 ```
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/pytest -q          # necesita rustc para los tests end-to-end (si falta, se omiten)
+.venv/bin/pytest -q          # the end-to-end tests need rustc; without it they are skipped
 ```
 
-## Cómo está hecho
+Install Rust from <https://rustup.rs>. If `rustc` is not on your `PATH`, the end-to-end tests are
+skipped silently — run `source ~/.cargo/env` first.
+
+## How it is built
 
 ```
-.zy ──lexer──▶ tokens ──parser──▶ AST ──checker──▶ AST tipado ──codegen──▶ Rust ──rustc──▶ binario
+.zy ──lexer──▶ tokens ──parser──▶ AST ──checker──▶ typed AST ──codegen──▶ Rust ──rustc──▶ binary
 ```
 
-| Módulo | Responsabilidad |
+| Module | Responsibility |
 |---|---|
-| `zylo/lexer.py` | Tokens, INDENT/DEDENT, posiciones |
-| `zylo/ast.py` | Nodos (todos llevan `line`, `col`, `ty`) |
-| `zylo/parser.py` | Recursivo descendente escrito a mano |
-| `zylo/types.py`, `zylo/checker.py` | Tipos, inferencia local, ámbitos, mutabilidad |
-| `zylo/codegen.py` | AST tipado → Rust |
-| `zylo/diagnostics.py`, `zylo/cli.py` | Errores legibles y comandos |
+| `zylo/lexer.py` | Tokens, INDENT/DEDENT, positions |
+| `zylo/ast.py` | Nodes (all carry `line`, `col`, `ty`) |
+| `zylo/parser.py` | Hand-written recursive descent |
+| `zylo/types.py`, `zylo/checker.py` | Types, local inference, scopes, mutability, narrowing |
+| `zylo/codegen.py` | Typed AST → Rust |
+| `zylo/diagnostics.py`, `zylo/cli.py` | Readable errors and the commands |
 
-## Cómo añadir una característica
+Design reasons are in [docs/design.md](docs/design.md); the language is described in
+[docs/guide.md](docs/guide.md).
 
-Avanza **siempre en vertical**: una construcción nueva debe atravesar todo el pipeline antes de pasar a la siguiente.
+## Adding a feature
 
-1. Lexer/parser + test en `tests/test_parser.py`.
-2. Reglas de tipos + tests de éxito **y de cada error** (con su línea) en `tests/test_checker.py`.
-3. Codegen + un programa `.zy` con su `.out` en `tests/programs/`.
-4. Un ejemplo en `examples/` si aporta (su `.out` se calcula con una implementación independiente, no con Zylo).
-5. Actualiza `PLAN.md`/`ROADMAP.md` si cambia una decisión de diseño.
+Always work **vertically**: a new construct goes through the whole pipeline before the next one starts.
 
-## Reglas
+1. Lexer/parser, with tests in `tests/test_parser.py`.
+2. Type rules, with tests for the success cases **and for every error** (including its line), in `tests/test_checker.py` or a feature-specific file.
+3. Codegen, plus an end-to-end program `X.zy` with its expected output `X.out` in `tests/programs/`.
+4. An example in `examples/` if it teaches something. Compute its `.out` with an independent implementation (for instance plain Python), **not** with Zylo itself.
+5. Update `docs/guide.md` (its `zylo` code blocks are type-checked by the tests) and `ROADMAP.md`.
 
-- Los errores del usuario son `ZyloError` con línea y columna; un fallo de `rustc` sobre código generado es un bug de Zylo (`BackendError`).
-- Sin coerciones implícitas entre tipos: es una decisión de diseño.
-- Mensajes de error en español, con una pista accionable cuando se pueda.
+## Conventions
+
+- Commit messages and documentation are written in **English**.
+- User mistakes are `ZyloError` with a line and column; a `rustc` failure on generated code is a Zylo bug (`BackendError`).
+- No implicit coercions between types: this is a design decision.
+- Error messages should say what is wrong and, when possible, how to fix it.

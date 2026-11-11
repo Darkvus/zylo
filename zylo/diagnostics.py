@@ -1,4 +1,4 @@
-"""Formato de errores para la terminal: `archivo:línea:col: error: mensaje` + fragmento de código."""
+"""Terminal error format: `file:line:col: error: message` + a code snippet."""
 from .errors import BackendError, ZyloError
 
 RED, BOLD, RESET = "\033[1;31m", "\033[1m", "\033[0m"

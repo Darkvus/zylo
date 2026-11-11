@@ -1,4 +1,4 @@
-# Fibonacci iterativo con una lista y suma de los pares
+# Iterative Fibonacci with a list, and the sum of the even terms
 fibs: list[int] = [0, 1]
 for i in range(2, 21):
     append(fibs, fibs[i - 1] + fibs[i - 2])

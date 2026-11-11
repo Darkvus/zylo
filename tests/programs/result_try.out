@@ -1,0 +1,7 @@
+Ok(9)
+Err("bad first: x")
+Err("bad second: y")
+Ok(18)
+Err("bad first: x")
+6
+failed: bad first: a

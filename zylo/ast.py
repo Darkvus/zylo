@@ -7,10 +7,10 @@ from .types import Type, VarInfo
 class Node:
     line: int = 0
     col: int = 0
-    ty: Type | None = None  # lo rellena el checker en las expresiones
+    ty: Type | None = None  # filled in by the checker for expressions
 
 
-# ---- tipos escritos por el usuario -------------------------------------------
+# ---- types written by the user -------------------------------------------
 
 @dataclass
 class TypeRef(Node):
@@ -62,7 +62,7 @@ class UnaryOp(Node):
 class Call(Node):
     func: str
     args: list["Expr"]
-    ctor_fields: list[str] | None = None  # lo rellena el checker si es un constructor de struct
+    ctor_fields: list[str] | None = None  # filled in by the checker if this is a struct constructor
 
 
 @dataclass
@@ -85,13 +85,32 @@ class Attr(Node):
 
 @dataclass
 class MethodCall(Node):
-    """Llamada a un método: `p.mover(1.0)`."""
+    """Method call: `p.move(1.0)`."""
     value: "Expr"
     name: str
     args: list["Expr"]
 
 
-Expr = Int | Float | Str | Bool | Name | BinOp | UnaryOp | Call | ListLit | Index | Attr | MethodCall
+@dataclass
+class NoneLit(Node):
+    """The `none` literal; its Option type comes from context."""
+
+
+@dataclass
+class IsCheck(Node):
+    """`x is some` / `x is none` / `x is ok` / `x is err`."""
+    value: "Expr"
+    kind: str
+
+
+@dataclass
+class Try(Node):
+    """Postfix `?`: unwrap an Option/Result or return early."""
+    value: "Expr"
+
+
+Expr = (Int | Float | Str | Bool | Name | BinOp | UnaryOp | Call | ListLit | Index | Attr
+        | MethodCall | NoneLit | IsCheck | Try)
 
 
 # ---- sentencias ----------------------------------------------------------------
@@ -107,7 +126,7 @@ class Assign(Node):
     target: Name | Index | Attr
     annotation: TypeRef | None
     value: Expr
-    declares: bool = False  # lo rellena el checker: True si es declaración
+    declares: bool = False  # filled in by the checker: True if this is a declaration
     var: VarInfo | None = None
 
 
@@ -115,7 +134,10 @@ class Assign(Node):
 class If(Node):
     cond: Expr
     then: list["Stmt"]
-    else_: list["Stmt"]  # vacío si no hay else; `elif` es un If anidado
+    else_: list["Stmt"]  # empty if there is no else; `elif` is a nested If
+    then_bind: VarInfo | None = None   # set by the checker: `x` narrowed inside the then-branch
+    else_bind: VarInfo | None = None   # ... inside the else-branch
+    after_bind: VarInfo | None = None  # ... for the statements after an early-exit `if`
 
 
 @dataclass
@@ -158,10 +180,10 @@ class Param(Node):
 class FnDef(Node):
     name: str
     params: list[Param]
-    ret: TypeRef | None  # None = sin valor de retorno
+    ret: TypeRef | None  # None = no return value
     body: list["Stmt"]
-    has_self: bool = False  # método (primer parámetro `self`)
-    self_mut: bool = False  # lo rellena el checker: el método modifica `self`
+    has_self: bool = False  # method (first parameter is `self`)
+    self_mut: bool = False  # filled in by the checker: the method modifies `self`
 
 
 @dataclass

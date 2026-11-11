@@ -1,9 +1,11 @@
 # Zylo
 
-Lenguaje con sintaxis tipo Python, tipado estático e inferencia local, que transpila a Rust.
-Extensión de archivo: `.zy`. **Estado: en desarrollo temprano (MVP completo, v0.1).**
+A small statically typed language with Python-like syntax that compiles to Rust.
+Write code that reads like Python, get a native binary that runs 30–90× faster.
 
-```
+**Status:** v0.2 — early but complete enough to write real programs. See the [roadmap](ROADMAP.md).
+
+```zylo
 fn fib(n: int) -> int:
     if n < 2:
         return n
@@ -12,33 +14,38 @@ fn fib(n: int) -> int:
 print(fib(35))
 ```
 
-## Uso
+## Install and use
+
+Zylo needs Python 3.11+ and [Rust](https://rustup.rs) (for `build` and `run`).
 
 ```
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest -q
 
-zylo check examples/fib.zy        # solo sintaxis y tipos
-zylo emit  examples/fib.zy        # ver el Rust generado
-zylo run   examples/fib.zy        # compilar con rustc y ejecutar (devuelve el exit code del programa)
+zylo check examples/fib.zy        # syntax and types only
+zylo emit  examples/fib.zy        # print the generated Rust
+zylo run   examples/fib.zy        # compile and run (returns the program's exit code)
 zylo build examples/fib.zy -o fib --emit-rs
 ```
 
-Los errores indican archivo, línea y columna, con el fragmento de código:
+Errors point at the exact spot:
 
 ```
-bad.zy:2:9: error: `+` entre int y float: los tipos deben coincidir (usa float(x) o int(x) para convertir)
+bad.zy:2:9: error: `+` between int and float: types must match (use float(x) or int(x) to convert)
   |
 2 | print(x + 2.5)
   |         ^
 ```
 
-Necesita Python 3.11+ y [Rust](https://rustup.rs) para `build`/`run`.
-El estado y las decisiones de diseño están en [PLAN.md](PLAN.md).
+## A quick tour
 
-## Structs
+**Static types with local inference.** Annotate function signatures; everything else is inferred.
+There is no implicit coercion: `1 + 2.0` is an error, `float(1) + 2.0` is not.
 
-```
+**Structs and methods.** Structs are values; methods receive `self` by reference and the compiler
+infers whether they modify it.
+
+```zylo
 struct Account:
     owner: str
     balance: int
@@ -46,37 +53,53 @@ struct Account:
     fn deposit(self, amount: int):
         self.balance += amount
 
-    fn report(self) -> str:
-        return self.owner + ": " + str(self.balance)
-
 acc = Account("Ana", 100)
 acc.deposit(50)
-print(acc.report())   # Ana: 150
+print(acc.balance)   # 150
 ```
 
-Los structs son valores (copiarlos o pasarlos a una función los clona). Los métodos reciben `self`
-por referencia y el compilador infiere si lo modifican.
+**Explicit errors with `Option` and `Result`.** No exceptions. `T?` is an optional value,
+`Result[T, E]` is a value or an error. `is` checks them and narrows the type, and `?` propagates.
 
-## Rendimiento
+```zylo
+fn parse_pair(a: str, b: str) -> Result[int, str]:
+    x = parse_int(a)
+    y = parse_int(b)
+    if x is none:
+        return err("not a number: " + a)
+    if y is none:
+        return err("not a number: " + b)
+    return ok(x + y)          # x and y are plain ints here
 
-Mismos programas en Zylo y en CPython (mediana de 5 ejecuciones):
+fn double_sum(a: str, b: str) -> Result[int, str]:
+    s = parse_pair(a, b)?     # on error, return it to the caller
+    return ok(s * 2)
+```
 
-| Programa | Python | Zylo | Speedup |
+The full language is documented in the [language guide](docs/guide.md); design decisions and their
+reasons are in [docs/design.md](docs/design.md).
+
+## Performance
+
+The same programs in Zylo and in CPython (median of 5 runs):
+
+| Program | Python | Zylo | Speedup |
 |---|---:|---:|---:|
-| fib(35) recursivo | 1.021 s | 0.037 s | **28×** |
-| primos < 300 000 | 0.648 s | 0.019 s | **35×** |
-| burbuja, 3 000 elementos | 0.388 s | 0.004 s | **90×** |
-| bucle aritmético, 20 M | 1.364 s | 0.016 s | 87× (*) |
+| fib(35), recursive | 1.021 s | 0.037 s | **28×** |
+| primes below 300 000 | 0.648 s | 0.019 s | **35×** |
+| bubble sort, 3 000 items | 0.388 s | 0.004 s | **90×** |
+| arithmetic loop, 20 M iterations | 1.364 s | 0.016 s | 87× (*) |
 
-(*) LLVM optimiza mucho este bucle trivial; es una cota superior. Detalles, método y la variante sin
-comprobación de overflow en [benchmarks/RESULTS.md](benchmarks/RESULTS.md). Reproducible con
-`python benchmarks/bench.py`.
+(*) LLVM optimizes this trivial loop very aggressively, so treat it as an upper bound.
+Method and the variant without overflow checks: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+Reproduce with `python benchmarks/bench.py`.
 
-## Ejemplos
+## Examples
 
-13 programas en [examples/](examples/): FizzBuzz, primos, Collatz, ordenación, búsqueda binaria,
-matrices, estadísticas, factoriales… Todos se compilan y verifican en los tests.
+Seventeen programs in [examples/](examples/) — FizzBuzz, primes, Collatz, sorting, binary search,
+matrices, a bank account, an inventory, vectors, number parsing with `Option`/`Result`, and more.
+Every one is compiled and checked in the test suite.
 
-## Licencia
+## Contributing
 
-MIT
+See [CONTRIBUTING.md](CONTRIBUTING.md). Zylo is licensed under the MIT license.

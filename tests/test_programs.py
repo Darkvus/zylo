@@ -1,8 +1,8 @@
-"""Tests de extremo a extremo: .zy -> Rust -> rustc -> ejecución, comparando la salida.
+"""End-to-end tests: .zy -> Rust -> rustc -> execution, comparing the output.
 
-Cada `X.zy` con `X.out` en `tests/programs/` y en `examples/` debe imprimir exactamente ese contenido.
-(Las salidas de `examples/` se calcularon con implementaciones independientes en Python.)
-Se omiten si `rustc` no está instalado.
+Every `X.zy` with an `X.out` in `tests/programs/` and `examples/` must print exactly that content.
+(The outputs in `examples/` were computed with independent Python implementations.)
+Skipped if `rustc` is not installed.
 """
 import shutil
 import subprocess

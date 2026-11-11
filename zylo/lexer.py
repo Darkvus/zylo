@@ -4,10 +4,10 @@ from .errors import ZyloError
 
 KEYWORDS = {
     "fn", "if", "elif", "else", "while", "for", "in", "return", "break", "continue",
-    "and", "or", "not", "true", "false", "struct",
+    "and", "or", "not", "true", "false", "struct", "is", "none",
 }
 TWO_CHAR = {"==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=", "%="}
-ONE_CHAR = set("+-*/%<>=(),:[].")
+ONE_CHAR = set("+-*/%<>=(),:[].?")
 
 
 @dataclass(frozen=True)
@@ -21,14 +21,14 @@ class Token:
 def tokenize(src: str) -> list[Token]:
     tokens: list[Token] = []
     indents = [0]
-    end = (1, 1)  # posición tras la última línea con código
+    end = (1, 1)  # position after the last line with code
     for lineno, raw in enumerate(src.splitlines(), start=1):
         line = raw.rstrip()
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         width = len(line) - len(line.lstrip(" "))
         if line[width:width + 1] == "\t":
-            raise ZyloError("usa espacios, no tabuladores", lineno, width + 1)
+            raise ZyloError("use spaces, not tabs", lineno, width + 1)
         if width > indents[-1]:
             indents.append(width)
             tokens.append(Token("INDENT", "", lineno, 1))
@@ -36,7 +36,7 @@ def tokenize(src: str) -> list[Token]:
             indents.pop()
             tokens.append(Token("DEDENT", "", lineno, 1))
         if width != indents[-1]:
-            raise ZyloError("indentación inconsistente", lineno, width + 1)
+            raise ZyloError("inconsistent indentation", lineno, width + 1)
         _lex_line(line, width, lineno, tokens)
         tokens.append(Token("NEWLINE", "", lineno, len(line) + 1))
         end = (lineno, len(line) + 1)
@@ -78,7 +78,7 @@ def _lex_line(line: str, i: int, lineno: int, out: list[Token]) -> None:
         elif c == '"':
             j = line.find('"', i + 1)
             if j == -1:
-                raise ZyloError("cadena sin cerrar", lineno, col)
+                raise ZyloError("unterminated string", lineno, col)
             out.append(Token("STR", line[i + 1:j], lineno, col))
             i = j + 1
         elif line[i:i + 2] in TWO_CHAR:
@@ -88,4 +88,4 @@ def _lex_line(line: str, i: int, lineno: int, out: list[Token]) -> None:
             out.append(Token("OP", c, lineno, col))
             i += 1
         else:
-            raise ZyloError(f"carácter inesperado {c!r}", lineno, col)
+            raise ZyloError(f"unexpected character {c!r}", lineno, col)

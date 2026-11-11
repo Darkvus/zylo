@@ -1,0 +1,7 @@
+60
+40
+Ok(60)
+Err("not a number: x")
+Ok(20.0)
+Err("not a number: x")
+Err("no items")

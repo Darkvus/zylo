@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Benchmark Zylo vs Python (CPython).
 
-Cada programa tiene una versión `X.zy` y una `X.py` equivalentes. El script compila los .zy una
-vez (con y sin overflow-checks), comprueba que las salidas coinciden con las de Python, mide cada
-ejecutable N veces y muestra la mejor marca y la mediana. Se incluye el arranque del proceso en
-ambos lados. Uso:  python benchmarks/bench.py [--runs 5] [--write]
+Each program has an equivalent `X.zy` and `X.py`. The script compiles every .zy once (with and
+without overflow checks), verifies that the outputs match Python's, times each executable N times
+and reports the median. Process start-up is included on both sides.
+Usage:  python benchmarks/bench.py [--runs 5] [--write]
 """
 import argparse
 import platform
@@ -21,9 +21,9 @@ from zylo.cli import compile_rust, transpile
 HERE = Path(__file__).parent
 PROGRAMS = ["fib", "loop", "primes", "sort"]
 NOTE = (
-    "Ojo con `loop`: es un bucle aritmético trivial que LLVM puede transformar de forma muy agresiva, así que su "
+    "Beware of `loop`: it is a trivial arithmetic loop that LLVM can transform very aggressively, so its "
     "speedup es una cota superior poco representativa. `fib`, `primes` y `sort` (llamadas, ramas y acceso a listas) "
-    "reflejan mejor el rendimiento típico.\n"
+    "reflect typical performance better.\n"
 )
 
 
@@ -32,7 +32,7 @@ def run_once(cmd: list[str]) -> tuple[float, str]:
     r = subprocess.run(cmd, capture_output=True, text=True)
     dt = time.perf_counter() - t0
     if r.returncode:
-        sys.exit(f"falló {cmd}: {r.stderr}")
+        sys.exit(f"failed {cmd}: {r.stderr}")
     return dt, r.stdout
 
 
@@ -70,7 +70,7 @@ def main() -> int:
             print(f"{name:8} ok  python {py_med:.3f}s  zylo {chk_med:.3f}s  zylo(sin checks) {raw_med:.3f}s", flush=True)
 
     lines = [
-        "| Programa | Python | Zylo | Speedup | Zylo sin overflow-checks | Speedup | Compilación |",
+        "| Program | Python | Zylo | Speedup | Zylo without overflow checks | Speedup | Compile time |",
         "|---|---:|---:|---:|---:|---:|---:|",
     ]
     for name, py, chk, raw, ct in rows:
@@ -83,10 +83,10 @@ def main() -> int:
     print("\n" + table + "\n\n" + meta)
     if a.write:
         (HERE / "RESULTS.md").write_text(
-            "# Resultados del benchmark\n\nGenerado con `python benchmarks/bench.py --write`.\n\n"
+            "# Benchmark results\n\nGenerated with `python benchmarks/bench.py --write`.\n\n"
             + table + "\n\n" + meta + "\n\n"
-            "Las versiones de Python están escritas dentro de funciones (lo idiomático y más rápido en CPython). "
-            "Las salidas de ambos lenguajes se comparan y deben ser idénticas.\n\n"
+            "The Python versions are written inside functions (the idiomatic and faster style in CPython). "
+            "The outputs of both languages are compared and must be identical.\n\n"
             + NOTE
         )
     return 0

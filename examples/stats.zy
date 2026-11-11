@@ -1,4 +1,4 @@
-# Estadísticas básicas de una lista
+# Basic statistics of a list
 fn total(xs: list[int]) -> int:
     s = 0
     for x in xs:

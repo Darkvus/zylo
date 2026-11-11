@@ -1,0 +1,24 @@
+fn find_positive(xs: list[int]) -> int?:
+    for x in xs:
+        if x > 0:
+            return some(x)
+    return none
+
+a = find_positive([-1, -2, 3, 4])
+b = find_positive([-1, -2])
+print(a)
+print(b)
+print(a is some)
+print(b is none)
+print(a.unwrap())
+print(b.unwrap_or(0))
+print(a == some(3))
+print(b == none)
+if a is some:
+    print(a + 1)
+else:
+    print("nothing")
+if b is some:
+    print(b + 1)
+else:
+    print("nothing")
