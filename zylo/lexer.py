@@ -4,10 +4,10 @@ from .errors import ZyloError
 
 KEYWORDS = {
     "fn", "if", "elif", "else", "while", "for", "in", "return", "break", "continue",
-    "and", "or", "not", "true", "false",
+    "and", "or", "not", "true", "false", "struct",
 }
 TWO_CHAR = {"==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=", "%="}
-ONE_CHAR = set("+-*/%<>=(),:[]")
+ONE_CHAR = set("+-*/%<>=(),:[].")
 
 
 @dataclass(frozen=True)

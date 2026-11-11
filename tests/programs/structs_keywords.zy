@@ -1,0 +1,13 @@
+struct String:
+    type: int
+
+    fn clone(self) -> int:
+        return self.type + 1
+
+    fn move(self):
+        self.type += 10
+
+s = String(1)
+print(s.clone())
+s.move()
+print(s.type)

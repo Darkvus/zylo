@@ -1,0 +1,26 @@
+struct Counter:
+    count: int
+    step: int
+
+    fn tick_twice(self):
+        self.tick()
+        self.tick()
+
+    fn tick(self):
+        self.count += self.step
+
+    fn value(self) -> int:
+        return self.count
+
+    fn describe(self) -> str:
+        return "count=" + str(self.count)
+
+c = Counter(0, 3)
+c.tick()
+c.tick_twice()
+print(c.value())
+print(c.describe())
+d = c
+d.tick()
+print(c.value())
+print(d.value())

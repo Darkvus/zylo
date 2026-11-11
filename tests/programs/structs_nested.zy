@@ -1,0 +1,35 @@
+struct Item:
+    name: str
+    price: int
+
+struct Cart:
+    items: list[Item]
+    owner: str
+
+    fn add(self, item: Item):
+        append(self.items, item)
+
+    fn total(self) -> int:
+        t = 0
+        for it in self.items:
+            t += it.price
+        return t
+
+fn cheapest(c: Cart) -> Item:
+    best = c.items[0]
+    for it in c.items:
+        if it.price < best.price:
+            best = it
+    return best
+
+cart = Cart([], "ana")
+cart.add(Item("pan", 3))
+cart.add(Item("leche", 2))
+cart.add(Item("miel", 7))
+print(cart.total())
+print(cheapest(cart).name)
+print(len(cart.items))
+cart.items[0].price = 10
+print(cart.total())
+print(cart.owner)
+print(cart.items[1])

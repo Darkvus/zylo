@@ -4,10 +4,14 @@ Modelo de memoria: todo se comporta como valor. `int`/`float`/`bool` son `Copy`;
 (`String`) y `list` (`Vec<T>`) se clonan al leerlos como valor (`x.clone()`). Las lecturas
 que no necesitan propiedad (len, print, índices, comparaciones, `for` sobre range) toman
 referencia y no clonan.
+
+Structs: `#[derive(Clone, PartialEq)] struct` + `impl` con sus métodos. `self` es `&self` o
+`&mut self` según lo que infirió el checker (`FnDef.self_mut`). `Debug` se escribe a mano para
+imprimir `Point(x=1.0, y=2.0)`.
 """
 from . import ast
 from .errors import ZyloError
-from .types import BOOL, FLOAT, INT, STR, UNIT, ListT, Type
+from .types import BOOL, FLOAT, INT, STR, UNIT, ListT, StructT, Type
 
 PRELUDE = "#![allow(unused, unused_parens, while_true, unused_mut)]\n"
 
@@ -20,8 +24,30 @@ RUST_KEYWORDS = {
 }
 
 
+# Nombres de tipos y de métodos que chocarían con el preludio o con traits que usamos.
+RUST_TYPE_NAMES = {
+    "String", "Vec", "Option", "Result", "Box", "Some", "None", "Ok", "Err", "Default", "Clone",
+    "PartialEq", "Debug", "Display", "Copy", "Send", "Sync", "Drop", "Fn", "Iterator", "Ord", "Eq",
+}
+METHOD_CLASHES = {
+    "clone", "eq", "ne", "fmt", "to_string", "into", "from", "drop", "default", "cmp",
+    "partial_cmp", "hash", "borrow", "to_owned", "as_ref", "as_mut",
+}
+
+
 def ident(name: str) -> str:
+    if name == "self":
+        return name
     return name + "_" if name in RUST_KEYWORDS else name
+
+
+def mident(name: str) -> str:
+    """Nombre de método: además de las keywords, evita pisar métodos de traits (`clone`, `eq`...)."""
+    return name + "_" if name in RUST_KEYWORDS or name in METHOD_CLASHES else name
+
+
+def tname(name: str) -> str:
+    return name + "_" if name in RUST_TYPE_NAMES or name in RUST_KEYWORDS else name
 
 
 def rust_type(t: Type) -> str:
@@ -37,6 +63,8 @@ def rust_type(t: Type) -> str:
         return "()"
     if isinstance(t, ListT):
         return f"Vec<{rust_type(t.elem)}>"
+    if isinstance(t, StructT):
+        return tname(t.name)
     raise ZyloError(f"tipo sin equivalente en Rust: {t}")
 
 
@@ -60,8 +88,12 @@ class Gen:
 
     def program(self, prog: ast.Program) -> str:
         self.out.append(PRELUDE)
+        structs = [s for s in prog.body if isinstance(s, ast.StructDef)]
         fns = [s for s in prog.body if isinstance(s, ast.FnDef)]
-        rest = [s for s in prog.body if not isinstance(s, ast.FnDef)]
+        rest = [s for s in prog.body if not isinstance(s, (ast.FnDef, ast.StructDef))]
+        for sd in structs:
+            self.struct(sd)
+            self.out.append("")
         for f in fns:
             self.fn(f)
             self.out.append("")
@@ -70,13 +102,43 @@ class Gen:
         self.line("}")
         return "\n".join(self.out) + "\n"
 
+    def struct(self, sd: ast.StructDef) -> None:
+        name = tname(sd.name)
+        self.line("#[derive(Clone, PartialEq)]")
+        self.line(f"struct {name} {{")
+        for f in sd.fields:
+            self.line(f"    {ident(f.name)}: {rust_type(f.ty)},")
+        self.line("}")
+        self.out.append("")
+        shown = ", ".join(f"{f.name}={{:?}}" for f in sd.fields)
+        args = ", ".join(f"self.{ident(f.name)}" for f in sd.fields)
+        self.line(f"impl std::fmt::Debug for {name} {{")
+        self.line("    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {")
+        self.line(f'        write!(f, "{sd.name}({shown})", {args})')
+        self.line("    }")
+        self.line("}")
+        if sd.methods:
+            self.out.append("")
+            self.line(f"impl {name} {{")
+            self.depth += 1
+            for i, m in enumerate(sd.methods):
+                if i:
+                    self.out.append("")
+                self.fn(m)
+            self.depth -= 1
+            self.line("}")
+
     def fn(self, f: ast.FnDef) -> None:
-        params = ", ".join(
+        params = []
+        if f.has_self:
+            params.append("&mut self" if f.self_mut else "&self")
+        params += [
             f"{'mut ' if p.info and p.info.mutable else ''}{ident(p.name)}: {rust_type(p.info.ty)}"
             for p in f.params
-        )
+        ]
         ret = "" if f.ty.ret == UNIT else f" -> {rust_type(f.ty.ret)}"
-        self.line(f"fn {ident(f.name)}({params}){ret} {{")
+        name = mident(f.name) if f.has_self else ident(f.name)
+        self.line(f"fn {name}({', '.join(params)}){ret} {{")
         self.block(f.body)
         self.line("}")
 
@@ -112,7 +174,7 @@ class Gen:
                 raise ZyloError(f"{type(s).__name__} no soportado en codegen", s.line, s.col)
 
     def assign(self, s: ast.Assign) -> None:
-        if isinstance(s.target, ast.Index):
+        if isinstance(s.target, (ast.Index, ast.Attr)):
             self.line(f"{emit_ref(s.target)} = {emit(s.value)};")
         elif s.declares:
             mut = "mut " if s.var.mutable else ""
@@ -155,7 +217,7 @@ class Gen:
 def emit(e: ast.Expr) -> str:
     """Expresión como valor con propiedad (clona lo que no es Copy al leerlo de una variable)."""
     code = emit_ref(e)
-    if isinstance(e, (ast.Name, ast.Index)) and not is_copy(e.ty):
+    if isinstance(e, (ast.Name, ast.Index, ast.Attr)) and not is_copy(e.ty):
         return f"{code}.clone()"
     return code
 
@@ -175,6 +237,10 @@ def emit_ref(e: ast.Expr) -> str:
             return ident(i)
         case ast.Index(v, i):
             return f"{emit_ref(v)}[({emit_ref(i)}) as usize]"
+        case ast.Attr(v, name):
+            return f"{emit_ref(v)}.{ident(name)}"
+        case ast.MethodCall(v, name, args):
+            return f"{emit_ref(v)}.{mident(name)}({', '.join(emit(a) for a in args)})"
         case ast.ListLit(items):
             if not items:
                 return "Vec::new()"
@@ -200,10 +266,13 @@ def binop(e: ast.BinOp, op: str, l: ast.Expr, r: ast.Expr) -> str:
 
 def call(e: ast.Call) -> str:
     args = e.args
+    if e.ctor_fields is not None:
+        fields = ", ".join(f"{ident(n)}: {emit(a)}" for n, a in zip(e.ctor_fields, args))
+        return f"{tname(e.func)} {{ {fields} }}"
     match e.func:
         case "print":
             t = args[0].ty
-            fmt = "{:?}" if t == FLOAT or isinstance(t, ListT) else "{}"
+            fmt = "{:?}" if t == FLOAT or isinstance(t, (ListT, StructT)) else "{}"
             return f'println!("{fmt}", {emit_ref(args[0])})'
         case "len":
             x = emit_ref(args[0])

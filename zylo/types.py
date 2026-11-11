@@ -18,6 +18,14 @@ class ListT:
 
 
 @dataclass(frozen=True)
+class StructT:
+    name: str
+
+    def __str__(self) -> str:
+        return self.name
+
+
+@dataclass(frozen=True)
 class FnT:
     params: tuple["Type", ...]
     ret: "Type"
@@ -32,7 +40,7 @@ BOOL = Prim("bool")
 STR = Prim("str")
 UNIT = Prim("unit")
 
-Type = Prim | ListT | FnT
+Type = Prim | ListT | FnT | StructT
 
 PRIMS = {"int": INT, "float": FLOAT, "bool": BOOL, "str": STR}
 

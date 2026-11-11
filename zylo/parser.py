@@ -13,7 +13,6 @@ PRECEDENCE = {
 }
 NOT_PREC = 3  # `not a == b` es `not (a == b)`
 AUG_OPS = {"+=": "+", "-=": "-", "*=": "*", "/=": "/", "%=": "%"}
-TYPE_NAMES = {"int", "float", "bool", "str", "list"}
 KIND_NAMES = {
     "NEWLINE": "fin de línea", "EOF": "fin del archivo", "INDENT": "indentación",
     "DEDENT": "fin de bloque", "IDENT": "un nombre", "INT": "un entero",
@@ -90,6 +89,8 @@ class Parser:
             match tok.value:
                 case "fn":
                     return self.parse_fn()
+                case "struct":
+                    return self.parse_struct()
                 case "if":
                     return self.parse_if()
                 case "while":
@@ -135,7 +136,7 @@ class Parser:
         return ast.ExprStmt(expr, line=start.line, col=start.col)
 
     def _check_target(self, expr: ast.Expr, start: Token) -> None:
-        if not isinstance(expr, (ast.Name, ast.Index)):
+        if not isinstance(expr, (ast.Name, ast.Index, ast.Attr)):
             raise ZyloError("no se puede asignar a esta expresión", start.line, start.col)
 
     def parse_if(self) -> ast.If:
@@ -167,22 +168,62 @@ class Parser:
         self.expect("NEWLINE")
         return ast.Return(value, line=kw.line, col=kw.col)
 
-    def parse_fn(self) -> ast.FnDef:
+    def parse_fn(self, in_struct: bool = False) -> ast.FnDef:
         kw = self.advance()
         name = self.expect("IDENT").value
         self.expect("OP", "(")
         params: list[ast.Param] = []
+        has_self = False
         if not self.check("OP", ")"):
-            params.append(self.parse_param())
+            if in_struct and self._is_self_param():
+                self.advance()
+                has_self = True
+                if self.match("OP", ","):
+                    params.append(self.parse_param())
+            else:
+                params.append(self.parse_param())
             while self.match("OP", ","):
                 params.append(self.parse_param())
         self.expect("OP", ")")
         ret = self.parse_type() if self.match("OP", "->") else None
         body = self.parse_block()
-        return ast.FnDef(name, params, ret, body, line=kw.line, col=kw.col)
+        return ast.FnDef(name, params, ret, body, has_self, line=kw.line, col=kw.col)
+
+    def _is_self_param(self) -> bool:
+        nxt = self.peek()
+        return self.check("IDENT", "self") and not (nxt.kind == "OP" and nxt.value == ":")
+
+    def parse_struct(self) -> ast.StructDef:
+        kw = self.advance()
+        name = self.expect("IDENT")
+        self.expect("OP", ":")
+        self.expect("NEWLINE")
+        if not self.check("INDENT"):
+            raise ZyloError("se esperaba un bloque indentado", self.cur.line, self.cur.col)
+        self.advance()
+        fields: list[ast.Field] = []
+        methods: list[ast.FnDef] = []
+        while not self.check("DEDENT"):
+            tok = self.cur
+            if tok.kind == "EOF":
+                raise ZyloError("bloque sin cerrar", tok.line, tok.col)
+            if self.check("KW", "fn"):
+                methods.append(self.parse_fn(in_struct=True))
+            elif tok.kind == "IDENT" and self.peek().kind == "OP" and self.peek().value == ":":
+                self.advance()
+                self.advance()
+                typ = self.parse_type()
+                self.expect("NEWLINE")
+                fields.append(ast.Field(tok.value, typ, line=tok.line, col=tok.col))
+            else:
+                raise ZyloError("dentro de un struct solo puede haber campos (`nombre: tipo`) y métodos (`fn`)", tok.line, tok.col)
+        self.expect("DEDENT")
+        return ast.StructDef(name.value, fields, methods, line=name.line, col=name.col)
 
     def parse_param(self) -> ast.Param:
         name = self.expect("IDENT")
+        if name.value == "self":
+            raise ZyloError("`self` solo puede ser el primer parámetro de un método, dentro de un struct", name.line, name.col)
         if not self.check("OP", ":"):
             raise ZyloError(f"el parámetro {name.value!r} necesita tipo (`{name.value}: int`)", name.line, name.col)
         self.advance()
@@ -192,8 +233,6 @@ class Parser:
 
     def parse_type(self) -> ast.TypeRef:
         tok = self.expect("IDENT")
-        if tok.value not in TYPE_NAMES:
-            raise ZyloError(f"tipo desconocido {tok.value!r}", tok.line, tok.col)
         args: list[ast.TypeRef] = []
         if tok.value == "list":
             self.expect("OP", "[")
@@ -226,12 +265,21 @@ class Parser:
 
     def parse_postfix(self) -> ast.Expr:
         expr = self.parse_primary()
-        while self.check("OP", "["):
-            lb = self.advance()
-            idx = self.parse_expr()
-            self.expect("OP", "]")
-            expr = ast.Index(expr, idx, line=lb.line, col=lb.col)
-        return expr
+        while True:
+            if self.check("OP", "["):
+                lb = self.advance()
+                idx = self.parse_expr()
+                self.expect("OP", "]")
+                expr = ast.Index(expr, idx, line=lb.line, col=lb.col)
+            elif self.check("OP", "."):
+                self.advance()
+                name = self.expect("IDENT")
+                if self.check("OP", "("):
+                    expr = ast.MethodCall(expr, name.value, self.parse_args(), line=name.line, col=name.col)
+                else:
+                    expr = ast.Attr(expr, name.value, line=name.line, col=name.col)
+            else:
+                return expr
 
     def parse_primary(self) -> ast.Expr:
         tok = self.advance()
@@ -262,7 +310,7 @@ class Parser:
             return ast.ListLit(items, **pos)
         raise ZyloError(f"expresión inesperada: {describe(tok)}", tok.line, tok.col)
 
-    def parse_call(self, name: Token) -> ast.Call:
+    def parse_args(self) -> list[ast.Expr]:
         self.expect("OP", "(")
         args: list[ast.Expr] = []
         if not self.check("OP", ")"):
@@ -270,7 +318,10 @@ class Parser:
             while self.match("OP", ","):
                 args.append(self.parse_expr())
         self.expect("OP", ")")
-        return ast.Call(name.value, args, line=name.line, col=name.col)
+        return args
+
+    def parse_call(self, name: Token) -> ast.Call:
+        return ast.Call(name.value, self.parse_args(), line=name.line, col=name.col)
 
 
 def parse(src: str) -> ast.Program:

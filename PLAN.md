@@ -33,6 +33,7 @@ print(fib(35))
 - [x] **Fase 4 hecha (2026-11-11):** `zylo/codegen.py` completo (fn, let/let mut, if/elif/else, while, for range/list, listas, strings, conversiones, builtins). 10 programas e2e en `tests/programs/` (`.zy` + `.out`) compilados con rustc real + test de panic por overflow. 85 tests.
 - [x] **Fase 5 hecha (2026-11-11):** `zylo/diagnostics.py` (errores `archivo:línea:col: error: msg` + fragmento + `^`, color solo en TTY y sin `NO_COLOR`), CLI con subcomandos `check|emit|build|run`, `build --emit-rs`, `--no-overflow-checks`, `--version`, `run` devuelve el exit code del programa (señal → 128+N), builtin `exit(int)`, errores del backend (`BackendError`) separados de los del usuario. Mensajes de parseo legibles y posición real al final del archivo. 113 tests.
 - [x] **Fase 6 hecha (2026-11-11) — MVP completo.** 13 ejemplos documentados en `examples/` (salidas calculadas con Python independiente), benchmark reproducible en `benchmarks/` (`python benchmarks/bench.py --write` → `RESULTS.md`).
+- [x] **v0.2a hecho (2026-11-11): structs y métodos.** Renombrado Lumo → Zylo (extensión `.zy`). `struct` con campos, constructor posicional, acceso y asignación de campos (`p.x`, `a.b.c = v`, `xs[i].x = v`), métodos con `self` inferidos como `&self`/`&mut self` (punto fijo para propagación entre métodos), tipos por valor, `print(p)` → `Point(x=1.0, y=2.0)`. 171+ tests, 3 ejemplos nuevos. Ver ROADMAP.md.
 - Repo privado: https://github.com/Darkvus/zylo
 
 Limitaciones actuales: solo sentencias de expresión (`print(...)`); el lexer ya reconoce

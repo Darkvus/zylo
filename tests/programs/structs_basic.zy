@@ -1,0 +1,14 @@
+struct Point:
+    x: int
+    y: int
+
+p = Point(1, 2)
+q = p
+q.x = 10
+print(p.x)
+print(q.x)
+print(p == Point(1, 2))
+print(p == q)
+p.y += 5
+print(p)
+print(p.x + p.y)

@@ -1,0 +1,29 @@
+# Una cuenta bancaria con métodos que modifican el struct
+struct Account:
+    owner: str
+    balance: int
+
+    fn deposit(self, amount: int):
+        self.balance += amount
+
+    fn withdraw(self, amount: int) -> bool:
+        if amount > self.balance:
+            return false
+        self.balance -= amount
+        return true
+
+    fn report(self) -> str:
+        return self.owner + ": " + str(self.balance)
+
+acc = Account("Ana", 100)
+acc.deposit(50)
+print(acc.report())
+if acc.withdraw(500):
+    print("retirada ok")
+else:
+    print("saldo insuficiente")
+if acc.withdraw(120):
+    print("retirada ok")
+else:
+    print("saldo insuficiente")
+print(acc.report())

@@ -118,11 +118,6 @@ def test_param_requires_type():
     assert e.value.line == 1
 
 
-def test_unknown_type():
-    with pytest.raises(ZyloError, match="tipo desconocido"):
-        parse("fn f(a: banana):\n    return\n")
-
-
 # ---- operadores lógicos -------------------------------------------------------------
 
 def test_and_binds_tighter_than_or():

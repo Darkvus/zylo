@@ -1,0 +1,24 @@
+# Álgebra de vectores 2D: métodos que devuelven structs nuevos y se llaman entre sí
+struct Vec2:
+    x: float
+    y: float
+
+    fn add(self, other: Vec2) -> Vec2:
+        return Vec2(self.x + other.x, self.y + other.y)
+
+    fn scale(self, k: float) -> Vec2:
+        return Vec2(self.x * k, self.y * k)
+
+    fn dot(self, other: Vec2) -> float:
+        return self.x * other.x + self.y * other.y
+
+    fn length2(self) -> float:
+        return self.dot(self)
+
+a = Vec2(1.0, 2.0)
+b = Vec2(3.0, 4.0)
+print(a.add(b))
+print(a.scale(2.5))
+print(a.dot(b))
+print(b.length2())
+print(a.add(b).scale(0.5))

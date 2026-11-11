@@ -1,0 +1,26 @@
+# Lista de structs: valor total del inventario y reposición de stock
+struct Product:
+    name: str
+    quantity: int
+    price: int
+
+    fn value(self) -> int:
+        return self.quantity * self.price
+
+    fn restock(self, amount: int):
+        self.quantity += amount
+
+fn total_value(products: list[Product]) -> int:
+    total = 0
+    for p in products:
+        total += p.value()
+    return total
+
+products = [Product("tornillos", 100, 5), Product("clavos", 8, 3), Product("tuercas", 3, 12)]
+print(total_value(products))
+for p in products:
+    if p.quantity < 10:
+        print(p.name + " bajo stock")
+products[2].restock(50)
+print(products[2].quantity)
+print(total_value(products))

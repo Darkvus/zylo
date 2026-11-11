@@ -36,6 +36,27 @@ bad.zy:2:9: error: `+` entre int y float: los tipos deben coincidir (usa float(x
 Necesita Python 3.11+ y [Rust](https://rustup.rs) para `build`/`run`.
 El estado y las decisiones de diseño están en [PLAN.md](PLAN.md).
 
+## Structs
+
+```
+struct Account:
+    owner: str
+    balance: int
+
+    fn deposit(self, amount: int):
+        self.balance += amount
+
+    fn report(self) -> str:
+        return self.owner + ": " + str(self.balance)
+
+acc = Account("Ana", 100)
+acc.deposit(50)
+print(acc.report())   # Ana: 150
+```
+
+Los structs son valores (copiarlos o pasarlos a una función los clona). Los métodos reciben `self`
+por referencia y el compilador infiere si lo modifican.
+
 ## Rendimiento
 
 Mismos programas en Zylo y en CPython (mediana de 5 ejecuciones):
