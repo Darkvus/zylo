@@ -1,0 +1,40 @@
+{
+  "name": "zylo",
+  "displayName": "Zylo",
+  "description": "Syntax highlighting and language server for Zylo, a statically typed language with Python-like syntax that compiles to Rust",
+  "version": "0.8.0",
+  "publisher": "zylo",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/Darkvus/zylo" },
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Programming Languages", "Formatters"],
+  "keywords": ["zylo", "zy"],
+  "activationEvents": ["onLanguage:zylo"],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "zylo",
+        "aliases": ["Zylo", "zylo"],
+        "extensions": [".zy"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      { "language": "zylo", "scopeName": "source.zylo", "path": "./syntaxes/zylo.tmLanguage.json" }
+    ],
+    "configuration": {
+      "title": "Zylo",
+      "properties": {
+        "zylo.path": {
+          "type": "string",
+          "default": "zylo",
+          "description": "Path of the `zylo` executable that runs the language server (`zylo lsp`)."
+        }
+      }
+    }
+  },
+  "dependencies": { "vscode-languageclient": "^9.0.1" },
+  "devDependencies": { "@vscode/vsce": "^3.0.0" },
+  "scripts": { "package": "vsce package" }
+}

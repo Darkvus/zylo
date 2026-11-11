@@ -277,7 +277,7 @@ class Gen:
         """Append one line at the current indentation."""
         self.out.append("    " * self.depth + text)
 
-    # ---- programa ----------------------------------------------------------------------
+    # ---- program ----------------------------------------------------------------------
 
     def program(self, prog: ast.Program) -> str:
         """Generate the whole Rust program.
@@ -352,7 +352,7 @@ class Gen:
             self.stmt(s)
         self.depth -= 1
 
-    # ---- sentencias --------------------------------------------------------------------
+    # ---- statements --------------------------------------------------------------------
 
     def stmt(self, s: ast.Stmt) -> None:
         """Emit one statement."""
@@ -504,7 +504,7 @@ class Gen:
         self.line("}")
 
 
-# ---- expresiones ----------------------------------------------------------------------------
+# ---- expressions ----------------------------------------------------------------------------
 
 def emit(e: ast.Expr) -> str:
     """Expression as an owned value (clones non-Copy values read from a variable)."""

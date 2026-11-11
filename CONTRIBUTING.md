@@ -57,6 +57,10 @@ Always work **vertically**: a new construct goes through the whole pipeline befo
 
 ## Conventions
 
+- `.zy` files in the repository are formatted: run `zylo fmt examples tests/programs benchmarks` (a test checks it).
+- If you add a keyword or a built-in function, regenerate the VS Code grammar with
+  `python scripts/generate_vscode_grammar.py` (a test checks it is up to date) and bump the extension's version
+  in `editors/vscode/package.json` together with the project's.
 - **Docstrings follow the Google style** (`Args`, `Returns`, `Raises`, `Attributes`) on every public module, class,
   function and method. Run `ruff check .` before pushing; CI runs it too (add `--fix` for import order).
 - Imports are absolute (`from zylo.domain.errors import ZyloError`), never relative.

@@ -13,9 +13,11 @@ from pathlib import Path
 
 from zylo import __version__
 from zylo.application import package_commands as pkg
-from zylo.application.compile import build_executable, check_file, compile_file
+from zylo.application.compile import build_executable, compile_file, diagnose_source
+from zylo.application.format import format_paths, format_text
 from zylo.domain.errors import BackendError, PackageError, ZyloError
-from zylo.interface.diagnostics import format_error
+from zylo.interface import lsp
+from zylo.interface.diagnostics import format_errors
 
 # CLI exit codes: 0 ok · 1 compile error · 2 incorrect usage (argparse)
 # `zylo run` returns the exit code of the program it ran.
@@ -34,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     """
     p = argparse.ArgumentParser(prog="zylo", description="Zylo: Python-like syntax, static typing, compiles to Rust.")
     p.add_argument("--version", action="version", version=f"zylo {__version__}")
-    sub = p.add_subparsers(dest="cmd", required=True, metavar="{check,emit,build,run,init,venv,add,remove,install,update,list}")
+    sub = p.add_subparsers(dest="cmd", required=True, metavar="{check,emit,build,run,fmt,lsp,init,venv,add,remove,install,update,list}")
 
     def common(sp: argparse.ArgumentParser, backend: bool) -> None:
         sp.add_argument("file", type=Path, help=".zy source file")
@@ -57,6 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
     def env_arg(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("--env", metavar="DIR", help="virtual environment to use (default: $ZYLO_ENV or the nearest .zylo-env)")
 
+    sp = sub.add_parser("fmt", help="format .zy files in place (directories are searched recursively)")
+    sp.add_argument("paths", nargs="+", type=Path, help="files or directories")
+    sp.add_argument("--check", action="store_true", help="change nothing; exit 1 if any file would be reformatted")
+    sp.add_argument("--stdout", action="store_true", help="print the formatted text of one file instead of rewriting it")
+    sub.add_parser("lsp", help="run the language server (Language Server Protocol over stdin/stdout) for editors")
     sp = sub.add_parser("init", help="create zylo.toml and src/main.zy in the current directory")
     sp.add_argument("name", nargs="?", help="package name (default: the directory name)")
     sp = sub.add_parser("venv", help="create a virtual environment (default: ./.zylo-env)")
@@ -77,6 +84,36 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 PACKAGE_COMMANDS = {"init", "venv", "add", "remove", "install", "update", "list"}
+
+
+def format_main(a: argparse.Namespace) -> int:
+    """Run `zylo fmt`.
+
+    Args:
+        a: The parsed arguments.
+
+    Returns:
+        0 on success; 1 if a file has a syntax error, or with `--check` if any file would change.
+    """
+    if a.stdout:
+        if len(a.paths) != 1 or not a.paths[0].is_file():
+            print("zylo: --stdout needs exactly one file", file=sys.stderr)
+            return 2
+        try:
+            sys.stdout.write(format_text(a.paths[0].read_text()))
+        except ZyloError as e:
+            print(format_errors([e], str(a.paths[0]), a.paths[0].read_text(), use_color()), file=sys.stderr)
+            return 1
+        return 0
+    result = format_paths(a.paths, check=a.check)
+    for e in result.errors:
+        print(format_errors([e], e.file or "", None, use_color()), file=sys.stderr)
+    for p in result.changed:
+        print(f"{'would reformat' if a.check else 'formatted'} {p}")
+    done = len(result.changed) + len(result.unchanged)
+    print(f"{len(result.changed)} file(s) {'would be ' if a.check else ''}changed, {len(result.unchanged)} already formatted"
+          if done else "no .zy files found", file=sys.stderr if result.errors else sys.stdout)
+    return 1 if result.errors or (a.check and result.changed) else 0
 
 
 def package_main(a: argparse.Namespace) -> int:
@@ -111,14 +148,6 @@ def package_main(a: argparse.Namespace) -> int:
     return 2
 
 
-def read_text_or_none(path: Path) -> str | None:
-    """Read a text file, returning None when it cannot be read; used to show code snippets in errors."""
-    try:
-        return path.read_text()
-    except (OSError, UnicodeDecodeError):
-        return None
-
-
 def use_color() -> bool:
     """Whether to colour output: standard error is a terminal and `NO_COLOR` is not set."""
     return sys.stderr.isatty() and "NO_COLOR" not in os.environ
@@ -136,6 +165,10 @@ def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     if a.cmd in PACKAGE_COMMANDS:
         return package_main(a)
+    if a.cmd == "fmt":
+        return format_main(a)
+    if a.cmd == "lsp":
+        return lsp.main()
     try:
         source = a.file.read_text()
     except OSError as e:
@@ -146,8 +179,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
+        errors = diagnose_source(source, a.file, a.env)  # every mistake, not only the first
+        if errors:
+            print(format_errors(errors, str(a.file), source, use_color()), file=sys.stderr)
+            return 1
         if a.cmd == "check":
-            check_file(a.file, a.env)
             return 0
         rs, crates, manifest = compile_file(a.file, a.env)
         if a.cmd == "emit":
@@ -173,9 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"zylo: error: {e.msg}", file=sys.stderr)
         return 1
     except ZyloError as e:
-        shown = e.file or str(a.file)
-        text = source if shown == str(a.file) else read_text_or_none(Path(shown))
-        print(format_error(e, text, shown, use_color()), file=sys.stderr)
+        print(format_errors([e], str(a.file), source, use_color()), file=sys.stderr)
         return 1
 
 

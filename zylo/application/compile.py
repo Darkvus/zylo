@@ -9,9 +9,9 @@ from zylo.infrastructure import cargo, rustc
 from zylo.packaging import env as envmod
 from zylo.packaging.manifest import MANIFEST, find_manifest, load_manifest
 from zylo.packaging.rust_deps import validate_rust_dep
-from zylo.semantics.checker import check
+from zylo.semantics.checker import check, check_all
 from zylo.semantics.linker import Linker
-from zylo.syntax.parser import parse
+from zylo.syntax.parser import parse, parse_collect
 
 
 def transpile_source(src: str) -> str:
@@ -81,6 +81,31 @@ def build_executable(rs: str, crates: dict[str, object], manifest, out: Path, ch
 
 
 
-def check_file(path: Path, env: str | Path | None = None) -> None:
-    """Type-check a program and everything it imports without generating any code."""
-    check(load_program(path, env))
+def diagnose_source(source: str, path: Path, env: str | Path | None = None) -> list[ZyloError]:
+    """Find every mistake in a program, as an editor or `zylo check` wants them.
+
+    Syntax errors come first and stop the run (type checking a program that did not parse only produces noise).
+    Otherwise the program and its imports are linked and every type error is reported.
+
+    Args:
+        source: The entry file's text (it may differ from what is on disk, as in an editor with unsaved changes).
+        path: The entry file's path, used to find its imports and its project.
+        env: Environment directory to use, or None to discover one.
+
+    Returns:
+        The mistakes, in source order; empty when the program is correct.
+
+    Raises:
+        PackageError: If the project's manifest or environment is invalid.
+    """
+    _, syntax_errors = parse_collect(source, str(path))
+    if syntax_errors:
+        return syntax_errors
+    manifest, active = project_context(path, env)
+    trusted = manifest.trusted_packages if manifest else []
+    linker = Linker(active.packages_dir if active else None, trusted, overrides={path.resolve(): source})
+    try:
+        program = linker.link(path)
+    except ZyloError as e:
+        return [e]
+    return check_all(program)

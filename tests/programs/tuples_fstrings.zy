@@ -3,7 +3,7 @@ fn stats(xs: list[int]) -> tuple[int, int, float]:
 
 lo, hi, avg = stats([4, 8, 15, 16, 23, 42])
 print(f"min={lo} max={hi} avg={avg:.2f}")
-point = (3, 4)
+point = 3, 4
 x, y = point
 x, y = y, x
 print(point, x, y, point[0] + point[1])
@@ -16,4 +16,4 @@ for r in rows:
         best = r
 print(best, best == ("cy", 41))
 print(f"{1 + 2} {'q'} {{literal}} {len(rows)} {[1, 2]} {point}")
-print("tab\there", 'single "quotes"', "back\\slash")
+print("tab\there", "single \"quotes\"", "back\\slash")

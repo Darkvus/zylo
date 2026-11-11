@@ -1,5 +1,6 @@
 fn main() -> int:
     return 5
+
 type = 1
 match = 2
 loop = type + match

@@ -55,6 +55,10 @@ def err(msg: str, node: ast.Node) -> ZyloError:
     return ZyloError(msg, node.line, node.col, node.file)
 
 
+class _Poisoned(Exception):
+    """Raised when a name's declaration already failed, to avoid reporting the same mistake again and again."""
+
+
 class Scopes:
     """A stack of lexical scopes mapping names to the variables visible in them."""
     def __init__(self) -> None:
@@ -140,8 +144,10 @@ class Checker:
         self.ret: Type | None = None  # return type of the current function (None = top level)
         self.owner: str | None = None  # struct of the current method
         self.loops = 0
+        self.errors: list[ZyloError] = []  # every mistake found; the checker goes on after one
+        self.poisoned: set[str] = set()  # names whose declaration failed: later uses are not reported again
 
-    # ---- entrada ---------------------------------------------------------------------
+    # ---- entry point ---------------------------------------------------------------------
 
     def check(self, prog: ast.Program) -> None:
         """Check a whole program, annotating it in place.
@@ -150,31 +156,41 @@ class Checker:
             prog: The program to check.
 
         Raises:
-            ZyloError: On the first mistake found.
+            ZyloError: Never: mistakes are collected in `errors` (see `check_all`).
         """
-        defs = [s for s in prog.body if isinstance(s, ast.StructDef)]
-        for d in defs:
-            self.register_struct(d)
-        for d in defs:
-            self.resolve_struct(d)
-        self.check_cycles(defs)
-        for s in prog.body:  # function signatures, so they can be used before their definition
-            if isinstance(s, ast.FnDef):
-                self.declare_fn(s)
-        for d in defs:
-            self.declare_methods(d)
+        try:
+            defs = [s for s in prog.body if isinstance(s, ast.StructDef)]
+            for d in defs:
+                self.register_struct(d)
+            for d in defs:
+                self.resolve_struct(d)
+            self.check_cycles(defs)
+            for s in prog.body:  # function signatures, so they can be used before their definition
+                if isinstance(s, ast.FnDef):
+                    self.declare_fn(s)
+            for d in defs:
+                self.declare_methods(d)
+        except ZyloError as e:  # a broken declaration makes the rest meaningless: report it and stop
+            self.errors.append(e)
+            return
         for s in prog.body:
-            if isinstance(s, ast.ExternFn):
-                self.check_extern(s)
-            elif isinstance(s, ast.FnDef):
-                self.check_fn(s)
-            elif isinstance(s, ast.StructDef):
-                for m in s.methods:
-                    self.check_fn(m, s.name)
-            else:
-                self.stmt(s)
+            try:
+                if isinstance(s, ast.ExternFn):
+                    self.check_extern(s)
+                elif isinstance(s, ast.FnDef):
+                    self.check_fn(s)
+                elif isinstance(s, ast.StructDef):
+                    for m in s.methods:
+                        try:
+                            self.check_fn(m, s.name)
+                        except ZyloError as e:
+                            self.errors.append(e)
+                else:
+                    self.stmt(s)
+            except ZyloError as e:
+                self.errors.append(e)
 
-    # ---- tipos escritos ------------------------------------------------------------
+    # ---- written types ------------------------------------------------------------
 
     def resolve(self, t: ast.TypeRef) -> Type:
         """Turn a written type into a real one.
@@ -256,7 +272,7 @@ class Checker:
                 raise err(f"method {m.name!r} is already defined in {d.name!r}", m)
             m.ty = info.methods[m.name] = self.signature(m)
 
-    # ---- funciones ------------------------------------------------------------------
+    # ---- functions ------------------------------------------------------------------
 
     def signature(self, f: ast.FnDef) -> FnT:
         """Compute a function's type from its declaration.
@@ -311,25 +327,29 @@ class Checker:
             ZyloError: On a type error in the body, or when a function with a return type can finish without returning.
         """
         sig = f.ty
-        top = self.scopes
-        self.scopes, self.ret, self.loops, self.owner = Scopes(), sig.ret, 0, owner
-        self_info = self.scopes.declare("self", StructT(owner)) if owner else None
-        for p, pt in zip(f.params, sig.params):
-            p.info = self.scopes.declare(p.name, pt)
-        self.block(f.body)
-        if sig.ret != UNIT and not always_returns(f.body):
-            raise err(f"function {f.name!r} can finish without a `return`", f)
-        if owner:
-            if self_info.mutable:
-                self.mutating.add((owner, f.name))
-            f.self_mut = (owner, f.name) in self.mutating
-        # A parameter that is never modified is lent instead of cloned. A method that modifies `self` takes its
-        # arguments by value: they may be parts of `self`, which cannot be lent while `self` is borrowed mutably.
-        for p in f.params:
-            p.info.by_ref = not p.info.mutable and not is_copy_type(p.info.ty) and not f.self_mut
-        self.scopes, self.ret, self.owner = top, None, None
+        top, saved_poison = self.scopes, self.poisoned
+        self.scopes, self.ret, self.loops, self.owner, self.poisoned = Scopes(), sig.ret, 0, owner, set()
+        try:
+            self_info = self.scopes.declare("self", StructT(owner)) if owner else None
+            for p, pt in zip(f.params, sig.params):
+                p.info = self.scopes.declare(p.name, pt)
+            before = len(self.errors)
+            self.block(f.body)
+            # a `return` that failed to check is not a missing return: do not pile a second error on the first
+            if len(self.errors) == before and sig.ret != UNIT and not always_returns(f.body):
+                raise err(f"function {f.name!r} can finish without a `return`", f)
+            if owner:
+                if self_info.mutable:
+                    self.mutating.add((owner, f.name))
+                f.self_mut = (owner, f.name) in self.mutating
+            # A parameter that is never modified is lent instead of cloned. A method that modifies `self` takes its
+            # arguments by value: they may be parts of `self`, which cannot be lent while `self` is borrowed mutably.
+            for p in f.params:
+                p.info.by_ref = not p.info.mutable and not is_copy_type(p.info.ty) and not f.self_mut
+        finally:
+            self.scopes, self.ret, self.owner, self.poisoned = top, None, None, saved_poison
 
-    # ---- sentencias ------------------------------------------------------------------
+    # ---- statements ------------------------------------------------------------------
 
     def block(self, body: list[ast.Stmt], bind: tuple[str | None, Type | None] | None = None) -> VarInfo | None:
         """Check a block in its own scope.
@@ -384,11 +404,29 @@ class Checker:
             s.after_bind = info
 
     def stmt(self, s: ast.Stmt) -> None:
-        """Check one statement.
+        """Check one statement; a mistake is recorded in `errors` and checking goes on with the next statement.
 
         Args:
             s: The statement.
         """
+        try:
+            self._stmt(s)
+        except _Poisoned:
+            self.poison(s)  # it only repeats an earlier mistake
+        except ZyloError as e:
+            self.errors.append(e)
+            self.poison(s)
+
+    def poison(self, s: ast.Stmt) -> None:
+        """Mark the variables a failed statement should have declared, so later uses are not reported too."""
+        names: list[str] = []
+        if isinstance(s, ast.Assign) and isinstance(s.target, ast.Name):
+            names = [s.target.id]
+        elif isinstance(s, ast.Unpack):
+            names = [t.id for t in s.targets]
+        self.poisoned.update(n for n in names if self.scopes.lookup(n) is None)
+
+    def _stmt(self, s: ast.Stmt) -> None:
         match s:
             case ast.ExprStmt(e):
                 self.expr(e)
@@ -591,7 +629,7 @@ class Checker:
         if t != INT:
             raise err(f"expected int, not {t}", e)
 
-    # ---- expresiones -----------------------------------------------------------------
+    # ---- expressions -----------------------------------------------------------------
 
     def expr(self, e: ast.Expr, expected: Type | None = None) -> Type:
         """Infer the type of an expression and record it on the node.
@@ -623,6 +661,8 @@ class Checker:
                         raise err(f"{id!r} is a struct; build it with parentheses: {id}(...)", e)
                     if id in self.fns or id in BUILTINS:
                         raise err(f"{id!r} is a function; call it with parentheses", e)
+                    if id in self.poisoned:
+                        raise _Poisoned
                     raise err(f"undefined variable {id!r}", e)
                 e.var = info
                 return info.ty
@@ -1053,7 +1093,7 @@ class Checker:
         e.ctor_fields = list(info.fields)
         return StructT(e.func)
 
-    # ---- llamadas ------------------------------------------------------------------
+    # ---- calls ------------------------------------------------------------------
 
     def check_args(self, e: ast.Node, name: str, args: list[ast.Expr], sig: FnT) -> None:
         """Check call arguments against a signature.
@@ -1288,11 +1328,30 @@ def exits(body: list[ast.Stmt]) -> bool:
     return False
 
 
-def check(prog: ast.Program) -> ast.Program:
-    """Check a program.
+def check_all(prog: ast.Program) -> list[ZyloError]:
+    """Check a program and report every mistake in it, not only the first.
 
     Repeats the check until the set of methods that modify `self` stops changing (a method that calls a modifying
-    method is one too); this converges in a few rounds.
+    method is one too); this converges in a few rounds. Each statement is checked on its own, so a mistake in one
+    does not hide those in the next; a variable whose declaration failed is not reported again where it is used.
+
+    Args:
+        prog: The program, annotated in place.
+
+    Returns:
+        The mistakes, in source order; empty when the program is correct.
+    """
+    mutating: set[tuple[str, str]] = set()
+    while True:
+        c = Checker(mutating)
+        c.check(prog)
+        if c.mutating == mutating:
+            return sorted(c.errors, key=lambda e: (e.file or "", e.line, e.col))
+        mutating = c.mutating
+
+
+def check(prog: ast.Program) -> ast.Program:
+    """Check a program, failing on the first mistake.
 
     Args:
         prog: The program, annotated in place.
@@ -1301,12 +1360,9 @@ def check(prog: ast.Program) -> ast.Program:
         The same program.
 
     Raises:
-        ZyloError: On the first mistake found.
+        ZyloError: On the first mistake found (use `check_all` to get every one).
     """
-    mutating: set[tuple[str, str]] = set()
-    while True:
-        c = Checker(mutating)
-        c.check(prog)
-        if c.mutating == mutating:
-            return prog
-        mutating = c.mutating
+    errors = check_all(prog)
+    if errors:
+        raise errors[0]
+    return prog

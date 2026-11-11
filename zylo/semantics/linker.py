@@ -80,15 +80,19 @@ class Linker:
     Example:
         >>> program = Linker(packages_dir).link(Path("main.zy"))
     """
-    def __init__(self, packages_dir: Path | None = None, trusted: set[str] | list[str] = ()):
+    def __init__(self, packages_dir: Path | None = None, trusted: set[str] | list[str] = (),
+                 overrides: dict[Path, str] | None = None):
         """Create a linker.
 
         Args:
             packages_dir: Directory of installed packages (an environment's `packages/`), or None when no environment is active.
             trusted: Package names the project allows to declare `extern fn`.
+            overrides: Source text to use instead of the file's contents, by resolved path (an editor's unsaved
+                buffers).
         """
         self.packages_dir = packages_dir.resolve() if packages_dir else None
         self.trusted = set(trusted)  # packages the project allows to call Rust (`extern fn`)
+        self.overrides = overrides or {}
         self.by_path: dict[Path, Module] = {}
         self.by_id: dict[str, Path] = {}
         self.order: list[Module] = []  # dependencies before dependents
@@ -128,7 +132,7 @@ class Linker:
             chain = " -> ".join(p.stem for p in [*stack[stack.index(key):], key])
             raise ZyloError(f"import cycle: {chain}", file=str(path))
         try:
-            src = path.read_text()
+            src = self.overrides[key] if key in self.overrides else path.read_text()
         except OSError as e:
             raise ZyloError(f"cannot read {path}: {e.strerror}", file=str(path)) from None
         except UnicodeDecodeError:
