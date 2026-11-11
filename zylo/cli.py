@@ -80,7 +80,9 @@ def build_parser() -> argparse.ArgumentParser:
     common(b, backend=True)
     b.add_argument("-o", "--out", type=Path, help="output executable (default: the file name without extension)")
     b.add_argument("--emit-rs", action="store_true", help="also save the generated Rust next to the executable (<output>.rs)")
-    common(sub.add_parser("run", help="compile and run; returns the program's exit code"), backend=True)
+    run = sub.add_parser("run", help="compile and run; returns the program's exit code")
+    common(run, backend=True)
+    run.add_argument("args", nargs=argparse.REMAINDER, help="arguments for the program (see argv())")
 
     def env_arg(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("--env", metavar="DIR", help="virtual environment to use (default: $ZYLO_ENV or the nearest .zylo-env)")
@@ -169,7 +171,8 @@ def main(argv: list[str] | None = None) -> int:
                 exe = Path(tmp) / "prog"
                 compile_rust(rs, exe, checks)
                 sys.stdout.flush()
-                return exit_code(subprocess.run([str(exe)]).returncode)
+                prog_args = [x for x in a.args if x != "--"][:] if a.args[:1] != ["--"] else a.args[1:]
+                return exit_code(subprocess.run([str(exe), *prog_args]).returncode)
         out = a.out or a.file.with_suffix("")
         if out.resolve() == a.file.resolve():
             raise BackendError(f"output {out} would overwrite the source file; use -o")

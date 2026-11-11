@@ -91,6 +91,6 @@ the container is a variable, field or index chain (no side effects); other expre
 
 - Lists and structs are cloned when passed to functions.
 - `is` narrowing works on plain variables and a single condition (no `and` chains, no fields).
-- No closures, generics, list comprehensions or I/O yet.
+- No closures, generics or list comprehensions yet. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
 - No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.
 - Diagnostics are in English only.

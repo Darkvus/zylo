@@ -20,7 +20,7 @@ git push -u origin v0.6-name && gh pr create --fill
    Linux, macOS and Windows, the Windows installer, the wheel and `SHA256SUMS`, and publishes the GitHub release
    `v<version>`. A version that is already released is skipped, so re-running is harmless.
 
-Check a pull request with `gh pr checks <number> --watch`. A pull request that fails stays open until it is fixed.
+Check a pull request with `gh pr checks <number>` (or `gh run watch`). A pull request that fails stays open until it is fixed.
 
 ## Setup
 

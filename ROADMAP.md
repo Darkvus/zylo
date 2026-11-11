@@ -8,7 +8,7 @@ and is built vertically (lexer → parser → checker → codegen → tests).
 | **v0.1 MVP** | Lexer, parser, type checker, Rust codegen, CLI, benchmarks | done |
 | **v0.2 Own data and errors** | `struct` with methods; `Option` / `Result` with `is` narrowing and `?` | done |
 | **v0.4 Collections and text** | `dict`, `set`, tuples, `in`, slices, negative indices, string indexing, list/`str`/`dict`/`set` methods, f-strings, escapes, math builtins | done |
-| **v0.5 I/O** | `argv`, `input()` / stdin, reading and writing files, environment variables | |
+| **v0.5 I/O** | `argv`, `input()` / stdin, files (as `Result`), environment variables, `eprint`, time | done |
 | **v0.6 Memory and performance** | Infer borrows so lists and structs are not cloned when passed to functions | |
 | **Installers and releases** | `install.sh` for Linux/macOS, a Windows installer, standalone binaries and a wheel built by CI on every merge to `main` | done |
 | **v0.3.0 Modules and packages** | `import`, virtual environments (`zylo venv`), git packages with a lock file (`zylo add/install/update/remove/list`), see [docs/packages.md](docs/packages.md) | done |

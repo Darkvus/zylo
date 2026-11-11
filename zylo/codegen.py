@@ -30,6 +30,61 @@ fn __zy_at<T>(v: &mut Vec<T>, i: i64) -> &mut T {
     &mut v[k]
 }
 
+fn __zy_input(prompt: &str) -> String {
+    use std::io::Write;
+    print!("{}", prompt);
+    std::io::stdout().flush().ok();
+    match __zy_read_line() {
+        Some(l) => l,
+        None => panic!("input(): end of input"),
+    }
+}
+
+fn __zy_read_line() -> Option<String> {
+    let mut s = String::new();
+    match std::io::stdin().read_line(&mut s) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => {
+            while s.ends_with('\\n') || s.ends_with('\\r') { s.pop(); }
+            Some(s)
+        }
+    }
+}
+
+fn __zy_read_stdin() -> String {
+    use std::io::Read;
+    let mut s = String::new();
+    std::io::stdin().read_to_string(&mut s).ok();
+    s
+}
+
+fn __zy_read_file(p: &str) -> Result<String, String> {
+    std::fs::read_to_string(p).map_err(|e| format!("{}: {}", p, e))
+}
+
+fn __zy_write_file(p: &str, t: &str) -> Result<i64, String> {
+    std::fs::write(p, t).map(|_| t.chars().count() as i64).map_err(|e| format!("{}: {}", p, e))
+}
+
+fn __zy_append_file(p: &str, t: &str) -> Result<i64, String> {
+    use std::io::Write;
+    std::fs::OpenOptions::new().create(true).append(true).open(p)
+        .and_then(|mut f| f.write_all(t.as_bytes()))
+        .map(|_| t.chars().count() as i64)
+        .map_err(|e| format!("{}: {}", p, e))
+}
+
+fn __zy_list_dir(p: &str) -> Result<Vec<String>, String> {
+    let rd = std::fs::read_dir(p).map_err(|e| format!("{}: {}", p, e))?;
+    let mut v: Vec<String> = rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
+    v.sort();
+    Ok(v)
+}
+
+fn __zy_time() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
+
 fn __zy_range(len: usize, lo: Option<i64>, hi: Option<i64>) -> (usize, usize) {
     let n = len as i64;
     let norm = |v: i64| -> i64 { (if v < 0 { v + n } else { v }).max(0).min(n) };
@@ -579,6 +634,30 @@ def call(e: ast.Call) -> str:
             return f"({x}.chars().count() as i64)" if args[0].ty == STR else f"({x}.len() as i64)"
         case "append":
             return f"{emit_mut(args[0])}.push({emit(args[1])})"
+        case "argv":
+            return "std::env::args().skip(1).collect::<Vec<String>>()"
+        case "input":
+            return f"__zy_input(&{emit_ref(args[0])})" if args else '__zy_input("")'
+        case "read_line":
+            return "__zy_read_line()"
+        case "read_stdin":
+            return "__zy_read_stdin()"
+        case "read_file" | "write_file" | "append_file" | "list_dir":
+            return f"__zy_{e.func}(" + ", ".join(f"&{emit_ref(a)}" for a in args) + ")"
+        case "file_exists":
+            return f"std::path::Path::new(&{emit_ref(args[0])}).exists()"
+        case "env":
+            return f"std::env::var(&{emit_ref(args[0])}).ok()"
+        case "time":
+            return "__zy_time()"
+        case "sleep":
+            return f"std::thread::sleep(std::time::Duration::from_secs_f64(({emit_ref(args[0])}).max(0.0)))"
+        case "eprint":
+            if not args:
+                return 'eprintln!()'
+            fmts = ["{:?}" if a.ty == FLOAT or isinstance(a.ty, (ListT, StructT, OptionT, ResultT, TupleT, DictT, SetT)) else "{}"
+                    for a in args]
+            return f'eprintln!("{" ".join(fmts)}", {", ".join(emit_ref(a) for a in args)})'
         case "sum":
             return f"{emit_ref(args[0])}.iter().sum::<{rust_type(e.ty)}>()"
         case "min" | "max":
