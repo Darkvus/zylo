@@ -1,10 +1,10 @@
 import pytest
 
-from lumo.checker import check
-from lumo.codegen import generate
-from lumo.errors import LumoError
-from lumo.lexer import tokenize
-from lumo.parser import parse
+from zylo.checker import check
+from zylo.codegen import generate
+from zylo.errors import ZyloError
+from zylo.lexer import tokenize
+from zylo.parser import parse
 
 
 def test_lexer_basic():
@@ -27,6 +27,6 @@ def test_string():
 
 
 def test_syntax_error_has_position():
-    with pytest.raises(LumoError) as e:
+    with pytest.raises(ZyloError) as e:
         parse("print(1 +")
     assert e.value.line == 1

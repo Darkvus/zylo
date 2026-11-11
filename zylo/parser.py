@@ -1,5 +1,5 @@
 from . import ast
-from .errors import LumoError
+from .errors import ZyloError
 from .lexer import Token, tokenize
 
 # precedencia: mayor = se une antes. `not` es unario y se resuelve en parse_unary.
@@ -55,7 +55,7 @@ class Parser:
         tok = self.cur
         if tok.kind != kind or (value is not None and tok.value != value):
             want = repr(value) if value else KIND_NAMES.get(kind, kind)
-            raise LumoError(f"se esperaba {want}, encontrado {describe(tok)}", tok.line, tok.col)
+            raise ZyloError(f"se esperaba {want}, encontrado {describe(tok)}", tok.line, tok.col)
         return self.advance()
 
     # ---- programa y bloques -------------------------------------------------------
@@ -70,12 +70,12 @@ class Parser:
         self.expect("OP", ":")
         self.expect("NEWLINE")
         if not self.check("INDENT"):
-            raise LumoError("se esperaba un bloque indentado", self.cur.line, self.cur.col)
+            raise ZyloError("se esperaba un bloque indentado", self.cur.line, self.cur.col)
         self.advance()
         body = []
         while not self.check("DEDENT"):
             if self.check("EOF"):
-                raise LumoError("bloque sin cerrar", self.cur.line, self.cur.col)
+                raise ZyloError("bloque sin cerrar", self.cur.line, self.cur.col)
             body.append(self.parse_stmt())
         self.expect("DEDENT")
         return body
@@ -85,7 +85,7 @@ class Parser:
     def parse_stmt(self) -> ast.Stmt:
         tok = self.cur
         if tok.kind == "INDENT":
-            raise LumoError("indentación inesperada", tok.line, tok.col)
+            raise ZyloError("indentación inesperada", tok.line, tok.col)
         if tok.kind == "KW":
             match tok.value:
                 case "fn":
@@ -104,7 +104,7 @@ class Parser:
                     cls = ast.Break if tok.value == "break" else ast.Continue
                     return cls(line=tok.line, col=tok.col)
                 case "else" | "elif":
-                    raise LumoError(f"{tok.value!r} sin 'if' previo", tok.line, tok.col)
+                    raise ZyloError(f"{tok.value!r} sin 'if' previo", tok.line, tok.col)
         return self.parse_simple()
 
     def parse_simple(self) -> ast.Stmt:
@@ -136,7 +136,7 @@ class Parser:
 
     def _check_target(self, expr: ast.Expr, start: Token) -> None:
         if not isinstance(expr, (ast.Name, ast.Index)):
-            raise LumoError("no se puede asignar a esta expresión", start.line, start.col)
+            raise ZyloError("no se puede asignar a esta expresión", start.line, start.col)
 
     def parse_if(self) -> ast.If:
         kw = self.advance()  # `if` o `elif`
@@ -184,7 +184,7 @@ class Parser:
     def parse_param(self) -> ast.Param:
         name = self.expect("IDENT")
         if not self.check("OP", ":"):
-            raise LumoError(f"el parámetro {name.value!r} necesita tipo (`{name.value}: int`)", name.line, name.col)
+            raise ZyloError(f"el parámetro {name.value!r} necesita tipo (`{name.value}: int`)", name.line, name.col)
         self.advance()
         return ast.Param(name.value, self.parse_type(), line=name.line, col=name.col)
 
@@ -193,7 +193,7 @@ class Parser:
     def parse_type(self) -> ast.TypeRef:
         tok = self.expect("IDENT")
         if tok.value not in TYPE_NAMES:
-            raise LumoError(f"tipo desconocido {tok.value!r}", tok.line, tok.col)
+            raise ZyloError(f"tipo desconocido {tok.value!r}", tok.line, tok.col)
         args: list[ast.TypeRef] = []
         if tok.value == "list":
             self.expect("OP", "[")
@@ -260,7 +260,7 @@ class Parser:
                     items.append(self.parse_expr())
             self.expect("OP", "]")
             return ast.ListLit(items, **pos)
-        raise LumoError(f"expresión inesperada: {describe(tok)}", tok.line, tok.col)
+        raise ZyloError(f"expresión inesperada: {describe(tok)}", tok.line, tok.col)
 
     def parse_call(self, name: Token) -> ast.Call:
         self.expect("OP", "(")

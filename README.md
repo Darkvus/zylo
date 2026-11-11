@@ -1,7 +1,7 @@
-# Lumo
+# Zylo
 
 Lenguaje con sintaxis tipo Python, tipado estático e inferencia local, que transpila a Rust.
-Extensión de archivo: `.lm`. **Estado: en desarrollo temprano (MVP completo, v0.1).**
+Extensión de archivo: `.zy`. **Estado: en desarrollo temprano (MVP completo, v0.1).**
 
 ```
 fn fib(n: int) -> int:
@@ -18,16 +18,16 @@ print(fib(35))
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest -q
 
-lumo check examples/fib.lm        # solo sintaxis y tipos
-lumo emit  examples/fib.lm        # ver el Rust generado
-lumo run   examples/fib.lm        # compilar con rustc y ejecutar (devuelve el exit code del programa)
-lumo build examples/fib.lm -o fib --emit-rs
+zylo check examples/fib.zy        # solo sintaxis y tipos
+zylo emit  examples/fib.zy        # ver el Rust generado
+zylo run   examples/fib.zy        # compilar con rustc y ejecutar (devuelve el exit code del programa)
+zylo build examples/fib.zy -o fib --emit-rs
 ```
 
 Los errores indican archivo, línea y columna, con el fragmento de código:
 
 ```
-bad.lm:2:9: error: `+` entre int y float: los tipos deben coincidir (usa float(x) o int(x) para convertir)
+bad.zy:2:9: error: `+` entre int y float: los tipos deben coincidir (usa float(x) o int(x) para convertir)
   |
 2 | print(x + 2.5)
   |         ^
@@ -38,9 +38,9 @@ El estado y las decisiones de diseño están en [PLAN.md](PLAN.md).
 
 ## Rendimiento
 
-Mismos programas en Lumo y en CPython (mediana de 5 ejecuciones):
+Mismos programas en Zylo y en CPython (mediana de 5 ejecuciones):
 
-| Programa | Python | Lumo | Speedup |
+| Programa | Python | Zylo | Speedup |
 |---|---:|---:|---:|
 | fib(35) recursivo | 1.021 s | 0.037 s | **28×** |
 | primos < 300 000 | 0.648 s | 0.019 s | **35×** |

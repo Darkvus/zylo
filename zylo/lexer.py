@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from .errors import LumoError
+from .errors import ZyloError
 
 KEYWORDS = {
     "fn", "if", "elif", "else", "while", "for", "in", "return", "break", "continue",
@@ -28,7 +28,7 @@ def tokenize(src: str) -> list[Token]:
             continue
         width = len(line) - len(line.lstrip(" "))
         if line[width:width + 1] == "\t":
-            raise LumoError("usa espacios, no tabuladores", lineno, width + 1)
+            raise ZyloError("usa espacios, no tabuladores", lineno, width + 1)
         if width > indents[-1]:
             indents.append(width)
             tokens.append(Token("INDENT", "", lineno, 1))
@@ -36,7 +36,7 @@ def tokenize(src: str) -> list[Token]:
             indents.pop()
             tokens.append(Token("DEDENT", "", lineno, 1))
         if width != indents[-1]:
-            raise LumoError("indentación inconsistente", lineno, width + 1)
+            raise ZyloError("indentación inconsistente", lineno, width + 1)
         _lex_line(line, width, lineno, tokens)
         tokens.append(Token("NEWLINE", "", lineno, len(line) + 1))
         end = (lineno, len(line) + 1)
@@ -78,7 +78,7 @@ def _lex_line(line: str, i: int, lineno: int, out: list[Token]) -> None:
         elif c == '"':
             j = line.find('"', i + 1)
             if j == -1:
-                raise LumoError("cadena sin cerrar", lineno, col)
+                raise ZyloError("cadena sin cerrar", lineno, col)
             out.append(Token("STR", line[i + 1:j], lineno, col))
             i = j + 1
         elif line[i:i + 2] in TWO_CHAR:
@@ -88,4 +88,4 @@ def _lex_line(line: str, i: int, lineno: int, out: list[Token]) -> None:
             out.append(Token("OP", c, lineno, col))
             i += 1
         else:
-            raise LumoError(f"carácter inesperado {c!r}", lineno, col)
+            raise ZyloError(f"carácter inesperado {c!r}", lineno, col)

@@ -6,7 +6,7 @@ que no necesitan propiedad (len, print, índices, comparaciones, `for` sobre ran
 referencia y no clonan.
 """
 from . import ast
-from .errors import LumoError
+from .errors import ZyloError
 from .types import BOOL, FLOAT, INT, STR, UNIT, ListT, Type
 
 PRELUDE = "#![allow(unused, unused_parens, while_true, unused_mut)]\n"
@@ -37,7 +37,7 @@ def rust_type(t: Type) -> str:
         return "()"
     if isinstance(t, ListT):
         return f"Vec<{rust_type(t.elem)}>"
-    raise LumoError(f"tipo sin equivalente en Rust: {t}")
+    raise ZyloError(f"tipo sin equivalente en Rust: {t}")
 
 
 def is_copy(t: Type) -> bool:
@@ -109,7 +109,7 @@ class Gen:
             case ast.Continue():
                 self.line("continue;")
             case _:
-                raise LumoError(f"{type(s).__name__} no soportado en codegen", s.line, s.col)
+                raise ZyloError(f"{type(s).__name__} no soportado en codegen", s.line, s.col)
 
     def assign(self, s: ast.Assign) -> None:
         if isinstance(s.target, ast.Index):
@@ -187,7 +187,7 @@ def emit_ref(e: ast.Expr) -> str:
             return binop(e, op, l, r)
         case ast.Call():
             return call(e)
-    raise LumoError(f"nodo no soportado: {type(e).__name__}", e.line, e.col)
+    raise ZyloError(f"nodo no soportado: {type(e).__name__}", e.line, e.col)
 
 
 def binop(e: ast.BinOp, op: str, l: ast.Expr, r: ast.Expr) -> str:
@@ -234,7 +234,7 @@ def call(e: ast.Call) -> str:
         case "exit":
             return f"std::process::exit(({emit_ref(args[0])}) as i32)"
         case "range":
-            raise LumoError("range(...) solo puede usarse en un `for`", e.line, e.col)
+            raise ZyloError("range(...) solo puede usarse en un `for`", e.line, e.col)
         case name:
             return f"{ident(name)}({', '.join(emit(a) for a in args)})"
 

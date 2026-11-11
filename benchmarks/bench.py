@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Benchmark Lumo vs Python (CPython).
+"""Benchmark Zylo vs Python (CPython).
 
-Cada programa tiene una versión `X.lm` y una `X.py` equivalentes. El script compila los .lm una
+Cada programa tiene una versión `X.zy` y una `X.py` equivalentes. El script compila los .zy una
 vez (con y sin overflow-checks), comprueba que las salidas coinciden con las de Python, mide cada
 ejecutable N veces y muestra la mejor marca y la mediana. Se incluye el arranque del proceso en
 ambos lados. Uso:  python benchmarks/bench.py [--runs 5] [--write]
@@ -16,7 +16,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from lumo.cli import compile_rust, transpile
+from zylo.cli import compile_rust, transpile
 
 HERE = Path(__file__).parent
 PROGRAMS = ["fib", "loop", "primes", "sort"]
@@ -55,7 +55,7 @@ def main() -> int:
     rows = []
     with tempfile.TemporaryDirectory() as tmp:
         for name in PROGRAMS:
-            rs = transpile(HERE / f"{name}.lm")
+            rs = transpile(HERE / f"{name}.zy")
             t0 = time.perf_counter()
             compile_rust(rs, Path(tmp) / f"{name}_chk", overflow_checks=True)
             compile_t = time.perf_counter() - t0
@@ -65,12 +65,12 @@ def main() -> int:
             chk_best, chk_med, chk_out = measure([str(Path(tmp) / f"{name}_chk")], a.runs)
             raw_best, raw_med, raw_out = measure([str(Path(tmp) / f"{name}_raw")], a.runs)
             if not (py_out == chk_out == raw_out):
-                sys.exit(f"{name}: las salidas difieren\npython: {py_out!r}\nlumo:   {chk_out!r}\nraw:    {raw_out!r}")
+                sys.exit(f"{name}: las salidas difieren\npython: {py_out!r}\nzylo:   {chk_out!r}\nraw:    {raw_out!r}")
             rows.append((name, py_med, chk_med, raw_med, compile_t))
-            print(f"{name:8} ok  python {py_med:.3f}s  lumo {chk_med:.3f}s  lumo(sin checks) {raw_med:.3f}s", flush=True)
+            print(f"{name:8} ok  python {py_med:.3f}s  zylo {chk_med:.3f}s  zylo(sin checks) {raw_med:.3f}s", flush=True)
 
     lines = [
-        "| Programa | Python | Lumo | Speedup | Lumo sin overflow-checks | Speedup | Compilación |",
+        "| Programa | Python | Zylo | Speedup | Zylo sin overflow-checks | Speedup | Compilación |",
         "|---|---:|---:|---:|---:|---:|---:|",
     ]
     for name, py, chk, raw, ct in rows:

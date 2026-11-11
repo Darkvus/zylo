@@ -1,9 +1,9 @@
 import pytest
 
-from lumo import ast
-from lumo.errors import LumoError
-from lumo.lexer import tokenize
-from lumo.parser import parse
+from zylo import ast
+from zylo.errors import ZyloError
+from zylo.lexer import tokenize
+from zylo.parser import parse
 
 
 def stmt(src: str):
@@ -56,7 +56,7 @@ def test_index_assign_and_read():
 
 
 def test_assign_to_literal_is_error():
-    with pytest.raises(LumoError):
+    with pytest.raises(ZyloError):
         parse("1 = 2")
 
 
@@ -113,13 +113,13 @@ def test_bare_return():
 
 
 def test_param_requires_type():
-    with pytest.raises(LumoError) as e:
+    with pytest.raises(ZyloError) as e:
         parse("fn f(a):\n    return\n")
     assert e.value.line == 1
 
 
 def test_unknown_type():
-    with pytest.raises(LumoError, match="tipo desconocido"):
+    with pytest.raises(ZyloError, match="tipo desconocido"):
         parse("fn f(a: banana):\n    return\n")
 
 
@@ -144,18 +144,18 @@ def test_not_then_and():
 # ---- errores con posición -----------------------------------------------------------
 
 def test_missing_colon():
-    with pytest.raises(LumoError) as e:
+    with pytest.raises(ZyloError) as e:
         parse("if a\n    x = 1\n")
     assert (e.value.line, e.value.col) == (1, 5)
 
 
 def test_else_without_if():
-    with pytest.raises(LumoError, match="sin 'if'"):
+    with pytest.raises(ZyloError, match="sin 'if'"):
         parse("else:\n    x = 1\n")
 
 
 def test_unexpected_indent():
-    with pytest.raises(LumoError, match="indentación inesperada"):
+    with pytest.raises(ZyloError, match="indentación inesperada"):
         parse("x = 1\n    y = 2\n")
 
 

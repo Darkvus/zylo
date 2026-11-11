@@ -2,7 +2,7 @@
 
 Generado con `python benchmarks/bench.py --write`.
 
-| Programa | Python | Lumo | Speedup | Lumo sin overflow-checks | Speedup | Compilación |
+| Programa | Python | Zylo | Speedup | Zylo sin overflow-checks | Speedup | Compilación |
 |---|---:|---:|---:|---:|---:|---:|
 | fib | 1.021 s | 0.037 s | **28×** | 0.022 s | 46× | 0.24 s |
 | loop | 1.364 s | 0.016 s | **87×** | 0.015 s | 89× | 0.14 s |

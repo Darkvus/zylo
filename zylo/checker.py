@@ -9,7 +9,7 @@ Reglas:
 - `int / int` es división entera.
 """
 from . import ast
-from .errors import LumoError
+from .errors import ZyloError
 from .types import BOOL, FLOAT, INT, PRIMS, STR, UNIT, FnT, ListT, Type, VarInfo
 
 BUILTINS = {"print", "range", "len", "int", "float", "str", "append", "exit"}
@@ -18,8 +18,8 @@ EQ = {"==", "!="}
 ORDER = {"<", ">", "<=", ">="}
 
 
-def err(msg: str, node: ast.Node) -> LumoError:
-    return LumoError(msg, node.line, node.col)
+def err(msg: str, node: ast.Node) -> ZyloError:
+    return ZyloError(msg, node.line, node.col)
 
 
 class Scopes:

@@ -1,18 +1,18 @@
 import pytest
 
-from lumo import ast
-from lumo.checker import check
-from lumo.errors import LumoError
-from lumo.parser import parse
-from lumo.types import BOOL, FLOAT, INT, STR, UNIT, ListT
+from zylo import ast
+from zylo.checker import check
+from zylo.errors import ZyloError
+from zylo.parser import parse
+from zylo.types import BOOL, FLOAT, INT, STR, UNIT, ListT
 
 
 def checked(src: str) -> ast.Program:
     return check(parse(src))
 
 
-def fails(src: str, match: str, line: int | None = None) -> LumoError:
-    with pytest.raises(LumoError, match=match) as e:
+def fails(src: str, match: str, line: int | None = None) -> ZyloError:
+    with pytest.raises(ZyloError, match=match) as e:
         checked(src)
     if line is not None:
         assert e.value.line == line

@@ -1,10 +1,10 @@
 """Formato de errores para la terminal: `archivo:línea:col: error: mensaje` + fragmento de código."""
-from .errors import BackendError, LumoError
+from .errors import BackendError, ZyloError
 
 RED, BOLD, RESET = "\033[1;31m", "\033[1m", "\033[0m"
 
 
-def format_error(err: LumoError, source: str | None, filename: str, color: bool = False) -> str:
+def format_error(err: ZyloError, source: str | None, filename: str, color: bool = False) -> str:
     label = f"{RED}error{RESET}{BOLD}" if color else "error"
     end = RESET if color else ""
 

@@ -4,17 +4,17 @@ from pathlib import Path
 
 import pytest
 
-from lumo import cli
-from lumo.checker import check
-from lumo.cli import exit_code, main
-from lumo.diagnostics import format_error
-from lumo.errors import BackendError, LumoError
-from lumo.parser import parse
+from zylo import cli
+from zylo.checker import check
+from zylo.cli import exit_code, main
+from zylo.diagnostics import format_error
+from zylo.errors import BackendError, ZyloError
+from zylo.parser import parse
 
 needs_rustc = pytest.mark.skipif(shutil.which("rustc") is None, reason="rustc no instalado")
 
 
-def write(tmp_path: Path, src: str, name: str = "prog.lm") -> Path:
+def write(tmp_path: Path, src: str, name: str = "prog.zy") -> Path:
     f = tmp_path / name
     f.write_text(src)
     return f
@@ -23,10 +23,10 @@ def write(tmp_path: Path, src: str, name: str = "prog.lm") -> Path:
 # ---- diagnostics ---------------------------------------------------------------------
 
 def test_format_error_snippet_and_caret():
-    e = LumoError("algo falló", 2, 5)
-    out = format_error(e, "a = 1\nb = oops\n", "x.lm")
+    e = ZyloError("algo falló", 2, 5)
+    out = format_error(e, "a = 1\nb = oops\n", "x.zy")
     assert out.splitlines() == [
-        "x.lm:2:5: error: algo falló",
+        "x.zy:2:5: error: algo falló",
         "  |",
         "2 | b = oops",
         "  |     ^",
@@ -35,55 +35,55 @@ def test_format_error_snippet_and_caret():
 
 def test_format_error_gutter_width_with_two_digit_lines():
     src = "\n" * 9 + "bad line\n"
-    out = format_error(LumoError("m", 10, 1), src, "f.lm")
+    out = format_error(ZyloError("m", 10, 1), src, "f.zy")
     assert "10 | bad line" in out and "   | ^" in out
 
 
 def test_format_error_without_position():
-    out = format_error(LumoError("general"), "x = 1\n", "x.lm")
-    assert out == "x.lm: error: general"
+    out = format_error(ZyloError("general"), "x = 1\n", "x.zy")
+    assert out == "x.zy: error: general"
 
 
 def test_format_error_line_out_of_range_is_safe():
-    out = format_error(LumoError("m", 99, 1), "x = 1\n", "x.lm")
-    assert out == "x.lm:99:1: error: m"
+    out = format_error(ZyloError("m", 99, 1), "x = 1\n", "x.zy")
+    assert out == "x.zy:99:1: error: m"
 
 
 def test_format_error_color_wraps_ansi():
-    out = format_error(LumoError("m", 1, 1), "x\n", "x.lm", color=True)
+    out = format_error(ZyloError("m", 1, 1), "x\n", "x.zy", color=True)
     assert "\033[" in out
-    assert "\033[" not in format_error(LumoError("m", 1, 1), "x\n", "x.lm", color=False)
+    assert "\033[" not in format_error(ZyloError("m", 1, 1), "x\n", "x.zy", color=False)
 
 
 def test_backend_error_has_no_snippet():
-    out = format_error(BackendError("rustc roto"), "x = 1\n", "x.lm")
-    assert out == "x.lm: error: rustc roto"
+    out = format_error(BackendError("rustc roto"), "x = 1\n", "x.zy")
+    assert out == "x.zy: error: rustc roto"
 
 
 # ---- mensajes de parseo ----------------------------------------------------------------------
 
 def test_error_at_end_of_file_has_real_position():
-    with pytest.raises(LumoError) as e:
+    with pytest.raises(ZyloError) as e:
         parse("fn f():\n")
     assert e.value.line == 1 and "bloque indentado" in e.value.msg
 
 
 def test_friendly_token_names():
-    with pytest.raises(LumoError, match="se esperaba ':', encontrado fin de línea"):
+    with pytest.raises(ZyloError, match="se esperaba ':', encontrado fin de línea"):
         parse("if a\n    x = 1\n")
-    with pytest.raises(LumoError, match="se esperaba '\\)'"):
+    with pytest.raises(ZyloError, match="se esperaba '\\)'"):
         parse("print(1\n")
 
 
 # ---- exit() ---------------------------------------------------------------------------------
 
 def test_exit_requires_int():
-    with pytest.raises(LumoError, match="se esperaba int"):
+    with pytest.raises(ZyloError, match="se esperaba int"):
         check(parse('exit("a")\n'))
 
 
 def test_exit_arity():
-    with pytest.raises(LumoError, match="espera 1 argumento"):
+    with pytest.raises(ZyloError, match="espera 1 argumento"):
         check(parse("exit()\n"))
 
 
@@ -123,12 +123,12 @@ def test_emit_does_not_print_on_error(tmp_path, capsys):
 
 
 def test_missing_file(tmp_path, capsys):
-    assert main(["check", str(tmp_path / "nope.lm")]) == 1
+    assert main(["check", str(tmp_path / "nope.zy")]) == 1
     assert "no se puede leer" in capsys.readouterr().err
 
 
 def test_non_utf8_file(tmp_path, capsys):
-    f = tmp_path / "bin.lm"
+    f = tmp_path / "bin.zy"
     f.write_bytes(b"\xff\xfe\x00")
     assert main(["check", str(f)]) == 1
     assert "UTF-8" in capsys.readouterr().err
@@ -136,7 +136,7 @@ def test_non_utf8_file(tmp_path, capsys):
 
 def test_unknown_command_is_usage_error():
     with pytest.raises(SystemExit) as e:
-        main(["frobnicate", "x.lm"])
+        main(["frobnicate", "x.zy"])
     assert e.value.code == 2
 
 

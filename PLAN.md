@@ -1,7 +1,7 @@
-# Lumo: plan del transpilador mínimo
+# Zylo: plan del transpilador mínimo
 
 Lenguaje Python-like con tipado estático e inferencia local que transpila a Rust.
-Extensión de archivo: `.lm`. Objetivo: sintaxis limpia como Python, rendimiento cercano a Rust.
+Extensión de archivo: `.zy`. Objetivo: sintaxis limpia como Python, rendimiento cercano a Rust.
 
 ## Decisiones de diseño (fijas para el MVP)
 - **Implementación:** Python, lexer y parser recursivo descendente escritos a mano.
@@ -21,19 +21,19 @@ print(fib(35))
 ```
 
 ## Estado actual (scaffold, hecho)
-- [x] Lexer con INDENT/DEDENT, comentarios, errores con línea/columna (`lumo/lexer.py`)
-- [x] AST mínimo: literales, nombres, BinOp, UnaryOp, Call, ExprStmt (`lumo/ast.py`)
-- [x] Parser de expresiones con precedencia, paréntesis y llamadas (`lumo/parser.py`)
-- [x] Codegen: `print(expr)` → `println!` dentro de `fn main()` (`lumo/codegen.py`)
-- [x] CLI: `lumo emit|build|run archivo.lm` (`lumo/cli.py`)
+- [x] Lexer con INDENT/DEDENT, comentarios, errores con línea/columna (`zylo/lexer.py`)
+- [x] AST mínimo: literales, nombres, BinOp, UnaryOp, Call, ExprStmt (`zylo/ast.py`)
+- [x] Parser de expresiones con precedencia, paréntesis y llamadas (`zylo/parser.py`)
+- [x] Codegen: `print(expr)` → `println!` dentro de `fn main()` (`zylo/codegen.py`)
+- [x] CLI: `zylo emit|build|run archivo.zy` (`zylo/cli.py`)
 - [x] 5 tests pasando (`tests/test_pipeline.py`)
 - [x] **Fase 2 hecha (2026-11-11):** parser/AST completos (assign, `x: T = v`, `+=`, if/elif/else, while, for, break/continue, fn, return, listas, índices, and/or/not, posiciones en nodos), 30 tests
-- [x] **Fase 3 hecha (2026-11-11):** `lumo/types.py` + `lumo/checker.py` (inferencia local, ámbitos de bloque, declarar vs reasignar, mutabilidad marcada en `VarInfo.mutable`, errores con línea/columna), 75 tests. Conectado en el CLI (`parse → check → generate`).
-- [x] Rust 1.99.1 instalado; `lumo run examples/hello.lm` funciona de punta a punta.
-- [x] **Fase 4 hecha (2026-11-11):** `lumo/codegen.py` completo (fn, let/let mut, if/elif/else, while, for range/list, listas, strings, conversiones, builtins). 10 programas e2e en `tests/programs/` (`.lm` + `.out`) compilados con rustc real + test de panic por overflow. 85 tests.
-- [x] **Fase 5 hecha (2026-11-11):** `lumo/diagnostics.py` (errores `archivo:línea:col: error: msg` + fragmento + `^`, color solo en TTY y sin `NO_COLOR`), CLI con subcomandos `check|emit|build|run`, `build --emit-rs`, `--no-overflow-checks`, `--version`, `run` devuelve el exit code del programa (señal → 128+N), builtin `exit(int)`, errores del backend (`BackendError`) separados de los del usuario. Mensajes de parseo legibles y posición real al final del archivo. 113 tests.
+- [x] **Fase 3 hecha (2026-11-11):** `zylo/types.py` + `zylo/checker.py` (inferencia local, ámbitos de bloque, declarar vs reasignar, mutabilidad marcada en `VarInfo.mutable`, errores con línea/columna), 75 tests. Conectado en el CLI (`parse → check → generate`).
+- [x] Rust 1.99.1 instalado; `zylo run examples/hello.zy` funciona de punta a punta.
+- [x] **Fase 4 hecha (2026-11-11):** `zylo/codegen.py` completo (fn, let/let mut, if/elif/else, while, for range/list, listas, strings, conversiones, builtins). 10 programas e2e en `tests/programs/` (`.zy` + `.out`) compilados con rustc real + test de panic por overflow. 85 tests.
+- [x] **Fase 5 hecha (2026-11-11):** `zylo/diagnostics.py` (errores `archivo:línea:col: error: msg` + fragmento + `^`, color solo en TTY y sin `NO_COLOR`), CLI con subcomandos `check|emit|build|run`, `build --emit-rs`, `--no-overflow-checks`, `--version`, `run` devuelve el exit code del programa (señal → 128+N), builtin `exit(int)`, errores del backend (`BackendError`) separados de los del usuario. Mensajes de parseo legibles y posición real al final del archivo. 113 tests.
 - [x] **Fase 6 hecha (2026-11-11) — MVP completo.** 13 ejemplos documentados en `examples/` (salidas calculadas con Python independiente), benchmark reproducible en `benchmarks/` (`python benchmarks/bench.py --write` → `RESULTS.md`).
-- Repo privado: https://github.com/Darkvus/lumo
+- Repo privado: https://github.com/Darkvus/zylo
 
 Limitaciones actuales: solo sentencias de expresión (`print(...)`); el lexer ya reconoce
 las keywords `fn if else while return let true false` y el token `->`, pero el parser aún no las usa.
@@ -46,7 +46,7 @@ las keywords `fn if else while return let true false` y el token `->`, pero el p
 | 3 | **Chequeo de tipos** | Inferencia local, tabla de símbolos, errores con línea/columna, comprobación de retornos | 4-5 días |
 | 4 | **Codegen completo** | AST tipado → Rust: funciones, variables `let`/`let mut`, control de flujo, listas (`Vec<T>`), strings | 3-4 días |
 | 5 | **CLI pulida** | Mensajes de error legibles con fragmento de código, `--emit-rs`, ejecución con código de salida | 1-2 días |
-| 6 | **Tests + benchmark** | Casos `.lm` con salida esperada; benchmark `fib(35)` vs Python | 2 días |
+| 6 | **Tests + benchmark** | Casos `.zy` con salida esperada; benchmark `fib(35)` vs Python | 2 días |
 
 ### Fase 2: detalle
 1. Nodos AST nuevos: `Let(name, type?, value)`, `Assign(name, value)`, `If(cond, then, else_)`, `While(cond, body)`, `Return(value?)`, `FnDef(name, params, ret, body)`, `For(var, iter, body)`.
@@ -78,8 +78,8 @@ las keywords `fn if else while return let true false` y el token `->`, pero el p
 
 ### Decisiones tomadas en la fase 5
 - Exit codes de la CLI: 0 ok · 1 error de compilación/archivo · 2 uso incorrecto · en `run`, el del programa.
-- `lumo run` no pasa argumentos al programa: Lumo aún no tiene acceso a argv (candidato v2, junto con stdin/archivos).
-- Si rustc rechaza el Rust generado se informa como bug de Lumo (nunca debería ocurrir con un programa que pasó el checker).
+- `zylo run` no pasa argumentos al programa: Zylo aún no tiene acceso a argv (candidato v2, junto con stdin/archivos).
+- Si rustc rechaza el Rust generado se informa como bug de Zylo (nunca debería ocurrir con un programa que pasó el checker).
 
 ### Fase 4: detalle (original)
 - Funciones top-level → `fn nombre(a: i64) -> i64 { ... }`.
@@ -90,8 +90,8 @@ las keywords `fn if else while return let true false` y el token `->`, pero el p
 
 ## Estructura del repo
 ```
-lumo/
-  lumo/
+zylo/
+  zylo/
     lexer.py      # hecho
     ast.py        # ampliar
     parser.py     # ampliar
@@ -108,7 +108,7 @@ lumo/
 ## Cómo trabajar
 - Entorno: `python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'` (ya creado; `pip install -e .`, no poetry).
 - Tests: `.venv/bin/pytest -q`
-- Ver Rust generado: `.venv/bin/lumo emit examples/hello.lm`
+- Ver Rust generado: `.venv/bin/zylo emit examples/hello.zy`
 - Avanzar siempre en vertical: cada construcción nueva debe pasar lexer → parser → tipos → codegen → rustc antes de pasar a la siguiente.
 
 ## Criterio de éxito del MVP — CUMPLIDO
@@ -117,7 +117,7 @@ lumo/
 - [x] 10 ejemplos que compilan y pasan tests: 13 en `examples/`.
 
 ### Criterio original
-- `fib(35)` en `.lm` al menos 20× más rápido que en Python.
+- `fib(35)` en `.zy` al menos 20× más rápido que en Python.
 - Errores de sintaxis y de tipos con línea y columna.
 - 10 ejemplos que compilan y pasan tests.
 
@@ -126,7 +126,7 @@ Structs/clases, módulos e imports, genéricos, closures, gestor de paquetes, LS
 (esta última es crítica para adopción real), resaltado de sintaxis en VS Code.
 
 ## Decisiones abiertas
-- Nombre definitivo del lenguaje (`lumo` es provisional).
+- Nombre definitivo del lenguaje (`zylo` es provisional).
 - ~~Sintaxis de mutabilidad~~ **Decidido:** estilo Python (`x = 1` declara; reasignar lo detecta el checker; `let` eliminado de keywords).
 - ~~Licencia~~ **Decidido:** MIT.
 - Modelo de memoria a futuro: `Rc` implícito vs ownership simplificado.

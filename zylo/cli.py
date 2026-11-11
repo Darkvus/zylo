@@ -10,11 +10,11 @@ from . import __version__
 from .checker import check
 from .codegen import generate
 from .diagnostics import format_error
-from .errors import BackendError, LumoError
+from .errors import BackendError, ZyloError
 from .parser import parse
 
 # Códigos de salida de la CLI: 0 ok · 1 error de compilación · 2 uso incorrecto (argparse)
-# `lumo run` devuelve el código del programa ejecutado.
+# `zylo run` devuelve el código del programa ejecutado.
 
 
 def transpile_source(src: str) -> str:
@@ -38,8 +38,8 @@ def compile_rust(rs: str, out: Path, overflow_checks: bool = True) -> None:
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode:
             raise BackendError(
-                "rustc rechazó el código generado. Esto es un bug de Lumo; "
-                "usa `lumo emit` para ver el Rust y repórtalo.\n" + r.stderr.rstrip()
+                "rustc rechazó el código generado. Esto es un bug de Zylo; "
+                "usa `zylo emit` para ver el Rust y repórtalo.\n" + r.stderr.rstrip()
             )
 
 
@@ -49,12 +49,12 @@ def exit_code(returncode: int) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="lumo", description="Lumo: sintaxis tipo Python, tipado estático, compila a Rust.")
-    p.add_argument("--version", action="version", version=f"lumo {__version__}")
+    p = argparse.ArgumentParser(prog="zylo", description="Zylo: sintaxis tipo Python, tipado estático, compila a Rust.")
+    p.add_argument("--version", action="version", version=f"zylo {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True, metavar="{check,emit,build,run}")
 
     def common(sp: argparse.ArgumentParser, backend: bool) -> None:
-        sp.add_argument("file", type=Path, help="archivo .lm")
+        sp.add_argument("file", type=Path, help="archivo .zy")
         if backend:
             sp.add_argument("--no-overflow-checks", action="store_true",
                             help="sin comprobación de desbordamiento (más rápido; los enteros dan la vuelta en silencio)")
@@ -78,10 +78,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         source = a.file.read_text()
     except OSError as e:
-        print(f"lumo: no se puede leer {a.file}: {e.strerror}", file=sys.stderr)
+        print(f"zylo: no se puede leer {a.file}: {e.strerror}", file=sys.stderr)
         return 1
     except UnicodeDecodeError:
-        print(f"lumo: {a.file} no es texto UTF-8 válido", file=sys.stderr)
+        print(f"zylo: {a.file} no es texto UTF-8 válido", file=sys.stderr)
         return 1
 
     try:
@@ -107,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             out.with_name(out.name + ".rs").write_text(rs)
         print(f"generado {out}")
         return 0
-    except LumoError as e:
+    except ZyloError as e:
         print(format_error(e, source, str(a.file), use_color()), file=sys.stderr)
         return 1
 
