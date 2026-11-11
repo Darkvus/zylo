@@ -1,0 +1,14 @@
+# Word frequencies with a dict, tuples and sorting
+text = "the quick brown fox jumps over the lazy dog the end"
+counts: dict[str, int] = {}
+for word in text.split():
+    counts[word] = counts.get(word, 0) + 1
+
+pairs: list[tuple[int, str]] = []
+for word, n in counts.items():
+    pairs.append((0 - n, word))
+pairs.sort()
+
+for n, word in pairs[:3]:
+    print(f"{word}: {0 - n}")
+print(f"{len(counts)} distinct words, {sum(counts.values())} total")

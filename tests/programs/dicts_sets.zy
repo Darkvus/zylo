@@ -1,0 +1,31 @@
+stock = {"pear": 3, "apple": 5}
+stock["kiwi"] = 7
+stock["apple"] += 1
+print(stock)
+print(len(stock), "pear" in stock, "fig" in stock, "fig" not in stock)
+total = 0
+for name in stock:
+    total += stock[name]
+print(total)
+for name, qty in stock.items():
+    print(f"{name}: {qty}")
+print(stock.get("pear"), stock.get("fig"), stock.get("fig", 0))
+print(stock.keys(), stock.values())
+print(stock.pop("pear"), stock.pop("pear"), len(stock))
+groups: dict[str, list[int]] = {}
+for n in range(6):
+    key = "even"
+    if n % 2 == 1:
+        key = "odd"
+    if key not in groups:
+        groups[key] = []
+    groups[key].append(n)
+print(groups)
+seen: set[int] = {}
+for n in [3, 1, 3, 2, 1]:
+    seen.add(n)
+print(seen, len(seen))
+a = {1, 2, 3}
+b = {2, 3, 4}
+print(a.union(b), a.intersection(b), a.difference(b))
+print(2 in a, a.remove(2), a.remove(9), a)

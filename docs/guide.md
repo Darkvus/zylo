@@ -27,6 +27,9 @@ greet("zylo")
 | `bool` | `true` / `false` | `bool` |
 | `str` | text | `String` |
 | `list[T]` | growable list | `Vec<T>` |
+| `tuple[A, B, ...]` | fixed group of 2+ values | `(A, B, ...)` |
+| `dict[K, V]` | key → value map, sorted by key | `BTreeMap<K, V>` |
+| `set[T]` | set of distinct values, sorted | `BTreeSet<T>` |
 | `Name` | a struct you define | `struct` |
 | `T?` | optional value (`T` or nothing) | `Option<T>` |
 | `Result[T, E]` | a `T` or an error `E` | `Result<T, E>` |
@@ -55,6 +58,7 @@ print(len(names))
 
 - Arithmetic: `+ - * / %`. `int / int` is **integer division** (truncating, like Rust). `+` also joins strings.
 - Comparison: `== != < > <= >=` (`<` and friends work on `int`, `float` and `str`; `==` works on every type).
+- Membership: `x in c` and `x not in c` for a list, `str` (substring), `set` or `dict` (keys).
 - Logic: `and`, `or`, `not` (operands must be `bool`).
 - Compound assignment: `+= -= *= /= %=`.
 
@@ -103,22 +107,98 @@ print(gcd(48, 18))
 Arguments are passed **by value**: a function that changes a list or struct parameter changes its
 own copy, never the caller's.
 
-## Lists and strings
+## Lists
 
 ```zylo
 xs = [3, 1, 2]
-append(xs, 10)
+xs.append(10)
 xs[0] = 99
-print(xs)          # [99, 1, 2, 10]
-print(len(xs))     # 4
+print(xs)              # [99, 1, 2, 10]
+print(xs[1:3])         # [1, 2]
+print(xs[-1], xs[:-1]) # 10 [99, 1, 2]
 grid = [[1, 2], [3, 4]]
 grid[1][0] = 7
-print(grid)        # [[1, 2], [7, 4]]
-s = "hello" + " " + "world"
-print(len(s))      # 11 (characters, not bytes)
+print(grid)            # [[1, 2], [7, 4]]
+print(2 in xs, len(xs))
 ```
 
-Assigning a list to another variable copies it. Strings cannot be indexed yet.
+- Indexing starts at 0 and is checked: an out-of-range index stops the program (exit code 101).
+  A negative index counts from the end (`xs[-1]` is the last element) when the list is a variable or field.
+- Slices `xs[a:b]`, `xs[:b]`, `xs[a:]`, `xs[:]` never fail: bounds are clamped, and may be negative.
+- Assigning a list to another variable copies it.
+- Methods: `append(v)`, `pop()` (an `int?`: `none` on an empty list), `insert(i, v)`, `remove(v)` (a `bool`:
+  was it there?), `clear()`, `reverse()`, `sort()`, `extend(other)`, `index(v)` (an `int?`), `count(v)`.
+  `append(xs, v)` is the same as `xs.append(v)`.
+
+## Strings
+
+```zylo
+name = "Ana"
+n = 3
+print(f"hi {name}! {n + 1} {2.5:.2f} {n:>4} {n:03d}")   # f-strings
+print("tab\there", 'single quotes', "a" + "b")
+s = "  Hello, World  ".strip()
+print(s.upper(), s.split(", "), s[0:5], s[-1])
+print(",".join(["a", "b"]), s.replace("World", "Zylo"), s.find("World"))
+print("lo" in s, len("héllo"))
+for ch in "hi":
+    print(ch)
+```
+
+- Strings use `"` or `'`. Escapes: `\n \t \r \0 \\ \" \'`.
+- **f-strings** `f"... {expr} ..."` accept any expression, and a format spec after `:` — a width and
+  alignment (`>8`, `<8`, `^8`, `05`), a precision (`.2`) and a type (`f`, `d`, `s`, `x`, `X`, `b`).
+  Write `{{` and `}}` for literal braces. Inside an f-string use the other quote type for nested strings.
+- Strings are indexed and sliced by **character**: `s[i]` is a one-character `str`; `len(s)` counts characters.
+- Methods: `strip()`, `upper()`, `lower()`, `split()` (on whitespace) or `split(sep)`, `join(list)` (called on the
+  separator), `replace(a, b)`, `startswith(p)`, `endswith(p)`, `find(sub)` (an `int?`), `count(sub)`, `lines()`,
+  `chars()`, `repeat(n)`.
+- `x in s` tests for a substring. Iterating over a string yields its characters.
+
+## Tuples
+
+```zylo
+fn divmod(a: int, b: int) -> tuple[int, int]:
+    return a / b, a % b
+
+q, r = divmod(17, 5)
+print(q, r)                  # 3 2
+a, b = 1, 2
+a, b = b, a                  # swap
+pair = (1, "x")
+print(pair, pair[1])         # (1, "x") x
+for n, s in [(1, "a"), (2, "b")]:
+    print(n, s)
+```
+
+A tuple groups two or more values of any types: `tuple[int, str]`. It is immutable, compared field by
+field, and indexed with a **literal** (`t[0]`). `a, b = ...` unpacks into variables (new or existing), also in
+a `for` header and in `return a, b`.
+
+## Dicts and sets
+
+```zylo
+ages = {"ana": 30, "bob": 25}
+ages["cy"] = 41
+ages["ana"] += 1
+print(ages)                           # {"ana": 31, "bob": 25, "cy": 41}
+print("bob" in ages, len(ages))
+for name, age in ages.items():
+    print(name, age)
+print(ages.get("zed"), ages.get("zed", 0))   # None 0
+tags: set[str] = {"b", "a"}
+tags.add("c")
+print(tags, "a" in tags)              # {"a", "b", "c"} true
+empty: dict[str, list[int]] = {}
+```
+
+- `dict[K, V]` and `set[T]`; keys and elements must be `int`, `str`, `bool` or tuples of those.
+- **Iteration and printing are in sorted key order**, so output is deterministic (this differs from Python,
+  which keeps insertion order). Iterating a dict yields its keys.
+- `d[k]` on a missing key stops the program (exit code 101); use `d.get(k)` (a `V?`) or `d.get(k, default)`.
+- `{}` and `{x}` need context to tell dict from set: annotate empty ones (`d: dict[str, int] = {}`).
+- Dict methods: `get`, `keys()`, `values()`, `items()` (a list of `(key, value)` tuples), `pop(k)` (a `V?`),
+  `clear()`. Set methods: `add(v)`, `remove(v)` (a `bool`), `union(o)`, `intersection(o)`, `difference(o)`, `clear()`.
 
 ## Structs
 
@@ -268,15 +348,24 @@ Everything about modules, environments, the lock file and the security model is 
 
 | Function | Description |
 |---|---|
-| `print(x)` | print any value followed by a newline |
-| `len(x)` | length of a `str` (characters) or a `list` |
-| `append(xs, v)` | add `v` to the end of the list `xs` |
+| `print(a, b, ...)` | print any values separated by spaces (`print()` prints an empty line) |
+| `len(x)` | length of a `str` (characters), `list`, `dict` or `set` |
+| `append(xs, v)` | same as `xs.append(v)` |
 | `int(x)`, `float(x)`, `str(x)` | explicit conversions (`int("abc")` crashes; use `parse_int`) |
-| `parse_int(s)` | `int?` — the integer in `s`, or `none` |
-| `parse_float(s)` | `float?` — the float in `s`, or `none` |
+| `parse_int(s)`, `parse_float(s)` | `int?` / `float?` — the number in `s`, or `none` |
 | `some(x)`, `ok(x)`, `err(e)`, `none` | `Option` / `Result` constructors |
+| `sum(xs)` | total of a list of `int` or `float` |
+| `min(xs)`, `max(xs)`, `min(a, b)`, `max(a, b)` | smallest / largest (of a non-empty list, or of two values) |
+| `abs(x)` | absolute value of an `int` or `float` |
+| `sorted(xs)`, `reversed(xs)` | a new sorted / reversed list |
+| `enumerate(xs)`, `zip(a, b)` | lists of `(index, item)` and `(a_item, b_item)` tuples |
+| `sqrt(x)`, `pow(x, y)` | `float` math |
+| `round(x)`, `floor(x)`, `ceil(x)` | a `float` to an `int` (`round` rounds half away from zero, unlike Python) |
 | `exit(code)` | stop the program with an exit code |
 | `range(n)`, `range(a, b)` | only in a `for` |
+
+A program may define its own function with the name of any built-in above except the core ones
+(`print`, `len`, `int`, `float`, `str`, `append`, `range`, `exit`, `some`, `ok`, `err`).
 
 ## Runtime errors
 
@@ -286,5 +375,4 @@ These stop the program with exit code **101**: integer overflow (compile with
 
 ## Known limitations
 
-No `dict` / `set` / tuples, no string indexing or methods, no closures or
-generics, no standard input, files or command-line arguments. See the [roadmap](../ROADMAP.md).
+No closures or generics, no list comprehensions, no standard input, files or command-line arguments. See the [roadmap](../ROADMAP.md).

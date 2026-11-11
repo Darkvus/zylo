@@ -11,9 +11,55 @@ imprimir `Point(x=1.0, y=2.0)`.
 """
 from . import ast
 from .errors import ZyloError
-from .types import BOOL, FLOAT, INT, STR, UNIT, ListT, OptionT, ResultT, StructT, Type
+from .types import BOOL, FLOAT, INT, STR, UNIT, DictT, ListT, OptionT, ResultT, SetT, StructT, TupleT, Type
 
-PRELUDE = "#![allow(unused, unused_parens, while_true, unused_mut)]\n"
+PRELUDE = """#![allow(unused, unused_parens, while_true, unused_mut)]
+use std::collections::{BTreeMap, BTreeSet};
+
+fn __zy_i(i: i64, n: usize) -> usize {
+    if i < 0 {
+        let j = i + n as i64;
+        if j < 0 { usize::MAX } else { j as usize }
+    } else {
+        i as usize
+    }
+}
+
+fn __zy_at<T>(v: &mut Vec<T>, i: i64) -> &mut T {
+    let k = __zy_i(i, v.len());
+    &mut v[k]
+}
+
+fn __zy_range(len: usize, lo: Option<i64>, hi: Option<i64>) -> (usize, usize) {
+    let n = len as i64;
+    let norm = |v: i64| -> i64 { (if v < 0 { v + n } else { v }).max(0).min(n) };
+    let a = norm(lo.unwrap_or(0));
+    let b = norm(hi.unwrap_or(n));
+    (a as usize, if b < a { a as usize } else { b as usize })
+}
+
+fn __zy_char(s: &str, i: i64) -> String {
+    let n = s.chars().count();
+    s.chars().nth(__zy_i(i, n)).map(|c| c.to_string()).expect("string index out of range")
+}
+
+fn __zy_find(s: &str, sub: &str) -> Option<i64> {
+    s.find(sub).map(|b| s[..b].chars().count() as i64)
+}
+
+fn __zy_insert<T>(v: &mut Vec<T>, i: i64, x: T) {
+    let n = v.len() as i64;
+    let k = if i < 0 { (i + n).max(0) } else { i.min(n) };
+    v.insert(k as usize, x);
+}
+
+fn __zy_remove<T: PartialEq>(v: &mut Vec<T>, x: &T) -> bool {
+    match v.iter().position(|y| y == x) {
+        Some(p) => { v.remove(p); true }
+        None => false,
+    }
+}
+"""
 
 RUST_KEYWORDS = {
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
@@ -67,6 +113,12 @@ def rust_type(t: Type) -> str:
         return f"Vec<{rust_type(t.elem)}>"
     if isinstance(t, StructT):
         return tname(t.name)
+    if isinstance(t, DictT):
+        return f"BTreeMap<{rust_type(t.key)}, {rust_type(t.val)}>"
+    if isinstance(t, SetT):
+        return f"BTreeSet<{rust_type(t.elem)}>"
+    if isinstance(t, TupleT):
+        return "(" + ", ".join(rust_type(x) for x in t.elems) + ")"
     if isinstance(t, OptionT):
         return f"Option<{rust_type(t.inner)}>"
     if isinstance(t, ResultT):
@@ -75,6 +127,8 @@ def rust_type(t: Type) -> str:
 
 
 def is_copy(t: Type) -> bool:
+    if isinstance(t, TupleT):
+        return all(is_copy(x) for x in t.elems)
     if isinstance(t, OptionT):
         return is_copy(t.inner)
     if isinstance(t, ResultT):
@@ -83,13 +137,32 @@ def is_copy(t: Type) -> bool:
 
 
 def str_lit(v: str) -> str:
-    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    out = []
+    for ch in v:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\0":
+            out.append("\\0")
+        elif ord(ch) < 32 or ord(ch) == 127:
+            out.append(f"\\u{{{ord(ch):x}}}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
 
 
 class Gen:
     def __init__(self) -> None:
         self.out: list[str] = []
         self.depth = 0
+        self.tmp = 0
 
     def line(self, text: str) -> None:
         self.out.append("    " * self.depth + text)
@@ -166,6 +239,8 @@ class Gen:
                 self.line(f"{emit_ref(e)};")
             case ast.Assign():
                 self.assign(s)
+            case ast.Unpack():
+                self.unpack(s)
             case ast.If():
                 self.if_(s, "if")
             case ast.While(cond, body):
@@ -183,9 +258,23 @@ class Gen:
             case _:
                 raise ZyloError(f"{type(s).__name__} is not supported by codegen", s.line, s.col)
 
+    def unpack(self, s: ast.Unpack) -> None:
+        self.tmp += 1
+        tmp = f"__t{self.tmp}"
+        self.line(f"let {tmp}: {rust_type(s.value.ty)} = {emit(s.value)};")
+        for i, (t, declares, var) in enumerate(zip(s.targets, s.declares, s.vars)):
+            val = f"{tmp}.{i}" + ("" if is_copy(var.ty) else ".clone()")
+            if declares:
+                self.line(f"let {'mut ' if var.mutable else ''}{ident(t.id)}: {rust_type(var.ty)} = {val};")
+            else:
+                self.line(f"{ident(t.id)} = {val};")
+
     def assign(self, s: ast.Assign) -> None:
-        if isinstance(s.target, (ast.Index, ast.Attr)):
-            self.line(f"{emit_ref(s.target)} = {emit(s.value)};")
+        if isinstance(s.target, ast.Index) and isinstance(s.target.value.ty, DictT):
+            base = emit_mut(s.target.value)
+            self.line(f"{base}.insert({emit(s.target.index)}, {emit(s.value)});")
+        elif isinstance(s.target, (ast.Index, ast.Attr)):
+            self.line(f"{emit_mut(s.target)} = {emit(s.value)};")
         elif s.declares:
             mut = "mut " if s.var.mutable else ""
             self.line(f"let {mut}{ident(s.target.id)}: {rust_type(s.var.ty)} = {emit(s.value)};")
@@ -255,9 +344,19 @@ class Gen:
         if isinstance(it, ast.Call) and it.func == "range":
             lo, hi = ("0i64", emit_ref(it.args[0])) if len(it.args) == 1 else (emit_ref(it.args[0]), emit_ref(it.args[1]))
             src = f"({lo})..({hi})"
+        elif isinstance(it.ty, DictT):
+            src = f"{emit_ref(it)}.keys().cloned().collect::<Vec<_>>()"
+        elif isinstance(it.ty, SetT):
+            src = f"{emit_ref(it)}.iter().cloned().collect::<Vec<_>>()"
+        elif it.ty == STR:
+            src = f"{emit_ref(it)}.chars().map(|c| c.to_string()).collect::<Vec<String>>()"
         else:
             src = emit(it)  # owned: clones the list once, so the body may mutate the original like in Python
-        self.line(f"for {mut}{ident(s.var)} in {src} {{")
+        if s.targets:
+            pat = "(" + ", ".join(f"{'mut ' if i.mutable else ''}{ident(n)}" for n, i in zip(s.targets, s.infos)) + ")"
+            self.line(f"for {pat} in {src} {{")
+        else:
+            self.line(f"for {mut}{ident(s.var)} in {src} {{")
         self.block(s.body)
         self.line("}")
 
@@ -270,6 +369,31 @@ def emit(e: ast.Expr) -> str:
     if isinstance(e, (ast.Name, ast.Index, ast.Attr)) and not is_copy(e.ty):
         return f"{code}.clone()"
     return code
+
+
+def is_place(e: ast.Expr) -> bool:
+    """A side-effect-free place (variable, field or index chain): safe to evaluate twice."""
+    if isinstance(e, ast.Name):
+        return True
+    if isinstance(e, ast.Attr):
+        return is_place(e.value)
+    if isinstance(e, ast.Index):
+        return is_place(e.value) and isinstance(e.index, (ast.Int, ast.Name))
+    return False
+
+
+def emit_mut(e: ast.Expr) -> str:
+    """A place expression that can be modified: like `emit_ref`, but `d[k]` on a dict becomes `get_mut`."""
+    match e:
+        case ast.Index(v, i) if isinstance(v.ty, DictT):
+            return f'{emit_mut(v)}.get_mut(&{emit_ref(i)}).expect("key not found")'
+        case ast.Index(v, i) if not isinstance(v.ty, TupleT):
+            return f"(*__zy_at(&mut {emit_mut(v)}, {emit_ref(i)}))"
+        case ast.Index(v, i):
+            return f"{emit_mut(v)}.{i.value}"
+        case ast.Attr(v, name):
+            return f"{emit_mut(v)}.{ident(name)}"
+    return emit_ref(e)
 
 
 def emit_ref(e: ast.Expr) -> str:
@@ -285,20 +409,51 @@ def emit_ref(e: ast.Expr) -> str:
             return "true" if v else "false"
         case ast.Name(i):
             return ident(i)
+        case ast.TupleLit(items):
+            return "(" + ", ".join(emit(x) for x in items) + ")"
+        case ast.DictLit(keys, values):
+            if isinstance(e.ty, SetT):
+                return "BTreeSet::new()"
+            if not keys:
+                return "BTreeMap::new()"
+            return "BTreeMap::from([" + ", ".join(f"({emit(k)}, {emit(v)})" for k, v in zip(keys, values)) + "])"
+        case ast.SetLit(items):
+            return "BTreeSet::from([" + ", ".join(emit(x) for x in items) + "])"
+        case ast.Index(v, i) if isinstance(v.ty, DictT):
+            return f"{emit_ref(v)}[&{emit_ref(i)}]"
+        case ast.Index(v, i) if isinstance(v.ty, TupleT):
+            return f"{emit_ref(v)}.{i.value}"
+        case ast.Index(v, i) if v.ty == STR:
+            return f"__zy_char(&{emit_ref(v)}, {emit_ref(i)})"
+        case ast.Slice(v, lo, hi):
+            b = lambda x: "None" if x is None else f"Some({emit_ref(x)})"
+            if v.ty == STR:
+                return (f"{{ let __b: Vec<char> = {emit_ref(v)}.chars().collect(); "
+                        f"let (__l, __h) = __zy_range(__b.len(), {b(lo)}, {b(hi)}); "
+                        f"__b[__l..__h].iter().collect::<String>() }}")
+            return (f"{{ let __b = &{emit_ref(v)}; let (__l, __h) = __zy_range(__b.len(), {b(lo)}, {b(hi)}); "
+                    f"__b[__l..__h].to_vec() }}")
         case ast.Index(v, i):
-            return f"{emit_ref(v)}[({emit_ref(i)}) as usize]"
+            base = emit_ref(v)
+            return f"{base}[__zy_i({emit_ref(i)}, {base}.len())]" if is_place(v) else f"{base}[({emit_ref(i)}) as usize]"
         case ast.Attr(v, name):
             return f"{emit_ref(v)}.{ident(name)}"
         case ast.NoneLit():
             return "None"
+        case ast.FString(parts):
+            return fstring(parts)
         case ast.IsCheck(v, kind):
             return f"{emit_ref(v)}.is_{kind}()"
         case ast.Try(v):
             return f"({emit(v)}?)"
         case ast.MethodCall(v, name, args) if isinstance(v.ty, (OptionT, ResultT)):
             return f"{emit(v)}.{name}({', '.join(emit(a) for a in args)})"
+        case ast.MethodCall(v, name, args) if v.ty == STR or isinstance(v.ty, (ListT, DictT, SetT)):
+            return type_method(e)
         case ast.MethodCall(v, name, args):
-            return f"{emit_ref(v)}.{mident(name)}({', '.join(emit(a) for a in args)})"
+            target = _METHODS.get((v.ty.name, name))
+            recv = emit_mut(v) if target is not None and target.self_mut else emit_ref(v)
+            return f"{recv}.{mident(name)}({', '.join(emit(a) for a in args)})"
         case ast.ListLit(items):
             if not items:
                 return "Vec::new()"
@@ -314,8 +469,91 @@ def emit_ref(e: ast.Expr) -> str:
     raise ZyloError(f"unsupported node: {type(e).__name__}", e.line, e.col)
 
 
+def fstring(parts: list) -> str:
+    fmt, args = [], []
+    for p in parts:
+        if isinstance(p, str):
+            fmt.append(p.replace("{", "{{").replace("}", "}}"))
+            continue
+        spec = p.spec[:-1] if p.spec and p.spec[-1] in "fds" else p.spec
+        t = p.value.ty
+        if t == FLOAT or not (t in (INT, BOOL, STR)):
+            spec += "?"  # Debug: `2.0` for floats, and the container/struct representation
+        fmt.append("{" + (f":{spec}" if spec else "") + "}")
+        args.append(emit_ref(p.value))
+    return f"format!({str_lit(''.join(fmt))}" + "".join(f", {a}" for a in args) + ")"
+
+
+_METHODS: dict[tuple[str, str], ast.FnDef] = {}
+_USER_FNS: set[str] = set()
+
+
+def type_method(e: ast.MethodCall) -> str:
+    v, n, args = e.value, e.name, e.args
+    a, t = emit_ref(v), v.ty
+    m = emit_mut(v)
+    r = [emit_ref(x) for x in args]
+    if t == STR:
+        return {
+            "strip": lambda: f"{a}.trim().to_string()",
+            "upper": lambda: f"{a}.to_uppercase()",
+            "lower": lambda: f"{a}.to_lowercase()",
+            "split": lambda: (f"{a}.split({r[0]}.as_str()).map(|x| x.to_string()).collect::<Vec<String>>()" if r
+                              else f"{a}.split_whitespace().map(|x| x.to_string()).collect::<Vec<String>>()"),
+            "join": lambda: f"{r[0]}.join({a}.as_str())",
+            "replace": lambda: f"{a}.replace({r[0]}.as_str(), {r[1]}.as_str())",
+            "startswith": lambda: f"{a}.starts_with({r[0]}.as_str())",
+            "endswith": lambda: f"{a}.ends_with({r[0]}.as_str())",
+            "find": lambda: f"__zy_find(&{a}, &{r[0]})",
+            "count": lambda: f"({a}.matches({r[0]}.as_str()).count() as i64)",
+            "lines": lambda: f"{a}.lines().map(|x| x.to_string()).collect::<Vec<String>>()",
+            "chars": lambda: f"{a}.chars().map(|c| c.to_string()).collect::<Vec<String>>()",
+            "repeat": lambda: f"{a}.repeat(({r[0]}) as usize)",
+        }[n]()
+    if isinstance(t, ListT):
+        sort = f"{m}.sort_by(|a, b| a.partial_cmp(b).unwrap())" if t.elem == FLOAT else f"{m}.sort()"
+        return {
+            "append": lambda: f"{m}.push({emit(args[0])})",
+            "pop": lambda: f"{m}.pop()",
+            "insert": lambda: f"__zy_insert(&mut {m}, {r[0]}, {emit(args[1])})",
+            "remove": lambda: f"__zy_remove(&mut {m}, &{r[0]})",
+            "clear": lambda: f"{m}.clear()",
+            "reverse": lambda: f"{m}.reverse()",
+            "sort": lambda: sort,
+            "extend": lambda: f"{m}.extend({emit(args[0])})",
+            "index": lambda: f"{a}.iter().position(|y| y == &{r[0]}).map(|p| p as i64)",
+            "count": lambda: f"({a}.iter().filter(|y| *y == &{r[0]}).count() as i64)",
+        }[n]()
+    if isinstance(t, DictT):
+        return {
+            "get": lambda: (f"{a}.get(&{r[0]}).cloned().unwrap_or({emit(args[1])})" if len(args) == 2
+                            else f"{a}.get(&{r[0]}).cloned()"),
+            "keys": lambda: f"{a}.keys().cloned().collect::<Vec<_>>()",
+            "values": lambda: f"{a}.values().cloned().collect::<Vec<_>>()",
+            "items": lambda: f"{a}.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>()",
+            "pop": lambda: f"{m}.remove(&{r[0]})",
+            "clear": lambda: f"{m}.clear()",
+        }[n]()
+    return {
+        "add": lambda: f"{m}.insert({emit(args[0])})",
+        "remove": lambda: f"{m}.remove(&{r[0]})",
+        "union": lambda: f"{a}.union(&{r[0]}).cloned().collect::<BTreeSet<_>>()",
+        "intersection": lambda: f"{a}.intersection(&{r[0]}).cloned().collect::<BTreeSet<_>>()",
+        "difference": lambda: f"{a}.difference(&{r[0]}).cloned().collect::<BTreeSet<_>>()",
+        "clear": lambda: f"{m}.clear()",
+    }[n]()
+
+
 def binop(e: ast.BinOp, op: str, l: ast.Expr, r: ast.Expr) -> str:
     a, b = emit_ref(l), emit_ref(r)
+    if op in ("in", "not in"):
+        if r.ty == STR:
+            test = f"{b}.contains({a}.as_str())"
+        elif isinstance(r.ty, DictT):
+            test = f"{b}.contains_key(&{a})"
+        else:
+            test = f"{b}.contains(&{a})"
+        return f"(!{test})" if op == "not in" else f"({test})"
     if op == "+" and l.ty == STR:
         return f'format!("{{}}{{}}", {a}, {b})'
     rust_op = {"and": "&&", "or": "||"}.get(op, op)
@@ -327,16 +565,48 @@ def call(e: ast.Call) -> str:
     if e.ctor_fields is not None:
         fields = ", ".join(f"{ident(n)}: {emit(a)}" for n, a in zip(e.ctor_fields, args))
         return f"{tname(e.func)} {{ {fields} }}"
+    if e.func in _USER_FNS:  # a user function shadowing a builtin name
+        return f"{ident(e.func)}({', '.join(emit(a) for a in args)})"
     match e.func:
         case "print":
-            t = args[0].ty
-            fmt = "{:?}" if t == FLOAT or isinstance(t, (ListT, StructT, OptionT, ResultT)) else "{}"
-            return f'println!("{fmt}", {emit_ref(args[0])})'
+            if not args:
+                return 'println!()'
+            fmts = ["{:?}" if a.ty == FLOAT or isinstance(a.ty, (ListT, StructT, OptionT, ResultT, TupleT, DictT, SetT)) else "{}"
+                    for a in args]
+            return f'println!("{" ".join(fmts)}", {", ".join(emit_ref(a) for a in args)})'
         case "len":
             x = emit_ref(args[0])
             return f"({x}.chars().count() as i64)" if args[0].ty == STR else f"({x}.len() as i64)"
         case "append":
-            return f"{emit_ref(args[0])}.push({emit(args[1])})"
+            return f"{emit_mut(args[0])}.push({emit(args[1])})"
+        case "sum":
+            return f"{emit_ref(args[0])}.iter().sum::<{rust_type(e.ty)}>()"
+        case "min" | "max":
+            x = emit_ref(args[0])
+            if len(args) == 2:
+                y = emit_ref(args[1])
+                return f"(({x}).{e.func}({y}))" if e.ty == FLOAT else f"std::cmp::{e.func}({x}, {y})"
+            msg = f'"{e.func}() of an empty list"'
+            if e.ty == FLOAT:
+                return f"{x}.iter().cloned().reduce(f64::{e.func}).expect({msg})"
+            return f"{x}.iter().cloned().{e.func}().expect({msg})"
+        case "abs":
+            return f"({emit_ref(args[0])}).abs()"
+        case "sorted":
+            cmp = "__v.sort_by(|a, b| a.partial_cmp(b).unwrap())" if e.ty.elem == FLOAT else "__v.sort()"
+            return f"{{ let mut __v = {emit(args[0])}; {cmp}; __v }}"
+        case "reversed":
+            return f"{{ let mut __v = {emit(args[0])}; __v.reverse(); __v }}"
+        case "enumerate":
+            return f"{emit_ref(args[0])}.iter().cloned().enumerate().map(|(i, x)| (i as i64, x)).collect::<Vec<_>>()"
+        case "zip":
+            return f"{emit_ref(args[0])}.iter().cloned().zip({emit_ref(args[1])}.iter().cloned()).collect::<Vec<_>>()"
+        case "sqrt":
+            return f"({emit_ref(args[0])}).sqrt()"
+        case "pow":
+            return f"({emit_ref(args[0])}).powf({emit_ref(args[1])})"
+        case "round" | "floor" | "ceil":
+            return f"(({emit_ref(args[0])}).{e.func}() as i64)"
         case "int":
             x, t = emit_ref(args[0]), args[0].ty
             if t == INT:
@@ -377,4 +647,10 @@ def call(e: ast.Call) -> str:
 
 
 def generate(prog: ast.Program) -> str:
+    _METHODS.clear()
+    _USER_FNS.clear()
+    _USER_FNS.update(s.name for s in prog.body if isinstance(s, ast.FnDef))
+    for s in prog.body:
+        if isinstance(s, ast.StructDef):
+            _METHODS.update({(s.name, m.name): m for m in s.methods})
     return Gen().program(prog)

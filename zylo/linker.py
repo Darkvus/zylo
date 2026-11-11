@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import ast
-from .checker import BUILTINS
+from .checker import BUILTINS, SHADOWABLE
 from .errors import ZyloError
 from .manifest import package_layout
 from .parser import parse
@@ -142,7 +142,7 @@ class Linker:
             kind = "fn" if isinstance(s, ast.FnDef) else "struct"
             if s.name in mod.defs:
                 raise err(f"{s.name!r} is already defined in this module", s, mod.path)
-            if not mod.is_entry and (s.name in BUILTINS or s.name in RESERVED_TYPES):
+            if not mod.is_entry and (s.name in BUILTINS - SHADOWABLE or s.name in RESERVED_TYPES):
                 raise err(f"{s.name!r} is a reserved name", s, mod.path)
             mod.defs[s.name] = kind
 
@@ -184,7 +184,7 @@ class Linker:
             if isinstance(n, ast.Param):
                 names = [n.name]
             elif isinstance(n, ast.For):
-                names = [n.var]
+                names = n.targets or [n.var]
             elif isinstance(n, ast.Assign) and isinstance(n.target, ast.Name):
                 names = [n.target.id]
             for name in names:

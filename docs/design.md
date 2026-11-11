@@ -79,10 +79,18 @@ dependency is a git URL and a ref, and `zylo.lock` records the exact commit and 
 (see [packages.md](packages.md)). Environments are per project, so two projects never share versions.
 Installing never executes package code.
 
+**Dicts and sets are ordered by key.** They map to `BTreeMap` / `BTreeSet`, so iteration and printing are
+deterministic (a hash map would print in a different order on every run) and keys only need to be `int`,
+`str`, `bool` or tuples of those. The price is that order is sorted, not insertion order as in Python.
+
+**Negative indices and slices are runtime helpers.** `xs[-1]` and slices go through small helper functions
+in the generated Rust prelude. Negative indexing needs to evaluate the container twice, so it is applied when
+the container is a variable, field or index chain (no side effects); other expressions use plain indexing.
+
 ## Known limitations
 
 - Lists and structs are cloned when passed to functions.
 - `is` narrowing works on plain variables and a single condition (no `and` chains, no fields).
-- No `dict`/`set`/tuples, string indexing/methods, closures, generics or I/O yet.
+- No closures, generics, list comprehensions or I/O yet.
 - No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.
 - Diagnostics are in English only.

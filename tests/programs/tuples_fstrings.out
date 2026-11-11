@@ -1,0 +1,8 @@
+min=4 max=42 avg=18.00
+(3, 4) 4 3 7
+ana  |  30|0030
+bob  |  25|0025
+cy   |  41|0041
+("cy", 41) true
+3 q {literal} 3 [1, 2] (3, 4)
+tab	here single "quotes" back\slash

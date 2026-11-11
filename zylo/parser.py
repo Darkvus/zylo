@@ -1,6 +1,9 @@
 from . import ast
 from .errors import ZyloError
-from .lexer import Token, tokenize
+import dataclasses
+import re
+
+from .lexer import Token, tokenize, unescape
 
 # precedence: higher binds tighter. `not` is unary and handled in parse_unary.
 PRECEDENCE = {
@@ -8,6 +11,7 @@ PRECEDENCE = {
     "and": 2,
     "==": 3, "!=": 3,
     "<": 4, ">": 4, "<=": 4, ">=": 4,
+    "in": 4, "not in": 4,
     "+": 5, "-": 5,
     "*": 6, "/": 6, "%": 6,
 }
@@ -114,21 +118,41 @@ class Parser:
                     raise ZyloError(f"{tok.value!r} without a preceding 'if'", tok.line, tok.col)
         return self.parse_simple()
 
+    def tuple_tail(self, first: ast.Expr, start: Token) -> ast.Expr:
+        """After `first`, a `,` makes a tuple: `a, b, c` (a trailing comma is allowed)."""
+        if not self.check("OP", ","):
+            return first
+        items = [first]
+        while self.match("OP", ","):
+            if self.check("NEWLINE") or self.check("OP", "=") or self.check("OP", ")"):
+                break
+            items.append(self.parse_expr())
+        if len(items) < 2:
+            raise ZyloError("a tuple needs at least 2 elements", start.line, start.col)
+        return ast.TupleLit(items, line=start.line, col=start.col)
+
     def parse_simple(self) -> ast.Stmt:
-        """Expression, assignment (`=`, `x: T =`) or compound assignment (`+=`)."""
+        """Expression, assignment (`=`, `x: T =`), unpacking (`a, b = ...`) or compound assignment (`+=`)."""
         start = self.cur
-        expr = self.parse_expr()
+        expr = self.tuple_tail(self.parse_expr(), start)
+        if isinstance(expr, ast.TupleLit) and self.check("OP", "="):
+            if not all(isinstance(t, ast.Name) for t in expr.items):
+                raise ZyloError("can only unpack into plain variable names", start.line, start.col)
+            self.advance()
+            value = self.tuple_tail(self.parse_expr(), start)
+            self.expect("NEWLINE")
+            return ast.Unpack(expr.items, value, line=start.line, col=start.col)
         if isinstance(expr, ast.Name) and self.check("OP", ":"):
             self.advance()
             ann = self.parse_type()
             self.expect("OP", "=")
-            value = self.parse_expr()
+            value = self.tuple_tail(self.parse_expr(), start)
             self.expect("NEWLINE")
             return ast.Assign(expr, ann, value, line=start.line, col=start.col)
         if self.check("OP", "="):
             self._check_target(expr, start)
             self.advance()
-            value = self.parse_expr()
+            value = self.tuple_tail(self.parse_expr(), start)
             self.expect("NEWLINE")
             return ast.Assign(expr, None, value, line=start.line, col=start.col)
         if self.cur.kind == "OP" and self.cur.value in AUG_OPS:
@@ -163,14 +187,17 @@ class Parser:
 
     def parse_for(self) -> ast.For:
         kw = self.advance()
-        var = self.expect("IDENT").value
+        names = [self.expect("IDENT").value]
+        while self.match("OP", ","):
+            names.append(self.expect("IDENT").value)
         self.expect("KW", "in")
         it = self.parse_expr()
-        return ast.For(var, it, self.parse_block(), line=kw.line, col=kw.col)
+        body = self.parse_block()
+        return ast.For(names[0], it, body, targets=names if len(names) > 1 else None, line=kw.line, col=kw.col)
 
     def parse_return(self) -> ast.Return:
         kw = self.advance()
-        value = None if self.check("NEWLINE") else self.parse_expr()
+        value = None if self.check("NEWLINE") else self.tuple_tail(self.parse_expr(), self.cur)
         self.expect("NEWLINE")
         return ast.Return(value, line=kw.line, col=kw.col)
 
@@ -276,6 +303,24 @@ class Parser:
             self.expect("OP", "[")
             args.append(self.parse_type())
             self.expect("OP", "]")
+        elif name == "set":
+            self.expect("OP", "[")
+            args.append(self.parse_type())
+            self.expect("OP", "]")
+        elif name == "dict":
+            self.expect("OP", "[")
+            args.append(self.parse_type())
+            self.expect("OP", ",")
+            args.append(self.parse_type())
+            self.expect("OP", "]")
+        elif name == "tuple":
+            self.expect("OP", "[")
+            args.append(self.parse_type())
+            while self.match("OP", ","):
+                args.append(self.parse_type())
+            self.expect("OP", "]")
+            if len(args) < 2:
+                raise ZyloError("a tuple type needs at least 2 element types", tok.line, tok.col)
         elif name == "Result":
             self.expect("OP", "[")
             args.append(self.parse_type())
@@ -297,6 +342,14 @@ class Parser:
         while True:
             if self.check("KW", "is") and IS_PREC >= min_prec:
                 left = self.parse_is(left)
+                continue
+            if self.check("KW", "not") and self.peek().kind == "KW" and self.peek().value == "in":
+                if PRECEDENCE["not in"] < min_prec:
+                    return left
+                op = self.advance()
+                self.advance()
+                right = self.parse_expr(PRECEDENCE["not in"] + 1)
+                left = ast.BinOp("not in", left, right, line=op.line, col=op.col)
                 continue
             if not (self._is_binop() and PRECEDENCE[self.cur.value] >= min_prec):
                 return left
@@ -330,9 +383,14 @@ class Parser:
         while True:
             if self.check("OP", "["):
                 lb = self.advance()
-                idx = self.parse_expr()
+                lo = None if self.check("OP", ":") else self.parse_expr()
+                if self.match("OP", ":"):
+                    hi = None if self.check("OP", "]") else self.parse_expr()
+                    self.expect("OP", "]")
+                    expr = ast.Slice(expr, lo, hi, line=lb.line, col=lb.col)
+                    continue
                 self.expect("OP", "]")
-                expr = ast.Index(expr, idx, line=lb.line, col=lb.col)
+                expr = ast.Index(expr, lo, line=lb.line, col=lb.col)
             elif self.check("OP", "?"):
                 q = self.advance()
                 expr = ast.Try(expr, line=q.line, col=q.col)
@@ -355,6 +413,8 @@ class Parser:
             return ast.Float(float(tok.value), **pos)
         if tok.kind == "STR":
             return ast.Str(tok.value, **pos)
+        if tok.kind == "FSTR":
+            return self.parse_fstring(tok)
         if tok.kind == "KW" and tok.value in ("true", "false"):
             return ast.Bool(tok.value == "true", **pos)
         if tok.kind == "KW" and tok.value == "none":
@@ -364,9 +424,11 @@ class Parser:
                 return self.parse_call(tok)
             return ast.Name(tok.value, **pos)
         if tok.kind == "OP" and tok.value == "(":
-            e = self.parse_expr()
+            e = self.tuple_tail(self.parse_expr(), tok)
             self.expect("OP", ")")
             return e
+        if tok.kind == "OP" and tok.value == "{":
+            return self.parse_brace(tok)
         if tok.kind == "OP" and tok.value == "[":
             items: list[ast.Expr] = []
             if not self.check("OP", "]"):
@@ -376,6 +438,114 @@ class Parser:
             self.expect("OP", "]")
             return ast.ListLit(items, **pos)
         raise ZyloError(f"unexpected expression: {describe(tok)}", tok.line, tok.col)
+
+    def parse_brace(self, tok: Token) -> ast.Expr:
+        """`{}` (empty dict or set, typed by context), `{k: v, ...}` (dict) or `{a, b, ...}` (set)."""
+        pos = {"line": tok.line, "col": tok.col}
+        if self.match("OP", "}"):
+            return ast.DictLit([], [], **pos)
+        first = self.parse_expr()
+        if self.match("OP", ":"):
+            keys, values = [first], [self.parse_expr()]
+            while self.match("OP", ","):
+                if self.check("OP", "}"):
+                    break
+                keys.append(self.parse_expr())
+                self.expect("OP", ":")
+                values.append(self.parse_expr())
+            self.expect("OP", "}")
+            return ast.DictLit(keys, values, **pos)
+        items = [first]
+        while self.match("OP", ","):
+            if self.check("OP", "}"):
+                break
+            items.append(self.parse_expr())
+        self.expect("OP", "}")
+        return ast.SetLit(items, **pos)
+
+    def parse_fstring(self, tok: Token) -> ast.FString:
+        raw, parts, buf, i = tok.value, [], [], 0
+
+        def flush() -> None:
+            if buf:
+                parts.append(unescape("".join(buf), tok.line, tok.col))
+                buf.clear()
+
+        def fail(msg: str, at: int) -> ZyloError:
+            return ZyloError(msg, tok.line, tok.col + 2 + at)
+
+        while i < len(raw):
+            c = raw[i]
+            if c == "{" and raw[i + 1:i + 2] == "{":
+                buf.append("{")
+                i += 2
+            elif c == "}" and raw[i + 1:i + 2] == "}":
+                buf.append("}")
+                i += 2
+            elif c == "}":
+                raise fail("single '}' in f-string (write '}}' for a literal brace)", i)
+            elif c == "{":
+                j, depth, quote = i + 1, 0, None
+                while j < len(raw):
+                    ch = raw[j]
+                    if quote:
+                        quote = None if ch == quote else quote
+                    elif ch in "\"'":
+                        quote = ch
+                    elif ch in "([{":
+                        depth += 1
+                    elif ch in ")]":
+                        depth -= 1
+                    elif ch == "}":
+                        if depth == 0:
+                            break
+                        depth -= 1
+                    j += 1
+                else:
+                    raise fail("unterminated '{' in f-string", i)
+                inner = raw[i + 1:j]
+                expr_text, spec = self.split_spec(inner)
+                if not expr_text.strip():
+                    raise fail("empty expression in f-string", i)
+                flush()
+                parts.append(ast.FormatPart(self.sub_expr(expr_text, tok, i + 1), spec, line=tok.line, col=tok.col + 2 + i))
+                i = j + 1
+            else:
+                buf.append(c)
+                i += 1
+        flush()
+        return ast.FString(parts, line=tok.line, col=tok.col)
+
+    @staticmethod
+    def split_spec(inner: str) -> tuple[str, str]:
+        depth, quote = 0, None
+        for k, ch in enumerate(inner):
+            if quote:
+                quote = None if ch == quote else quote
+            elif ch in "\"'":
+                quote = ch
+            elif ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+            elif ch == ":" and depth == 0:
+                return inner[:k], inner[k + 1:]
+        return inner, ""
+
+    def sub_expr(self, text: str, tok: Token, offset: int) -> ast.Expr:
+        """Parse the expression inside `{...}`; its tokens are placed at the f-string's position."""
+        stripped = text.strip()
+        try:
+            toks = tokenize(stripped)
+        except ZyloError as e:
+            raise ZyloError(e.msg, tok.line, tok.col + 2 + offset) from None
+        base = tok.col + 2 + offset + (len(text) - len(text.lstrip()))
+        toks = [dataclasses.replace(t, line=tok.line, col=base + max(t.col - 1, 0)) for t in toks]
+        sub = Parser(toks)
+        expr = sub.parse_expr()
+        if not sub.check("NEWLINE"):
+            raise ZyloError(f"unexpected {describe(sub.cur)} in f-string expression", tok.line, base)
+        return expr
 
     def parse_args(self) -> list[ast.Expr]:
         self.expect("OP", "(")

@@ -43,6 +43,31 @@ class ResultT:
 
 
 @dataclass(frozen=True)
+class TupleT:
+    elems: tuple["Type", ...]
+
+    def __str__(self) -> str:
+        return f"tuple[{', '.join(map(str, self.elems))}]"
+
+
+@dataclass(frozen=True)
+class DictT:
+    key: "Type"
+    val: "Type"
+
+    def __str__(self) -> str:
+        return f"dict[{self.key}, {self.val}]"
+
+
+@dataclass(frozen=True)
+class SetT:
+    elem: "Type"
+
+    def __str__(self) -> str:
+        return f"set[{self.elem}]"
+
+
+@dataclass(frozen=True)
 class FnT:
     params: tuple["Type", ...]
     ret: "Type"
@@ -57,7 +82,7 @@ BOOL = Prim("bool")
 STR = Prim("str")
 UNIT = Prim("unit")
 
-Type = Prim | ListT | FnT | StructT | OptionT | ResultT
+Type = Prim | ListT | FnT | StructT | OptionT | ResultT | TupleT | DictT | SetT
 
 PRIMS = {"int": INT, "float": FLOAT, "bool": BOOL, "str": STR}
 

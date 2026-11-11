@@ -3,7 +3,7 @@
 A small statically typed language with Python-like syntax that compiles to Rust.
 Write code that reads like Python, get a native binary that runs 30–90× faster.
 
-**Status:** v0.3 — early but complete enough to write real programs and share libraries. See the [roadmap](ROADMAP.md).
+**Status:** v0.4 — early but complete enough to write real programs and share libraries. See the [roadmap](ROADMAP.md).
 
 ```zylo
 fn fib(n: int) -> int:
@@ -106,7 +106,7 @@ Reproduce with `python benchmarks/bench.py`.
 
 ## Examples
 
-Eighteen programs in [examples/](examples/) — FizzBuzz, primes, Collatz, sorting, binary search,
+Nineteen programs in [examples/](examples/) — FizzBuzz, primes, Collatz, sorting, binary search,
 matrices, a bank account, an inventory, vectors, number parsing with `Option`/`Result`, and more.
 Every one is compiled and checked in the test suite.
 

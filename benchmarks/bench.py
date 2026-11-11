@@ -67,7 +67,7 @@ def main() -> int:
             if not (py_out == chk_out == raw_out):
                 sys.exit(f"{name}: las salidas difieren\npython: {py_out!r}\nzylo:   {chk_out!r}\nraw:    {raw_out!r}")
             rows.append((name, py_med, chk_med, raw_med, compile_t))
-            print(f"{name:8} ok  python {py_med:.3f}s  zylo {chk_med:.3f}s  zylo(sin checks) {raw_med:.3f}s", flush=True)
+            print(f"{name:8} ok  python {py_med:.3f}s  zylo {chk_med:.3f}s  zylo (no checks) {raw_med:.3f}s", flush=True)
 
     lines = [
         "| Program | Python | Zylo | Speedup | Zylo without overflow checks | Speedup | Compile time |",

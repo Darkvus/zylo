@@ -7,7 +7,8 @@ KEYWORDS = {
     "and", "or", "not", "true", "false", "struct", "is", "none", "import", "from", "as",
 }
 TWO_CHAR = {"==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=", "%="}
-ONE_CHAR = set("+-*/%<>=(),:[].?")
+ONE_CHAR = set("+-*/%<>=(),:[].?{}")
+ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "\\": "\\", '"': '"', "'": "'"}
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,38 @@ def tokenize(src: str) -> list[Token]:
     return tokens
 
 
+def unescape(raw: str, lineno: int = 0, col: int = 0) -> str:
+    """Process the backslash escapes of a string literal."""
+    if "\\" not in raw:
+        return raw
+    out, i = [], 0
+    while i < len(raw):
+        c = raw[i]
+        if c == "\\":
+            nxt = raw[i + 1:i + 2]
+            if nxt not in ESCAPES:
+                raise ZyloError(f"unknown escape sequence \\{nxt}", lineno, col + i)
+            out.append(ESCAPES[nxt])
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _scan_string(line: str, i: int, lineno: int, col: int) -> int:
+    """`line[i]` is a quote; return the index of the matching closing quote (backslashes escape)."""
+    quote, j = line[i], i + 1
+    while j < len(line):
+        if line[j] == "\\":
+            j += 2
+        elif line[j] == quote:
+            return j
+        else:
+            j += 1
+    raise ZyloError("unterminated string", lineno, col)
+
+
 def _lex_line(line: str, i: int, lineno: int, out: list[Token]) -> None:
     n = len(line)
     while i < n:
@@ -68,6 +101,10 @@ def _lex_line(line: str, i: int, lineno: int, out: list[Token]) -> None:
                     j += 1
             out.append(Token(kind, line[i:j], lineno, col))
             i = j
+        elif c == "f" and line[i + 1:i + 2] in ('"', "'"):  # f-string: kept raw, parsed by the parser
+            j = _scan_string(line, i + 1, lineno, col + 1)
+            out.append(Token("FSTR", line[i + 2:j], lineno, col))
+            i = j + 1
         elif c.isalpha() or c == "_":
             j = i
             while j < n and (line[j].isalnum() or line[j] == "_"):
@@ -75,11 +112,9 @@ def _lex_line(line: str, i: int, lineno: int, out: list[Token]) -> None:
             word = line[i:j]
             out.append(Token("KW" if word in KEYWORDS else "IDENT", word, lineno, col))
             i = j
-        elif c == '"':
-            j = line.find('"', i + 1)
-            if j == -1:
-                raise ZyloError("unterminated string", lineno, col)
-            out.append(Token("STR", line[i + 1:j], lineno, col))
+        elif c in ('"', "'"):
+            j = _scan_string(line, i, lineno, col)
+            out.append(Token("STR", unescape(line[i + 1:j], lineno, col + 1), lineno, col))
             i = j + 1
         elif line[i:i + 2] in TWO_CHAR:
             out.append(Token("OP", line[i:i + 2], lineno, col))

@@ -11,14 +11,19 @@ Reglas:
   receive `self` by reference; the checker infers whether they modify it (`self_mut`), also
   when they do so by calling another modifying method (fixed point in `check`).
 """
+import re
 from dataclasses import dataclass, field
 
 from . import ast
 from .errors import ZyloError
-from .types import BOOL, FLOAT, INT, PRIMS, STR, UNIT, FnT, ListT, OptionT, ResultT, StructT, Type, VarInfo
+from .types import BOOL, FLOAT, INT, PRIMS, STR, UNIT, FnT, DictT, ListT, OptionT, ResultT, SetT, StructT, TupleT, Type, VarInfo
 
 BUILTINS = {"print", "range", "len", "int", "float", "str", "append", "exit",
-            "some", "ok", "err", "parse_int", "parse_float"}
+            "some", "ok", "err", "parse_int", "parse_float",
+            "sum", "min", "max", "abs", "sorted", "reversed", "enumerate", "zip",
+            "sqrt", "pow", "round", "floor", "ceil"}
+# Builtins a program may redefine with its own function (the core ones may not).
+SHADOWABLE = BUILTINS - {"print", "range", "len", "int", "float", "str", "append", "exit", "some", "ok", "err"}
 ARITH = {"+", "-", "*", "/", "%"}
 EQ = {"==", "!="}
 ORDER = {"<", ">", "<=", ">="}
@@ -100,6 +105,13 @@ class Checker:
             return OptionT(self.resolve(t.args[0]))
         if t.name == "Result":
             return ResultT(self.resolve(t.args[0]), self.resolve(t.args[1]))
+        if t.name == "tuple":
+            return TupleT(tuple(self.resolve(a) for a in t.args))
+        if t.name in ("dict", "set"):
+            args = [self.resolve(a) for a in t.args]
+            if not key_ok(args[0]):
+                raise err(f"{'dict keys' if t.name == 'dict' else 'set elements'} must be int, str, bool or tuples of those, not {args[0]}", t)
+            return DictT(*args) if t.name == "dict" else SetT(args[0])
         if t.name in PRIMS:
             return PRIMS[t.name]
         if t.name in self.structs:
@@ -165,7 +177,7 @@ class Checker:
         return FnT(tuple(self.resolve(p.type) for p in f.params), ret)
 
     def declare_fn(self, f: ast.FnDef) -> None:
-        if f.name in BUILTINS:
+        if f.name in BUILTINS - SHADOWABLE:
             raise err(f"{f.name!r} is a built-in function", f)
         if f.name in self.structs:
             raise err(f"{f.name!r} is already a struct", f)
@@ -234,6 +246,8 @@ class Checker:
                 self.expr(e)
             case ast.Assign():
                 self.assign(s)
+            case ast.Unpack():
+                self.unpack(s)
             case ast.If():
                 self.if_stmt(s)
             case ast.While(cond, body):
@@ -274,8 +288,37 @@ class Checker:
         if t != self.ret:
             raise err(f"returning {t} but the function declares {self.ret}", value)
 
+    def unpack(self, s: ast.Unpack) -> None:
+        t = self.expr(s.value)
+        n = len(s.targets)
+        if not isinstance(t, TupleT) or len(t.elems) != n:
+            have = f"{len(t.elems)} values" if isinstance(t, TupleT) else str(t)
+            raise err(f"cannot unpack {have} into {n} variables", s)
+        seen: set[str] = set()
+        s.declares, s.vars = [], []
+        for target, et in zip(s.targets, t.elems):
+            name = target.id
+            if name == "self":
+                raise err("`self` cannot be declared or reassigned", target)
+            if name in seen:
+                raise err(f"{name!r} appears twice on the left of the assignment", target)
+            seen.add(name)
+            existing = self.scopes.lookup(name)
+            if existing is None:
+                s.declares.append(True)
+                s.vars.append(self.scopes.declare(name, et))
+            else:
+                if existing.narrowed:
+                    raise err(f"{name!r} is narrowed to {existing.ty} by an `is` check here and cannot be reassigned", target)
+                if existing.ty != et:
+                    raise err(f"{name!r} is {existing.ty} but {et} is assigned", target)
+                existing.mutable = True
+                s.declares.append(False)
+                s.vars.append(existing)
+            target.ty = et
+
     def for_loop(self, s: ast.For) -> None:
-        if s.var == "self":
+        if "self" in (s.targets or [s.var]):
             raise err("`self` cannot be used as a loop variable", s)
         it = s.iter
         if isinstance(it, ast.Call) and it.func == "range":
@@ -289,11 +332,25 @@ class Checker:
             var_t: Type = INT
         else:
             t = self.expr(it)
-            if not isinstance(t, ListT):
-                raise err(f"can only iterate over range(...) or a list, not {t}", it)
-            var_t = t.elem
+            if isinstance(t, ListT):
+                var_t = t.elem
+            elif isinstance(t, SetT):
+                var_t = t.elem
+            elif isinstance(t, DictT):
+                var_t = t.key
+            elif t == STR:
+                var_t = STR
+            else:
+                raise err(f"can only iterate over range(...), a list, str, set or dict, not {t}", it)
         self.scopes.push()
-        s.info = self.scopes.declare(s.var, var_t)
+        if s.targets:
+            if not isinstance(var_t, TupleT) or len(var_t.elems) != len(s.targets):
+                raise err(f"cannot unpack {var_t} into {len(s.targets)} variables", s)
+            if len(set(s.targets)) != len(s.targets):
+                raise err("duplicate loop variable", s)
+            s.infos = [self.scopes.declare(n, et) for n, et in zip(s.targets, var_t.elems)]
+        else:
+            s.info = self.scopes.declare(s.var, var_t)
         self.loops += 1
         for b in s.body:
             self.stmt(b)
@@ -304,6 +361,18 @@ class Checker:
         target = s.target
         if isinstance(target, ast.Index):
             base_t = self.expr(target.value)
+            if isinstance(base_t, TupleT):
+                raise err("tuples are immutable: build a new tuple instead", target)
+            if isinstance(base_t, DictT):
+                kt = self.expr(target.index, base_t.key)
+                if kt != base_t.key:
+                    raise err(f"this dict has {base_t.key} keys, not {kt}", target.index)
+                vt = self.expr(s.value, base_t.val)
+                if vt != base_t.val:
+                    raise err(f"assigning {vt} to a value of {base_t}", s.value)
+                target.ty = base_t.val
+                self.mark_mutable(target.value)
+                return
             if not isinstance(base_t, ListT):
                 raise err(f"cannot assign by index to {base_t}", target)
             self.expect_int(target.index)
@@ -404,14 +473,55 @@ class Checker:
                 return BOOL
             case ast.Try(v):
                 return self.try_op(e, v)
+            case ast.FString(parts):
+                for p in parts:
+                    if isinstance(p, ast.FormatPart):
+                        self.format_part(p)
+                return STR
             case ast.MethodCall():
                 return self.method_call(e)
             case ast.Attr(v, name):
                 return self.attr(e, v, name)
             case ast.ListLit(items):
                 return self.list_lit(e, items, expected)
+            case ast.DictLit(keys, values):
+                return self.dict_lit(e, keys, values, expected)
+            case ast.SetLit(items):
+                et = expected.elem if isinstance(expected, SetT) else None
+                first = self.expr(items[0], et)
+                for it in items[1:]:
+                    t = self.expr(it, first)
+                    if t != first:
+                        raise err(f"the set mixes {first} and {t}", it)
+                if not key_ok(first):
+                    raise err(f"set elements must be int, str, bool or tuples of those, not {first}", e)
+                return SetT(first)
+            case ast.Slice(v, lo, hi):
+                vt = self.expr(v)
+                if vt != STR and not isinstance(vt, ListT):
+                    raise err(f"cannot slice {vt}", e)
+                for b in (lo, hi):
+                    if b is not None:
+                        self.expect_int(b)
+                return vt
+            case ast.TupleLit(items):
+                exp = expected.elems if isinstance(expected, TupleT) and len(expected.elems) == len(items) else [None] * len(items)
+                return TupleT(tuple(self.expr(it, x) for it, x in zip(items, exp)))
             case ast.Index(v, i):
                 vt = self.expr(v)
+                if isinstance(vt, TupleT):
+                    if not isinstance(i, ast.Int) or not 0 <= i.value < len(vt.elems):
+                        raise err(f"a tuple of {len(vt.elems)} is indexed with a literal 0..{len(vt.elems) - 1}", e)
+                    i.ty = INT
+                    return vt.elems[i.value]
+                if isinstance(vt, DictT):
+                    kt = self.expr(i, vt.key)
+                    if kt != vt.key:
+                        raise err(f"this dict has {vt.key} keys, not {kt}", i)
+                    return vt.val
+                if vt == STR:
+                    self.expect_int(i)
+                    return STR
                 if not isinstance(vt, ListT):
                     raise err(f"cannot index {vt}", e)
                 self.expect_int(i)
@@ -429,6 +539,15 @@ class Checker:
         return t
 
     def binop(self, e: ast.BinOp, op: str, l: ast.Expr, r: ast.Expr) -> Type:
+        if op in ("in", "not in"):
+            rt = self.expr(r)
+            want = rt.elem if isinstance(rt, (ListT, SetT)) else rt.key if isinstance(rt, DictT) else STR if rt == STR else None
+            if want is None:
+                raise err(f"`{op}` needs a list, str, set or dict on the right, not {rt}", e)
+            lt = self.expr(l, want)
+            if lt != want:
+                raise err(f"`{op}` on {rt} needs a {want} on the left, not {lt}", e)
+            return BOOL
         if isinstance(l, ast.NoneLit):  # `none == x`: the other side gives the type
             rt = self.expr(r)
             lt = self.expr(l, rt)
@@ -453,6 +572,23 @@ class Checker:
         if op in EQ:
             return BOOL
         raise err(f"unknown operator {op!r}", e)
+
+    def dict_lit(self, e: ast.DictLit, keys: list[ast.Expr], values: list[ast.Expr], expected: Type | None) -> Type:
+        if not keys:
+            if isinstance(expected, (DictT, SetT)):
+                return expected  # `{}` is an empty set when the context says so
+            raise err("cannot infer the type of `{}`; annotate it: `d: dict[str, int] = {}`", e)
+        kexp = expected.key if isinstance(expected, DictT) else None
+        vexp = expected.val if isinstance(expected, DictT) else None
+        kt, vt = self.expr(keys[0], kexp), self.expr(values[0], vexp)
+        for k, v in zip(keys[1:], values[1:]):
+            if self.expr(k, kt) != kt:
+                raise err(f"the dict mixes {kt} and {k.ty} keys", k)
+            if self.expr(v, vt) != vt:
+                raise err(f"the dict mixes {vt} and {v.ty} values", v)
+        if not key_ok(kt):
+            raise err(f"dict keys must be int, str, bool or tuples of those, not {kt}", e)
+        return DictT(kt, vt)
 
     def list_lit(self, e: ast.ListLit, items: list[ast.Expr], expected: Type | None) -> Type:
         if not items:
@@ -485,6 +621,177 @@ class Checker:
                 raise err(f"{name!r} is a method of {t}; call it with parentheses: .{name}(...)", e)
             raise err(f"{t} has no field {name!r}{hint}", e)
         return ft
+
+    SPEC_RE = re.compile(r"^(?:[<>^])?0?\d*(?:\.\d+)?([fdsxXb]?)$")
+
+    def format_part(self, p: ast.FormatPart) -> None:
+        t = self.expr(p.value)
+        if t == UNIT:
+            raise err("the expression produces no value", p.value)
+        m = self.SPEC_RE.match(p.spec)
+        if not m:
+            raise err(f"unsupported format specification {p.spec!r} (use e.g. `:.2f`, `:>8`, `:05d`)", p)
+        kind = m.group(1)
+        want = {"f": FLOAT, "d": INT, "x": INT, "X": INT, "b": INT, "s": STR}.get(kind)
+        if want is not None and t != want:
+            raise err(f"format type `{kind}` needs {want}, not {t}", p)
+
+    def type_method(self, e: ast.MethodCall, rt: Type) -> Type:
+        """Methods of the built-in str / list / dict / set types."""
+        n, args = e.name, e.args
+
+        def arity(lo: int, hi: int | None = None) -> None:
+            hi = lo if hi is None else hi
+            if not lo <= len(args) <= hi:
+                want = str(lo) if lo == hi else f"{lo} or {hi}"
+                raise err(f"{rt}.{n} takes {want} argument(s), got {len(args)}", e)
+
+        def arg(i: int, want: Type) -> None:
+            t = self.expr(args[i], want)
+            if t != want:
+                raise err(f"argument {i + 1} of {n}: expected {want}, got {t}", args[i])
+
+        def mutates() -> None:
+            self.mark_mutable(e.value)
+
+        if rt == STR:
+            if n in ("strip", "upper", "lower"):
+                arity(0)
+                return STR
+            if n == "split":
+                arity(0, 1)
+                if args:
+                    arg(0, STR)
+                return ListT(STR)
+            if n == "join":
+                arity(1)
+                arg(0, ListT(STR))
+                return STR
+            if n == "replace":
+                arity(2)
+                arg(0, STR)
+                arg(1, STR)
+                return STR
+            if n in ("startswith", "endswith"):
+                arity(1)
+                arg(0, STR)
+                return BOOL
+            if n == "find":
+                arity(1)
+                arg(0, STR)
+                return OptionT(INT)
+            if n == "count":
+                arity(1)
+                arg(0, STR)
+                return INT
+            if n in ("lines", "chars"):
+                arity(0)
+                return ListT(STR)
+            if n == "repeat":
+                arity(1)
+                arg(0, INT)
+                return STR
+            have = "strip, upper, lower, split, join, replace, startswith, endswith, find, count, lines, chars, repeat"
+        elif isinstance(rt, ListT):
+            el = rt.elem
+            if n == "append":
+                arity(1)
+                arg(0, el)
+                mutates()
+                return UNIT
+            if n == "pop":
+                arity(0)
+                if isinstance(el, OptionT):
+                    raise err("pop() on a list of Option values is not supported", e)
+                mutates()
+                return OptionT(el)
+            if n == "insert":
+                arity(2)
+                arg(0, INT)
+                arg(1, el)
+                mutates()
+                return UNIT
+            if n == "remove":
+                arity(1)
+                arg(0, el)
+                mutates()
+                return BOOL
+            if n in ("clear", "reverse"):
+                arity(0)
+                mutates()
+                return UNIT
+            if n == "sort":
+                arity(0)
+                if not sortable(el):
+                    raise err(f"cannot sort a list of {el}", e)
+                mutates()
+                return UNIT
+            if n == "extend":
+                arity(1)
+                arg(0, rt)
+                mutates()
+                return UNIT
+            if n == "index":
+                arity(1)
+                arg(0, el)
+                return OptionT(INT)
+            if n == "count":
+                arity(1)
+                arg(0, el)
+                return INT
+            have = "append, pop, insert, remove, clear, reverse, sort, extend, index, count"
+        elif isinstance(rt, DictT):
+            if n == "get":
+                arity(1, 2)
+                if isinstance(rt.val, OptionT):
+                    raise err("get() on a dict of Option values is not supported", e)
+                arg(0, rt.key)
+                if len(args) == 2:
+                    arg(1, rt.val)
+                    return rt.val
+                return OptionT(rt.val)
+            if n == "keys":
+                arity(0)
+                return ListT(rt.key)
+            if n == "values":
+                arity(0)
+                return ListT(rt.val)
+            if n == "items":
+                arity(0)
+                return ListT(TupleT((rt.key, rt.val)))
+            if n == "pop":
+                arity(1)
+                if isinstance(rt.val, OptionT):
+                    raise err("pop() on a dict of Option values is not supported", e)
+                arg(0, rt.key)
+                mutates()
+                return OptionT(rt.val)
+            if n == "clear":
+                arity(0)
+                mutates()
+                return UNIT
+            have = "get, keys, values, items, pop, clear"
+        else:  # SetT
+            if n == "add":
+                arity(1)
+                arg(0, rt.elem)
+                mutates()
+                return UNIT
+            if n == "remove":
+                arity(1)
+                arg(0, rt.elem)
+                mutates()
+                return BOOL
+            if n in ("union", "intersection", "difference"):
+                arity(1)
+                arg(0, rt)
+                return rt
+            if n == "clear":
+                arity(0)
+                mutates()
+                return UNIT
+            have = "add, remove, union, intersection, difference, clear"
+        raise err(f"{rt} has no method {n!r} (available: {have})", e)
 
     def try_op(self, e: ast.Try, v: ast.Expr) -> Type:
         t = self.expr(v)
@@ -519,6 +826,8 @@ class Checker:
         rt = self.expr(e.value)
         if isinstance(rt, (OptionT, ResultT)):
             return self.builtin_method(e, rt)
+        if rt == STR or isinstance(rt, (ListT, DictT, SetT)):
+            return self.type_method(e, rt)
         info = self.struct_of(rt, e, "methods")
         sig = info.methods.get(e.name)
         if sig is None:
@@ -552,7 +861,7 @@ class Checker:
     def call(self, e: ast.Call, expected: Type | None = None) -> Type:
         if e.func in self.structs:
             return self.ctor(e)
-        if e.func in BUILTINS:
+        if e.func in BUILTINS and not (e.func in SHADOWABLE and e.func in self.fns):
             return self.builtin(e, expected)
         sig = self.fns.get(e.func)
         if sig is None:
@@ -568,15 +877,16 @@ class Checker:
                 raise err(f"{name} takes {n} argument(s), got {len(args)}", e)
 
         match name:
-            case "print":
-                arity(1)
-                self.expr(args[0])
+            case "print":  # any number of values, separated by spaces
+                for a in args:
+                    if self.expr(a) == UNIT:
+                        raise err("the expression produces no value", a)
                 return UNIT
             case "len":
                 arity(1)
                 t = self.expr(args[0])
-                if t != STR and not isinstance(t, ListT):
-                    raise err(f"len expects str or list, not {t}", args[0])
+                if t != STR and not isinstance(t, (ListT, DictT, SetT)):
+                    raise err(f"len expects str, list, dict or set, not {t}", args[0])
                 return INT
             case "int" | "float":
                 arity(1)
@@ -625,9 +935,67 @@ class Checker:
                 if t != STR:
                     raise err(f"{name} expects str, not {t}", args[0])
                 return OptionT(INT if name == "parse_int" else FLOAT)
+            case "sum":
+                arity(1)
+                t = self.expr(args[0])
+                if not (isinstance(t, ListT) and t.elem in (INT, FLOAT)):
+                    raise err(f"sum expects a list of int or float, not {t}", args[0])
+                return t.elem
+            case "min" | "max":
+                if len(args) not in (1, 2):
+                    raise err(f"{name} takes 1 or 2 argument(s), got {len(args)}", e)
+                t = self.expr(args[0])
+                if len(args) == 1:
+                    if not (isinstance(t, ListT) and sortable(t.elem)):
+                        raise err(f"{name} of one argument expects a list of comparable values, not {t}", args[0])
+                    return t.elem
+                u = self.expr(args[1], t)
+                if t != u or t not in (INT, FLOAT, STR):
+                    raise err(f"{name} compares two int, float or str values of the same type, not {t} and {u}", e)
+                return t
+            case "abs":
+                arity(1)
+                t = self.expr(args[0])
+                if t not in (INT, FLOAT):
+                    raise err(f"abs expects int or float, not {t}", args[0])
+                return t
+            case "sorted" | "reversed":
+                arity(1)
+                t = self.expr(args[0])
+                if not isinstance(t, ListT) or (name == "sorted" and not sortable(t.elem)):
+                    raise err(f"{name} expects a list{' of comparable values' if name == 'sorted' else ''}, not {t}", args[0])
+                return t
+            case "enumerate":
+                arity(1)
+                t = self.expr(args[0])
+                if not isinstance(t, ListT):
+                    raise err(f"enumerate expects a list, not {t}", args[0])
+                return ListT(TupleT((INT, t.elem)))
+            case "zip":
+                arity(2)
+                a, b = self.expr(args[0]), self.expr(args[1])
+                if not (isinstance(a, ListT) and isinstance(b, ListT)):
+                    raise err(f"zip expects two lists, not {a} and {b}", e)
+                return ListT(TupleT((a.elem, b.elem)))
+            case "sqrt" | "pow" | "round" | "floor" | "ceil":
+                arity(2 if name == "pow" else 1)
+                for a in args:
+                    t = self.expr(a, FLOAT)
+                    if t != FLOAT:
+                        raise err(f"{name} expects float, not {t} (use float(x))", a)
+                return FLOAT if name in ("sqrt", "pow") else INT
             case "range":
                 raise err("range(...) can only be used in a `for`", e)
         raise err(f"unknown built-in function {name!r}", e)
+
+
+def key_ok(t: Type) -> bool:
+    """Types usable as dict keys / set elements (ordered and hashable)."""
+    return t in (INT, STR, BOOL) or (isinstance(t, TupleT) and all(key_ok(x) for x in t.elems))
+
+
+def sortable(t: Type) -> bool:
+    return t == FLOAT or key_ok(t)
 
 
 def always_returns(body: list[ast.Stmt]) -> bool:

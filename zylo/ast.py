@@ -80,6 +80,43 @@ class Index(Node):
 
 
 @dataclass
+class TupleLit(Node):
+    items: list["Expr"]
+
+
+@dataclass
+class DictLit(Node):
+    keys: list["Expr"]
+    values: list["Expr"]
+
+
+@dataclass
+class SetLit(Node):
+    items: list["Expr"]
+
+
+@dataclass
+class Slice(Node):
+    """`xs[lo:hi]`; either bound may be missing."""
+    value: "Expr"
+    lo: "Expr | None"
+    hi: "Expr | None"
+
+
+@dataclass
+class FormatPart(Node):
+    """One `{expr:spec}` replacement field of an f-string."""
+    value: "Expr"
+    spec: str
+
+
+@dataclass
+class FString(Node):
+    """`f"text {expr} text"`: `parts` mixes literal `str`s and FormatParts."""
+    parts: list
+
+
+@dataclass
 class Attr(Node):
     """Acceso a un campo: `p.x`."""
     value: "Expr"
@@ -113,7 +150,7 @@ class Try(Node):
 
 
 Expr = (Int | Float | Str | Bool | Name | BinOp | UnaryOp | Call | ListLit | Index | Attr
-        | MethodCall | NoneLit | IsCheck | Try)
+        | MethodCall | NoneLit | IsCheck | Try | FString | TupleLit | DictLit | SetLit | Slice)
 
 
 # ---- sentencias ----------------------------------------------------------------
@@ -155,6 +192,17 @@ class For(Node):
     iter: Expr
     body: list["Stmt"]
     info: VarInfo | None = None
+    targets: list[str] | None = None  # `for a, b in ...`: unpack each element (var is then unused)
+    infos: list[VarInfo] | None = None
+
+
+@dataclass
+class Unpack(Node):
+    """`a, b = value`: every target is declared or reassigned (filled in by the checker)."""
+    targets: list[Name]
+    value: Expr
+    declares: list[bool] = dataclasses.field(default_factory=list)
+    vars: list[VarInfo] = dataclasses.field(default_factory=list)
 
 
 @dataclass
@@ -217,7 +265,7 @@ class FromImport(Node):
     names: list[tuple[str, str | None]]
 
 
-Stmt = (ExprStmt | Assign | If | While | For | Return | Break | Continue | FnDef | StructDef
+Stmt = (ExprStmt | Assign | Unpack | If | While | For | Return | Break | Continue | FnDef | StructDef
         | Import | FromImport)
 
 
@@ -228,7 +276,7 @@ class Program(Node):
 
 # ---- generic traversal -----------------------------------------------------------------------
 
-_ANNOTATIONS = {"ty", "var", "info", "then_bind", "else_bind", "after_bind"}
+_ANNOTATIONS = {"ty", "var", "vars", "info", "infos", "then_bind", "else_bind", "after_bind"}
 
 
 def children(node: Node) -> Iterator[Node]:
