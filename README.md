@@ -14,14 +14,24 @@ fn fib(n: int) -> int:
 print(fib(35))
 ```
 
-## Install and use
+## Install
 
-Zylo needs Python 3.11+ and [Rust](https://rustup.rs) (for `build` and `run`).
+Zylo compiles through Rust, so install [Rust](https://rustup.rs) first. Then:
 
 ```
-python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/pytest -q
+# Linux and macOS
+curl -fsSL https://raw.githubusercontent.com/Darkvus/zylo/main/install.sh | sh
 
+# Windows: download and run zylo-setup-x86_64.exe from the latest release
+# Any system with Python 3.11+
+pip install "zylo @ git+https://github.com/Darkvus/zylo.git"
+```
+
+Details, options and uninstalling: [docs/install.md](docs/install.md).
+
+## Use
+
+```
 zylo check examples/fib.zy        # syntax and types only
 zylo emit  examples/fib.zy        # print the generated Rust
 zylo run   examples/fib.zy        # compile and run (returns the program's exit code)

@@ -4,13 +4,23 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest]
         python: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
@@ -18,7 +28,90 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - uses: dtolnay/rust-toolchain@stable
-      - name: Instalar
-        run: pip install -e '.[dev]'
-      - name: Tests (incluye los end-to-end con rustc)
-        run: pytest -q
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+      - name: Tests (including the end-to-end ones that use rustc and git)
+        run: python -m pytest -q
+
+  windows:
+    name: smoke test (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+      - name: The compiler front end
+        run: python -m pytest -q tests/test_parser.py tests/test_checker.py tests/test_structs.py tests/test_option_result.py tests/test_collections.py
+      - name: Compile and run a program
+        run: |
+          zylo --version
+          zylo run examples/hello.zy
+
+  package:
+    name: package (wheel and standalone binary)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the wheel and the standalone binary
+        run: |
+          python -m pip install build pyinstaller .
+          python -m build
+          pyinstaller --onefile --name zylo --paths . --specpath build packaging/zylo_entry.py
+      - name: Smoke-test the standalone binary
+        run: |
+          ./dist/zylo --version
+          ./dist/zylo run examples/hello.zy
+
+  version-bump:
+    name: version is bumped
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Each pull request is one version
+        run: python scripts/check_version_bump.py "origin/${{ github.base_ref }}"
+
+  all-green:
+    name: all checks passed
+    if: always()
+    needs: [test, windows, package, version-bump]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any job failed or was cancelled
+        run: |
+          echo '${{ toJSON(needs) }}'
+          test "${{ contains(needs.*.result, 'failure') }}" = "false"
+          test "${{ contains(needs.*.result, 'cancelled') }}" = "false"
+
+  automerge:
+    name: approve and merge
+    needs: all-green
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Approve
+        continue-on-error: true  # needs "Allow GitHub Actions to create and approve pull requests"
+        run: gh pr review "$PR" --repo "$REPO" --approve --body "All checks passed."
+      - name: Merge (squash)
+        run: gh pr merge "$PR" --repo "$REPO" --squash --delete-branch
+      - name: Start the release
+        # a merge made with GITHUB_TOKEN does not trigger push workflows, so start the release explicitly
+        run: gh workflow run release.yml --repo "$REPO" --ref main
