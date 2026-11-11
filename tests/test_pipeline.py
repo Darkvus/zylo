@@ -1,10 +1,10 @@
 import pytest
 
-from zylo.checker import check
-from zylo.codegen import generate
-from zylo.errors import ZyloError
-from zylo.lexer import tokenize
-from zylo.parser import parse
+from zylo.domain.errors import ZyloError
+from zylo.generation.codegen import generate
+from zylo.semantics.checker import check
+from zylo.syntax.lexer import tokenize
+from zylo.syntax.parser import parse
 
 
 def test_lexer_basic():

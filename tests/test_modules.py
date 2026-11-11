@@ -3,10 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from zylo import cli
-from zylo.cli import load_program, main
-from zylo.checker import check
-from zylo.errors import ZyloError
+from zylo.application import compile as pipeline
+from zylo.application.compile import load_program
+from zylo.domain.errors import ZyloError
+from zylo.interface.cli import main
+from zylo.semantics.checker import check
 
 needs_rustc = pytest.mark.skipif(shutil.which("rustc") is None, reason="rustc not installed")
 
@@ -38,7 +39,7 @@ def project(tmp_path: Path, files: dict[str, str]) -> Path:
 
 
 def compile_ok(tmp_path: Path, files: dict[str, str]) -> str:
-    return cli.transpile(project(tmp_path, files))
+    return pipeline.transpile(project(tmp_path, files))
 
 
 def fails(tmp_path: Path, files: dict[str, str], match: str) -> ZyloError:
@@ -56,7 +57,7 @@ def run(tmp_path: Path, files: dict[str, str], capfd) -> tuple[int, str]:
 # ---- parsing --------------------------------------------------------------------------------
 
 def test_parse_import_forms():
-    from zylo.parser import parse
+    from zylo.syntax.parser import parse
     p = parse("import a.b.c\nimport a as x\nfrom a.b import f, g as h\n")
     assert (p.body[0].module, p.body[0].alias) == ("a.b.c", None)
     assert (p.body[1].module, p.body[1].alias) == ("a", "x")
@@ -64,7 +65,7 @@ def test_parse_import_forms():
 
 
 def test_parse_qualified_type():
-    from zylo.parser import parse
+    from zylo.syntax.parser import parse
     t = parse("p: geometry.Point = q\n").body[0].annotation
     assert t.name == "geometry.Point"
     t = parse("xs: list[geometry.Point] = []\n").body[0].annotation
@@ -218,7 +219,7 @@ def test_syntax_error_inside_a_library_points_at_the_library(tmp_path):
 
 def test_strings_cannot_use_imports():
     with pytest.raises(ZyloError, match="imports need a source file"):
-        cli.transpile_source("import x\n")
+        pipeline.transpile_source("import x\n")
 
 
 def test_cli_shows_the_library_snippet(tmp_path, capsys):

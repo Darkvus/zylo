@@ -2,18 +2,29 @@
 import re
 from pathlib import Path
 
-from . import env as envmod
-from .env import ENV_DIR, Env
-from .errors import PackageError
-from .lock import LOCK, Lock, dump_lock, load_lock
-from .manifest import (MANIFEST, Dependency, Manifest, check_name, dump_manifest, find_manifest, load_manifest,
-                       normalize_url, split_ref)
-from .packages import Installer
+from zylo.domain.errors import PackageError
+from zylo.infrastructure import git
+from zylo.packaging import env as envmod
+from zylo.packaging.env import ENV_DIR, Env
+from zylo.packaging.installer import Installer
+from zylo.packaging.lock import LOCK, Lock, dump_lock, load_lock
+from zylo.packaging.manifest import (
+    MANIFEST,
+    Dependency,
+    Manifest,
+    check_name,
+    dump_manifest,
+    find_manifest,
+    load_manifest,
+    normalize_url,
+    split_ref,
+)
 
 HELLO = 'print("hello from zylo")\n'
 
 
 def need_manifest(cwd: Path) -> Manifest:
+    """Load the project's manifest, found from `cwd` upwards, or fail with a hint to run `zylo init`."""
     path = find_manifest(cwd)
     if path is None:
         raise PackageError(f"no {MANIFEST} found here or in a parent directory; create one with `zylo init`")
@@ -21,6 +32,7 @@ def need_manifest(cwd: Path) -> Manifest:
 
 
 def need_env(cwd: Path, explicit: str | None = None) -> Env:
+    """Find the active environment, or fail with a hint to run `zylo venv`."""
     env = envmod.discover(cwd, explicit)
     if env is None:
         raise PackageError("no virtual environment found; create one with `zylo venv`")
@@ -28,11 +40,21 @@ def need_env(cwd: Path, explicit: str | None = None) -> Env:
 
 
 def save(manifest: Manifest, lock: Lock) -> None:
+    """Write the manifest and the lock file."""
     manifest.path.write_text(dump_manifest(manifest))
     (manifest.root / LOCK).write_text(dump_lock(lock))
 
 
 def summarize(before: Lock, after: Lock) -> list[str]:
+    """Describe what an installation changed.
+
+    Args:
+        before: The lock before.
+        after: The lock after.
+
+    Returns:
+        One line per package installed, updated or removed.
+    """
     lines = []
     for name in sorted(after.entries):
         e, old = after.entries[name], before.entries.get(name)
@@ -47,6 +69,15 @@ def summarize(before: Lock, after: Lock) -> list[str]:
 
 
 def cmd_init(cwd: Path, name: str | None) -> int:
+    """Create `zylo.toml`, `src/main.zy` and a `.gitignore` for a new project.
+
+    Args:
+        cwd: The project directory.
+        name: Package name; defaults to the directory's name.
+
+    Returns:
+        The exit code.
+    """
     if (cwd / MANIFEST).exists():
         raise PackageError(f"{MANIFEST} already exists here")
     name = check_name(name or re.sub(r"\W", "_", cwd.resolve().name))
@@ -66,6 +97,16 @@ def cmd_init(cwd: Path, name: str | None) -> int:
 
 
 def cmd_venv(cwd: Path, path: str | None, force: bool) -> int:
+    """Create a virtual environment.
+
+    Args:
+        cwd: The current directory.
+        path: Where to create it; defaults to `.zylo-env` in `cwd`.
+        force: Recreate it if it exists.
+
+    Returns:
+        The exit code.
+    """
     root = Path(path) if path else cwd / ENV_DIR
     Env.create(root, force)
     print(f"created {root}\nnext: `zylo add <source>` to install a package, or `zylo install` to install from {MANIFEST}")
@@ -73,9 +114,19 @@ def cmd_venv(cwd: Path, path: str | None, force: bool) -> int:
 
 
 def cmd_install(cwd: Path, env_dir: str | None = None, update: bool = False) -> int:
+    """Make the environment match `zylo.toml` and `zylo.lock`.
+
+    Args:
+        cwd: The project directory.
+        env_dir: Environment to use, or None to discover one.
+        update: Resolve refs again instead of using the lock.
+
+    Returns:
+        The exit code.
+    """
     manifest, env = need_manifest(cwd), need_env(cwd, env_dir)
     before = load_lock(manifest.root / LOCK)
-    after = Installer(env, manifest, before, update).sync()
+    after = Installer(env, manifest, before, git.fetch, update).sync()
     save(manifest, after)
     lines = summarize(before, after)
     print("\n".join(lines) if lines else "environment is up to date")
@@ -83,9 +134,21 @@ def cmd_install(cwd: Path, env_dir: str | None = None, update: bool = False) -> 
 
 
 def cmd_add(cwd: Path, source: str, name: str | None, as_path: bool, env_dir: str | None = None) -> int:
+    """Add a dependency to `zylo.toml`, install it and update the lock.
+
+    Args:
+        cwd: The project directory.
+        source: `host/user/repo[@ref]`, a git URL, or (with `as_path`) a directory.
+        name: Dependency name, for packages that do not declare one.
+        as_path: Treat `source` as a local directory.
+        env_dir: Environment to use, or None to discover one.
+
+    Returns:
+        The exit code.
+    """
     manifest, env = need_manifest(cwd), need_env(cwd, env_dir)
     before = load_lock(manifest.root / LOCK)
-    inst = Installer(env, manifest, before)
+    inst = Installer(env, manifest, before, git.fetch)
     if as_path:
         pkg_manifest = Path(source) / MANIFEST
         found = load_manifest(pkg_manifest).name if pkg_manifest.is_file() else name or re.sub(r"\W", "_", Path(source).resolve().name)
@@ -110,18 +173,37 @@ def cmd_add(cwd: Path, source: str, name: str | None, as_path: bool, env_dir: st
 
 
 def cmd_remove(cwd: Path, name: str, env_dir: str | None = None) -> int:
+    """Remove a dependency and prune the environment.
+
+    Args:
+        cwd: The project directory.
+        name: The dependency's name.
+        env_dir: Environment to use, or None to discover one.
+
+    Returns:
+        The exit code.
+    """
     manifest, env = need_manifest(cwd), need_env(cwd, env_dir)
     if name not in manifest.dependencies:
         raise PackageError(f"{name!r} is not a dependency of this project")
     del manifest.dependencies[name]
     before = load_lock(manifest.root / LOCK)
-    after = Installer(env, manifest, before).sync()
+    after = Installer(env, manifest, before, git.fetch).sync()
     save(manifest, after)
     print("\n".join(summarize(before, after)))
     return 0
 
 
 def cmd_list(cwd: Path, env_dir: str | None = None) -> int:
+    """Print the installed packages with their version, source and commit.
+
+    Args:
+        cwd: The project directory.
+        env_dir: Environment to use, or None to discover one.
+
+    Returns:
+        The exit code.
+    """
     env = need_env(cwd, env_dir)
     path = find_manifest(cwd)
     lock = load_lock(path.parent / LOCK) if path else Lock()

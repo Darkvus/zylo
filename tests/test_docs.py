@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from zylo.checker import check
-from zylo.parser import parse
+from zylo.semantics.checker import check
+from zylo.syntax.parser import parse
 
 ROOT = Path(__file__).parent.parent
 DOCS = [ROOT / "README.md", ROOT / "docs" / "guide.md"]

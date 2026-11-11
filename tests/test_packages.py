@@ -5,11 +5,19 @@ from pathlib import Path
 
 import pytest
 
-from zylo import env as envmod
-from zylo.cli import main
-from zylo.errors import PackageError
-from zylo.lock import load_lock
-from zylo.manifest import (Dependency, Manifest, dump_manifest, load_manifest, normalize_url, package_layout, split_ref)
+from zylo.domain.errors import PackageError
+from zylo.interface.cli import main
+from zylo.packaging import env as envmod
+from zylo.packaging.lock import load_lock
+from zylo.packaging.manifest import (
+    Dependency,
+    Manifest,
+    dump_manifest,
+    load_manifest,
+    normalize_url,
+    package_layout,
+    split_ref,
+)
 
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 needs_rustc = pytest.mark.skipif(shutil.which("rustc") is None, reason="rustc not installed")

@@ -5,8 +5,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .cargo import toml_value, validate_rust_dep
-from .errors import PackageError
+from zylo.domain.errors import PackageError
+from zylo.packaging.rust_deps import toml_value, validate_rust_dep
 
 MANIFEST = "zylo.toml"
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -47,6 +47,14 @@ def split_ref(spec: str) -> tuple[str, str | None]:
 
 @dataclass
 class Dependency:
+    """A package a project depends on.
+
+    Attributes:
+        name: The name it is imported by.
+        git: Normalized git URL, for git dependencies.
+        ref: Tag, branch or commit.
+        path: Local directory, for path dependencies.
+    """
     name: str
     git: str | None = None   # normalized URL
     ref: str | None = None   # tag, branch or commit
@@ -54,15 +62,29 @@ class Dependency:
 
     @property
     def is_path(self) -> bool:
+        """Whether this is a local-directory dependency."""
         return self.path is not None
 
     def to_toml_value(self) -> str:
+        """Render the dependency as the value in `[dependencies]`."""
         if self.path is not None:
             return "{ path = " + json.dumps(self.path) + " }"
         return json.dumps(self.git + (f"@{self.ref}" if self.ref else ""))
 
 
 def parse_dependency(name: str, value: object) -> Dependency:
+    """Read one entry of `[dependencies]`.
+
+    Args:
+        name: The dependency's name.
+        value: A `"host/user/repo@ref"` string or a table with `git`/`ref` or `path`.
+
+    Returns:
+        The dependency.
+
+    Raises:
+        PackageError: If the name or the value is invalid.
+    """
     check_name(name, "dependency name")
     if isinstance(value, str):
         src, ref = split_ref(value)
@@ -80,6 +102,17 @@ def parse_dependency(name: str, value: object) -> Dependency:
 
 @dataclass
 class Manifest:
+    """A `zylo.toml`.
+
+    Attributes:
+        name: Package name.
+        version: Package version.
+        entry: Entry file for libraries, relative to the manifest.
+        dependencies: Zylo dependencies by name.
+        path: Where it was loaded from.
+        rust_dependencies: Cargo-style crate requirements.
+        trusted_packages: Packages allowed to call Rust.
+    """
     name: str
     version: str = "0.1.0"
     entry: str | None = None
@@ -90,10 +123,22 @@ class Manifest:
 
     @property
     def root(self) -> Path:
+        """The directory containing the manifest."""
         return self.path.parent if self.path else Path.cwd()
 
 
 def load_manifest(path: Path) -> Manifest:
+    """Read and validate a manifest.
+
+    Args:
+        path: The `zylo.toml` file.
+
+    Returns:
+        The manifest.
+
+    Raises:
+        PackageError: If the file is missing, is not valid TOML, or holds an invalid name or dependency.
+    """
     try:
         data = tomllib.loads(path.read_text())
     except OSError as e:
@@ -110,6 +155,14 @@ def load_manifest(path: Path) -> Manifest:
 
 
 def dump_manifest(m: Manifest) -> str:
+    """Render a manifest as TOML.
+
+    Args:
+        m: The manifest.
+
+    Returns:
+        TOML text (comments in a previous file are not preserved).
+    """
     lines = ["[package]", f"name = {json.dumps(m.name)}", f"version = {json.dumps(m.version)}"]
     if m.entry:
         lines.append(f"entry = {json.dumps(m.entry)}")

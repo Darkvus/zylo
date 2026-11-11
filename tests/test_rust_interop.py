@@ -3,15 +3,17 @@ from pathlib import Path
 
 import pytest
 
-from zylo import ast, cli
-from zylo.cargo import cargo_toml, validate_rust_dep
-from zylo.checker import check
-from zylo.cli import main
-from zylo.env import Env
-from zylo.errors import PackageError, ZyloError
-from zylo.manifest import Manifest, dump_manifest, load_manifest
-from zylo.parser import parse
-from zylo.types import FLOAT, INT, STR, ResultT
+from zylo.application import compile as pipeline
+from zylo.domain import ast
+from zylo.domain.errors import PackageError, ZyloError
+from zylo.domain.types import FLOAT, INT, STR, ResultT
+from zylo.infrastructure.cargo import cargo_toml
+from zylo.interface.cli import main
+from zylo.packaging.env import Env
+from zylo.packaging.manifest import Manifest, dump_manifest, load_manifest
+from zylo.packaging.rust_deps import validate_rust_dep
+from zylo.semantics.checker import check
+from zylo.syntax.parser import parse
 
 needs_rustc = pytest.mark.skipif(shutil.which("rustc") is None, reason="rustc not installed")
 needs_cargo = pytest.mark.skipif(shutil.which("cargo") is None, reason="cargo not installed")
@@ -66,7 +68,7 @@ def test_extern_fn_may_shadow_a_shadowable_builtin():
 # ---- generated Rust ------------------------------------------------------------------------------------
 
 def test_path_form_and_template_form_expand_by_value():
-    rs = cli.transpile_source('extern fn hypot(a: float, b: float) -> float = "f64::hypot"\nextern fn shout(s: str) -> str = "{0}.to_uppercase()"\n'
+    rs = pipeline.transpile_source('extern fn hypot(a: float, b: float) -> float = "f64::hypot"\nextern fn shout(s: str) -> str = "{0}.to_uppercase()"\n'
                               'name = "ana"\nprint(hypot(3.0, 4.0))\nprint(shout(name), shout(name))\n')
     assert "(f64::hypot(3.0f64, 4.0f64))" in rs
     assert rs.count("((name.clone()).to_uppercase())") == 2
@@ -74,7 +76,7 @@ def test_path_form_and_template_form_expand_by_value():
 
 
 def test_placeholders_can_repeat_and_braces_survive():
-    rs = cli.transpile_source('extern fn show(n: int) -> str = "format!(\\"{:x}-{0}\\", {0})"\nprint(show(255))\n')
+    rs = pipeline.transpile_source('extern fn show(n: int) -> str = "format!(\\"{:x}-{0}\\", {0})"\nprint(show(255))\n')
     assert 'format!("{:x}-(255i64)", (255i64))' in rs  # every {0}, even inside the Rust string, is replaced
 
 
@@ -177,7 +179,7 @@ def test_without_rust_dependencies_cargo_is_not_needed(tmp_path, monkeypatch):
     app.mkdir()
     (app / "zylo.toml").write_text('[package]\nname = "app"\n')
     (app / "main.zy").write_text("print(1)\n")
-    rs, crates, manifest = cli.compile_file(app / "main.zy")
+    rs, crates, manifest = pipeline.compile_file(app / "main.zy")
     assert crates == {} and manifest.name == "app"
 
 
@@ -202,7 +204,7 @@ PKG = {"zylo.toml": '[package]\nname = "rustpkg"\n', "src/lib.zy": 'extern fn sh
 def test_a_package_with_extern_fn_is_rejected_unless_trusted(tmp_path):
     main_zy = project_with_package(tmp_path, PKG)
     with pytest.raises(ZyloError) as e:
-        cli.compile_file(main_zy)
+        pipeline.compile_file(main_zy)
     assert "package 'rustpkg' declares `extern fn`" in e.value.msg and "trusted-packages" in e.value.msg
     assert e.value.file.endswith("lib.zy") and e.value.line == 1
 
@@ -218,26 +220,26 @@ def test_a_trusted_package_may_use_extern_fn(tmp_path, monkeypatch, capfd):
 def test_crates_declared_by_packages_are_ignored_unless_trusted(tmp_path):
     files = {**PKG, "zylo.toml": '[package]\nname = "rustpkg"\n[rust-dependencies]\nrand = "0.8"\n'}
     main_zy = project_with_package(tmp_path, files)
-    manifest, env = cli.project_context(main_zy)
-    assert cli.rust_crates(manifest, env) == {}
+    manifest, env = pipeline.project_context(main_zy)
+    assert pipeline.rust_crates(manifest, env) == {}
     main_zy = project_with_package(tmp_path, files, '[rust]\ntrusted-packages = ["rustpkg"]\n')
-    manifest, env = cli.project_context(main_zy)
-    assert cli.rust_crates(manifest, env) == {"rand": "0.8"}
+    manifest, env = pipeline.project_context(main_zy)
+    assert pipeline.rust_crates(manifest, env) == {"rand": "0.8"}
 
 
 def test_trusted_package_crates_cannot_use_paths_or_conflict(tmp_path):
     files = {**PKG, "zylo.toml": '[package]\nname = "rustpkg"\n[rust-dependencies]\nevil = { path = "/etc" }\n'}
-    manifest, env = cli.project_context(project_with_package(tmp_path, files, '[rust]\ntrusted-packages = ["rustpkg"]\n'))
+    manifest, env = pipeline.project_context(project_with_package(tmp_path, files, '[rust]\ntrusted-packages = ["rustpkg"]\n'))
     with pytest.raises(PackageError):
-        cli.rust_crates(manifest, env)
+        pipeline.rust_crates(manifest, env)
     files = {**PKG, "zylo.toml": '[package]\nname = "rustpkg"\n[rust-dependencies]\nrand = "0.9"\n'}
-    manifest, env = cli.project_context(project_with_package(tmp_path, files, '[rust]\ntrusted-packages = ["rustpkg"]\n[rust-dependencies]\nrand = "0.8"\n'))
+    manifest, env = pipeline.project_context(project_with_package(tmp_path, files, '[rust]\ntrusted-packages = ["rustpkg"]\n[rust-dependencies]\nrand = "0.8"\n'))
     with pytest.raises(PackageError, match="conflicting requirements for crate 'rand'"):
-        cli.rust_crates(manifest, env)
+        pipeline.rust_crates(manifest, env)
 
 
 def test_local_modules_may_use_extern_fn_without_trust(tmp_path):
     (tmp_path / "ffi.zy").write_text('extern fn twice(n: int) -> int = "{0} * 2"\n')
     (tmp_path / "main.zy").write_text("from ffi import twice\nprint(twice(4))\n")
-    rs, _, _ = cli.compile_file(tmp_path / "main.zy")
+    rs, _, _ = pipeline.compile_file(tmp_path / "main.zy")
     assert "((4i64) * 2)" in rs

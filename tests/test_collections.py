@@ -1,11 +1,11 @@
 import pytest
 
-from zylo import ast
-from zylo.checker import check
-from zylo.errors import ZyloError
-from zylo.lexer import tokenize
-from zylo.parser import parse
-from zylo.types import BOOL, FLOAT, INT, STR, UNIT, DictT, ListT, OptionT, SetT, TupleT
+from zylo.domain import ast
+from zylo.domain.errors import ZyloError
+from zylo.domain.types import BOOL, FLOAT, INT, STR, DictT, ListT, OptionT, SetT, TupleT
+from zylo.semantics.checker import check
+from zylo.syntax.lexer import tokenize
+from zylo.syntax.parser import parse
 
 
 def checked(src: str) -> ast.Program:

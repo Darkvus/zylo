@@ -1,9 +1,14 @@
-from . import ast
-from .errors import ZyloError
-import dataclasses
-import re
+"""Parser: tokens to a syntax tree.
 
-from .lexer import Token, tokenize, unescape
+A hand-written recursive-descent parser. Statements are dispatched on their leading keyword; expressions use
+precedence climbing. It knows the grammar only: whether names and types exist is the checker's concern.
+"""
+
+import dataclasses
+
+from zylo.domain import ast
+from zylo.domain.errors import ZyloError
+from zylo.syntax.lexer import Token, tokenize, unescape
 
 # precedence: higher binds tighter. `not` is unary and handled in parse_unary.
 PRECEDENCE = {
@@ -27,11 +32,28 @@ KIND_NAMES = {
 
 
 def describe(tok: Token) -> str:
+    """Describe a token for an error message.
+
+    Args:
+        tok: The token that was found.
+
+    Returns:
+        Its text in quotes, or a readable name such as "end of line" for tokens without text.
+    """
     return repr(tok.value) if tok.value else KIND_NAMES.get(tok.kind, tok.kind)
 
 
 class Parser:
+    """Recursive-descent parser over a token list.
+
+    Use `parse()` rather than this class directly.
+    """
     def __init__(self, tokens: list[Token]):
+        """Create a parser.
+
+        Args:
+            tokens: The token list produced by `tokenize`.
+        """
         self.toks = tokens
         self.pos = 0
 
@@ -39,24 +61,64 @@ class Parser:
 
     @property
     def cur(self) -> Token:
+        """The token being looked at."""
         return self.toks[self.pos]
 
     def peek(self, offset: int = 1) -> Token:
+        """Look ahead without consuming.
+
+        Args:
+            offset: How many tokens ahead (1 is the next one).
+
+        Returns:
+            That token, or the last token if it is past the end.
+        """
         return self.toks[min(self.pos + offset, len(self.toks) - 1)]
 
     def advance(self) -> Token:
+        """Consume and return the current token."""
         tok = self.cur
         self.pos += 1
         return tok
 
     def check(self, kind: str, value: str | None = None) -> bool:
+        """Test the current token.
+
+        Args:
+            kind: Expected token kind.
+            value: Expected text, or None to accept any.
+
+        Returns:
+            True if the current token matches.
+        """
         tok = self.cur
         return tok.kind == kind and (value is None or tok.value == value)
 
     def match(self, kind: str, value: str | None = None) -> Token | None:
+        """Consume the current token if it matches.
+
+        Args:
+            kind: Expected token kind.
+            value: Expected text, or None to accept any.
+
+        Returns:
+            The consumed token, or None when it did not match.
+        """
         return self.advance() if self.check(kind, value) else None
 
     def expect(self, kind: str, value: str | None = None) -> Token:
+        """Consume the current token, which must match.
+
+        Args:
+            kind: Expected token kind.
+            value: Expected text, or None to accept any.
+
+        Returns:
+            The consumed token.
+
+        Raises:
+            ZyloError: If the current token does not match.
+        """
         tok = self.cur
         if tok.kind != kind or (value is not None and tok.value != value):
             want = repr(value) if value else KIND_NAMES.get(kind, kind)
@@ -66,12 +128,25 @@ class Parser:
     # ---- programa y bloques -------------------------------------------------------
 
     def parse_program(self) -> ast.Program:
+        """Parse a whole module.
+
+        Returns:
+            The program: every top-level statement in order.
+        """
         body = []
         while not self.check("EOF"):
             body.append(self.parse_stmt())
         return ast.Program(body, line=1, col=1)
 
     def parse_block(self) -> list[ast.Stmt]:
+        """Parse `: NEWLINE INDENT statements DEDENT`.
+
+        Returns:
+            The statements of the indented block.
+
+        Raises:
+            ZyloError: If the block is missing or never closed.
+        """
         self.expect("OP", ":")
         self.expect("NEWLINE")
         if not self.check("INDENT"):
@@ -88,6 +163,11 @@ class Parser:
     # ---- sentencias ---------------------------------------------------------------
 
     def parse_stmt(self) -> ast.Stmt:
+        """Parse one statement, dispatching on its leading keyword.
+
+        Returns:
+            The statement node.
+        """
         tok = self.cur
         if tok.kind == "INDENT":
             raise ZyloError("unexpected indentation", tok.line, tok.col)
@@ -175,6 +255,7 @@ class Parser:
             raise ZyloError("cannot assign to this expression", start.line, start.col)
 
     def parse_if(self) -> ast.If:
+        """Parse an `if` statement with its `elif` and `else` branches."""
         kw = self.advance()  # `if` o `elif`
         cond = self.parse_expr()
         then = self.parse_block()
@@ -186,11 +267,13 @@ class Parser:
         return ast.If(cond, then, else_, line=kw.line, col=kw.col)
 
     def parse_while(self) -> ast.While:
+        """Parse a `while` loop."""
         kw = self.advance()
         cond = self.parse_expr()
         return ast.While(cond, self.parse_block(), line=kw.line, col=kw.col)
 
     def parse_for(self) -> ast.For:
+        """Parse a `for` loop, including tuple unpacking (`for a, b in xs`)."""
         kw = self.advance()
         names = [self.expect("IDENT").value]
         while self.match("OP", ","):
@@ -201,12 +284,22 @@ class Parser:
         return ast.For(names[0], it, body, targets=names if len(names) > 1 else None, line=kw.line, col=kw.col)
 
     def parse_return(self) -> ast.Return:
+        """Parse a `return`, with an optional value or tuple (`return a, b`)."""
         kw = self.advance()
         value = None if self.check("NEWLINE") else self.tuple_tail(self.parse_expr(), self.cur)
         self.expect("NEWLINE")
         return ast.Return(value, line=kw.line, col=kw.col)
 
     def parse_fn(self, in_struct: bool = False, extern: bool = False) -> ast.FnDef:
+        """Parse a function, a method or an `extern fn`.
+
+        Args:
+            in_struct: True inside a struct body, where a leading `self` parameter is allowed.
+            extern: True when the `extern` keyword was already consumed: the body is a Rust string after `=`.
+
+        Returns:
+            The function node (an `ExternFn` when `extern` is True).
+        """
         kw = self.advance()
         name = self.expect("IDENT").value
         self.expect("OP", "(")
@@ -237,6 +330,7 @@ class Parser:
         return self.check("IDENT", "self") and not (nxt.kind == "OP" and nxt.value == ":")
 
     def parse_dotted(self) -> str:
+        """Parse a dotted name such as `utils.text` and return it as one string."""
         name = self.expect("IDENT").value
         while self.check("OP", "."):
             self.advance()
@@ -244,6 +338,7 @@ class Parser:
         return name
 
     def parse_import(self) -> ast.Import:
+        """Parse `import a.b [as c]`."""
         kw = self.advance()
         module = self.parse_dotted()
         alias = self.expect("IDENT").value if self.match("KW", "as") else None
@@ -251,6 +346,7 @@ class Parser:
         return ast.Import(module, alias, line=kw.line, col=kw.col)
 
     def parse_from_import(self) -> ast.FromImport:
+        """Parse `from a.b import x [as y], ...`."""
         kw = self.advance()
         module = self.parse_dotted()
         self.expect("KW", "import")
@@ -265,7 +361,12 @@ class Parser:
         return ast.FromImport(module, names, line=kw.line, col=kw.col)
 
     def parse_struct(self) -> ast.StructDef:
-        kw = self.advance()
+        """Parse a struct: its fields (`name: type`) and methods (`fn`).
+
+        Raises:
+            ZyloError: If the body contains anything else.
+        """
+        self.advance()
         name = self.expect("IDENT")
         self.expect("OP", ":")
         self.expect("NEWLINE")
@@ -292,6 +393,11 @@ class Parser:
         return ast.StructDef(name.value, fields, methods, line=name.line, col=name.col)
 
     def parse_param(self) -> ast.Param:
+        """Parse one `name: type` parameter.
+
+        Raises:
+            ZyloError: If the type is missing, or the name is `self` outside a method.
+        """
         name = self.expect("IDENT")
         if name.value == "self":
             raise ZyloError("`self` can only be the first parameter of a method, inside a struct", name.line, name.col)
@@ -303,6 +409,11 @@ class Parser:
     # ---- tipos --------------------------------------------------------------------
 
     def parse_type(self) -> ast.TypeRef:
+        """Parse a type: `int`, `list[T]`, `tuple[A, B]`, `dict[K, V]`, `set[T]`, `Result[T, E]`, `mod.Struct`, with `?` suffixes.
+
+        Raises:
+            ZyloError: On a nested optional (`T??`) or a malformed type.
+        """
         tok = self.expect("IDENT")
         name = tok.value
         while self.check("OP", ".") and self.peek().kind == "IDENT":  # qualified: module.Struct
@@ -348,6 +459,14 @@ class Parser:
     # ---- expresiones ----------------------------------------------------------------
 
     def parse_expr(self, min_prec: int = 1) -> ast.Expr:
+        """Parse an expression with precedence climbing.
+
+        Args:
+            min_prec: Only operators binding at least this tightly are consumed.
+
+        Returns:
+            The expression node.
+        """
         left = self.parse_unary()
         while True:
             if self.check("KW", "is") and IS_PREC >= min_prec:
@@ -368,6 +487,14 @@ class Parser:
             left = ast.BinOp(op.value, left, right, line=op.line, col=op.col)
 
     def parse_is(self, left: ast.Expr) -> ast.IsCheck:
+        """Parse the right side of `x is some|none|ok|err`.
+
+        Args:
+            left: The already parsed left operand.
+
+        Returns:
+            The `IsCheck` node.
+        """
         kw = self.advance()
         tok = self.cur
         if tok.value not in IS_KINDS or tok.kind not in ("IDENT", "KW"):
@@ -379,6 +506,7 @@ class Parser:
         return self.cur.kind in ("OP", "KW") and self.cur.value in PRECEDENCE
 
     def parse_unary(self) -> ast.Expr:
+        """Parse a prefix `-` or `not`, or fall through to a postfix expression."""
         tok = self.cur
         if tok.kind == "OP" and tok.value == "-":
             self.advance()
@@ -389,6 +517,7 @@ class Parser:
         return self.parse_postfix()
 
     def parse_postfix(self) -> ast.Expr:
+        """Parse a primary expression followed by any indexes, slices, attributes, method calls and `?`."""
         expr = self.parse_primary()
         while True:
             if self.check("OP", "["):
@@ -415,6 +544,11 @@ class Parser:
                 return expr
 
     def parse_primary(self) -> ast.Expr:
+        """Parse a literal, name, call, parenthesised expression or tuple, list, dict or set display.
+
+        Raises:
+            ZyloError: If the token cannot start an expression.
+        """
         tok = self.advance()
         pos = {"line": tok.line, "col": tok.col}
         if tok.kind == "INT":
@@ -474,6 +608,17 @@ class Parser:
         return ast.SetLit(items, **pos)
 
     def parse_fstring(self, tok: Token) -> ast.FString:
+        """Split an f-string into literal text and `{expression:spec}` fields.
+
+        Args:
+            tok: The raw f-string token.
+
+        Returns:
+            The `FString` node.
+
+        Raises:
+            ZyloError: On an unterminated or empty field, or a stray `}`.
+        """
         raw, parts, buf, i = tok.value, [], [], 0
 
         def flush() -> None:
@@ -528,6 +673,14 @@ class Parser:
 
     @staticmethod
     def split_spec(inner: str) -> tuple[str, str]:
+        """Split `expr:spec` at the first top-level colon.
+
+        Args:
+            inner: The text between the braces of an f-string field.
+
+        Returns:
+            The expression text and the format specification (empty when there is none).
+        """
         depth, quote = 0, None
         for k, ch in enumerate(inner):
             if quote:
@@ -558,6 +711,7 @@ class Parser:
         return expr
 
     def parse_args(self) -> list[ast.Expr]:
+        """Parse a parenthesised, comma-separated argument list."""
         self.expect("OP", "(")
         args: list[ast.Expr] = []
         if not self.check("OP", ")"):
@@ -568,6 +722,7 @@ class Parser:
         return args
 
     def parse_call(self, name: Token) -> ast.Call:
+        """Parse the arguments of a call to the function named by `name`."""
         return ast.Call(name.value, self.parse_args(), line=name.line, col=name.col)
 
 

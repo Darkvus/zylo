@@ -38,16 +38,9 @@ skipped silently — run `source ~/.cargo/env` first.
 .zy ──lexer──▶ tokens ──parser──▶ AST ──checker──▶ typed AST ──codegen──▶ Rust ──rustc──▶ binary
 ```
 
-| Module | Responsibility |
-|---|---|
-| `zylo/lexer.py` | Tokens, INDENT/DEDENT, positions |
-| `zylo/ast.py` | Nodes (all carry `line`, `col`, `ty`) |
-| `zylo/parser.py` | Hand-written recursive descent |
-| `zylo/types.py`, `zylo/checker.py` | Types, local inference, scopes, mutability, narrowing |
-| `zylo/codegen.py` | Typed AST → Rust |
-| `zylo/linker.py` | Resolves `import`s and merges modules into one program |
-| `zylo/manifest.py`, `zylo/env.py`, `zylo/lock.py`, `zylo/gitfetch.py`, `zylo/packages.py`, `zylo/pkgcmds.py` | `zylo.toml`, virtual environments, the lock file, git download and the package commands |
-| `zylo/diagnostics.py`, `zylo/cli.py` | Readable errors and the commands |
+The package is split into layers (`domain`, `syntax`, `semantics`, `generation`, `packaging`, `infrastructure`,
+`application`, `interface`), and dependencies only point inwards. [docs/architecture.md](docs/architecture.md)
+explains each layer, the ubiquitous language and where new code goes; `tests/test_architecture.py` enforces the rules.
 
 Design reasons are in [docs/design.md](docs/design.md); the language is described in
 [docs/guide.md](docs/guide.md).
@@ -64,6 +57,9 @@ Always work **vertically**: a new construct goes through the whole pipeline befo
 
 ## Conventions
 
+- **Docstrings follow the Google style** (`Args`, `Returns`, `Raises`, `Attributes`) on every public module, class,
+  function and method. Run `ruff check .` before pushing; CI runs it too (add `--fix` for import order).
+- Imports are absolute (`from zylo.domain.errors import ZyloError`), never relative.
 - Commit messages and documentation are written in **English**.
 - User mistakes are `ZyloError` with a line and column; a `rustc` failure on generated code is a Zylo bug (`BackendError`).
 - No implicit coercions between types: this is a design decision.

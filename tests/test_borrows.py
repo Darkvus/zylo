@@ -3,10 +3,10 @@ import shutil
 
 import pytest
 
-from zylo import ast
-from zylo.checker import check
-from zylo.cli import transpile_source
-from zylo.parser import parse
+from zylo.application.compile import transpile_source
+from zylo.domain import ast
+from zylo.semantics.checker import check
+from zylo.syntax.parser import parse
 
 needs_rustc = pytest.mark.skipif(shutil.which("rustc") is None, reason="rustc not installed")
 
@@ -95,10 +95,11 @@ def test_a_borrowed_parameter_can_be_passed_on_and_iterated():
 
 @needs_rustc
 def test_borrowed_calls_keep_value_semantics():
-    from zylo.cli import compile_rust
     import subprocess
-    from pathlib import Path
     import tempfile
+    from pathlib import Path
+
+    from zylo.infrastructure.rustc import compile_rust
     src = ("fn evil(xs: list[int]) -> int:\n    xs[0] = 100\n    return xs[0]\n"
            "fn peek(xs: list[int]) -> int:\n    return xs[0]\n"
            "data = [1, 2]\nprint(evil(data), peek(data), data)\n")

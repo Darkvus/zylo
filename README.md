@@ -127,4 +127,4 @@ Every one is compiled and checked in the test suite.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Zylo is licensed under the MIT license.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/architecture.md](docs/architecture.md) for how the code is organised. Zylo is licensed under the MIT license.

@@ -2,6 +2,8 @@
 
 Why Zylo works the way it does. For the language itself, see the [guide](guide.md).
 
+How the code is organised into layers and bounded contexts is described in [architecture.md](architecture.md).
+
 ## Goals
 
 Python-like syntax, static typing with local inference, and native speed by compiling to Rust.

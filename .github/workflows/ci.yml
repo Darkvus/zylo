@@ -33,6 +33,18 @@ jobs:
       - name: Tests (including the end-to-end ones that use rustc and git)
         run: python -m pytest -q
 
+  lint:
+    name: lint (docstrings, style, imports)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ruff
+      - name: Ruff (Google-style docstrings, pyflakes, pycodestyle, import order)
+        run: ruff check .
+
   windows:
     name: smoke test (windows)
     runs-on: windows-latest
@@ -84,7 +96,7 @@ jobs:
   all-green:
     name: all checks passed
     if: always()
-    needs: [test, windows, package, version-bump]
+    needs: [test, lint, windows, package, version-bump]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any job failed or was cancelled
