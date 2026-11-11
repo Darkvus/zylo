@@ -1,0 +1,6 @@
+if true:
+    a = 1
+    print(a)
+if true:
+    a = "s"
+    print(a)

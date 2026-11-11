@@ -1,7 +1,7 @@
 # Lumo
 
 Lenguaje con sintaxis tipo Python, tipado estático e inferencia local, que transpila a Rust.
-Extensión de archivo: `.lm`. **Estado: en desarrollo temprano (fase 3 de 6).**
+Extensión de archivo: `.lm`. **Estado: en desarrollo temprano (fase 4 de 6).**
 
 ```
 fn fib(n: int) -> int:
@@ -21,8 +21,8 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/lumo run examples/hello.lm    # compilar con rustc y ejecutar
 ```
 
-Hoy funcionan el lexer, el parser y el chequeo de tipos; el codegen completo
-están en el [plan](PLAN.md).
+Hoy funciona el pipeline completo (lexer, parser, tipos, codegen y ejecución con rustc); faltan la CLI pulida y el benchmark, ver
+[PLAN.md](PLAN.md).
 
 ## Licencia
 

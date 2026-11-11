@@ -1,0 +1,22 @@
+xs = [3, 1, 2]
+append(xs, 10)
+xs[0] = 99
+print(xs)
+print(len(xs))
+print(xs[3])
+ys = xs
+ys[1] = 0
+print(xs[1])
+print(ys[1])
+total = 0
+for x in xs:
+    total += x
+print(total)
+words: list[str] = []
+append(words, "a")
+append(words, "b")
+print(len(words))
+grid = [[1, 2], [3, 4]]
+grid[1][0] = 7
+print(grid[1][0] + grid[0][1])
+print(grid)

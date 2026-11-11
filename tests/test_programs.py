@@ -1,0 +1,38 @@
+"""Tests de extremo a extremo: .lm -> Rust -> rustc -> ejecución, comparando la salida.
+
+Cada `tests/programs/X.lm` con `X.out` debe imprimir exactamente ese contenido.
+Se omiten si `rustc` no está instalado.
+"""
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from lumo.cli import compile_rust, transpile
+
+PROGRAMS = Path(__file__).parent / "programs"
+
+pytestmark = pytest.mark.skipif(shutil.which("rustc") is None, reason="rustc no instalado")
+
+
+def build(lm: Path, tmp_path: Path) -> Path:
+    exe = tmp_path / "prog"
+    compile_rust(transpile(lm), exe)
+    return exe
+
+
+@pytest.mark.parametrize("lm", sorted(PROGRAMS.glob("*.out")), ids=lambda p: p.stem)
+def test_program_output(lm: Path, tmp_path: Path):
+    src = lm.with_suffix(".lm")
+    exe = build(src, tmp_path)
+    r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == lm.read_text()
+
+
+def test_integer_overflow_panics(tmp_path: Path):
+    exe = build(PROGRAMS / "overflow.lm", tmp_path)
+    r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 101
+    assert "overflow" in r.stderr

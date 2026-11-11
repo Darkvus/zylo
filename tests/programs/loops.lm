@@ -1,0 +1,14 @@
+total = 0
+for i in range(1, 6):
+    total += i
+print(total)
+i = 0
+while i < 10:
+    i += 1
+    if i % 2 == 0:
+        continue
+    if i > 7:
+        break
+    print(i)
+for k in range(3):
+    print(k)

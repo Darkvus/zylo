@@ -1,0 +1,42 @@
+fn gcd(a: int, b: int) -> int:
+    while b != 0:
+        t = a % b
+        a = b
+        b = t
+    return a
+
+fn sum(xs: list[int]) -> int:
+    total = 0
+    for x in xs:
+        total += x
+    return total
+
+fn describe(n: int) -> str:
+    if n < 0:
+        return "negativo"
+    elif n == 0:
+        return "cero"
+    else:
+        return "positivo"
+
+fn greet(name: str):
+    print("hola " + name)
+
+fn is_even(n: int) -> bool:
+    if n == 0:
+        return true
+    return is_odd(n - 1)
+
+fn is_odd(n: int) -> bool:
+    if n == 0:
+        return false
+    return is_even(n - 1)
+
+print(gcd(48, 18))
+print(sum([1, 2, 3, 4]))
+print(describe(-5))
+print(describe(0))
+print(describe(3))
+greet("lumo")
+print(is_even(10))
+print(is_odd(7))

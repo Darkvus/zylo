@@ -1,0 +1,16 @@
+s = "hola"
+t = s + " " + "mundo"
+print(t)
+print(len(t))
+print(s == "hola")
+print("a" < "b")
+n = 42
+print("n=" + str(n))
+print(str(1.5))
+print(int("12") + 1)
+print(len("ñandú"))
+name = "ana"
+print(name)
+print(name)
+other = name
+print(other == name)

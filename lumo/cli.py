@@ -22,7 +22,7 @@ def compile_rust(rs: str, out: Path) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / "main.rs"
         src.write_text(rs)
-        r = subprocess.run([rustc, "-O", "-o", str(out), str(src)], capture_output=True, text=True)
+        r = subprocess.run([rustc, "-O", "-C", "overflow-checks=yes", "-o", str(out), str(src)], capture_output=True, text=True)
         if r.returncode:
             raise LumoError(f"rustc falló:\n{r.stderr}")
 

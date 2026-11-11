@@ -1,5 +1,6 @@
 import pytest
 
+from lumo.checker import check
 from lumo.codegen import generate
 from lumo.errors import LumoError
 from lumo.lexer import tokenize
@@ -12,17 +13,17 @@ def test_lexer_basic():
 
 
 def test_precedence():
-    rs = generate(parse("print(1 + 2 * 3)"))
+    rs = generate(check(parse("print(1 + 2 * 3)")))
     assert "(1i64 + (2i64 * 3i64))" in rs
 
 
 def test_parens_and_unary():
-    rs = generate(parse("print(-(1 + 2) * 3)"))
+    rs = generate(check(parse("print(-(1 + 2) * 3)")))
     assert "((-(1i64 + 2i64)) * 3i64)" in rs
 
 
 def test_string():
-    assert '"hola"' in generate(parse('print("hola")'))
+    assert '"hola"' in generate(check(parse('print("hola")')))
 
 
 def test_syntax_error_has_position():

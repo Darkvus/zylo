@@ -30,6 +30,7 @@ print(fib(35))
 - [x] **Fase 2 hecha (2026-11-11):** parser/AST completos (assign, `x: T = v`, `+=`, if/elif/else, while, for, break/continue, fn, return, listas, índices, and/or/not, posiciones en nodos), 30 tests
 - [x] **Fase 3 hecha (2026-11-11):** `lumo/types.py` + `lumo/checker.py` (inferencia local, ámbitos de bloque, declarar vs reasignar, mutabilidad marcada en `VarInfo.mutable`, errores con línea/columna), 75 tests. Conectado en el CLI (`parse → check → generate`).
 - [x] Rust 1.99.1 instalado; `lumo run examples/hello.lm` funciona de punta a punta.
+- [x] **Fase 4 hecha (2026-11-11):** `lumo/codegen.py` completo (fn, let/let mut, if/elif/else, while, for range/list, listas, strings, conversiones, builtins). 10 programas e2e en `tests/programs/` (`.lm` + `.out`) compilados con rustc real + test de panic por overflow. 85 tests.
 - Repo privado: https://github.com/Darkvus/lumo
 
 Limitaciones actuales: solo sentencias de expresión (`print(...)`); el lexer ya reconoce
@@ -66,7 +67,14 @@ las keywords `fn if else while return let true false` y el token `->`, pero el p
 - El checker anota `node.ty` en expresiones, `Assign.declares/var` y `Param.info`/`For.info` (con `mutable`) para que el codegen emita `let` / `let mut`.
 - Lista vacía requiere anotación (`xs: list[int] = []`) salvo si el contexto da el tipo (argumento, retorno, reasignación).
 
-### Fase 4: detalle
+### Decisiones tomadas en la fase 4
+- `str` → `String`, `list[T]` → `Vec<T>`. Leer una variable no-Copy como valor emite `.clone()`; lecturas puras (len, print, índices, comparaciones, `range`) toman referencia. `for x in xs` clona la lista una vez (permite mutarla dentro, como Python).
+- **Overflow:** rustc se invoca con `-O -C overflow-checks=yes` → panic (exit 101) en vez de wrapping. Coste medido ≈1.6× en fib; aun así ≈27× más rápido que Python. Pendiente: flag para desactivar.
+- `float` se imprime con `{:?}` (`2.0`); listas con `{:?}` (las listas de str salen con comillas dobles, distinto de Python). `len(str)` cuenta caracteres, no bytes.
+- Identificadores que son keywords de Rust (`type`, `match`, `main`...) se emiten con sufijo `_`.
+- Limitación conocida: pasar una lista a una función la clona (sin préstamos todavía). Optimización candidata para v2.
+
+### Fase 4: detalle (original)
 - Funciones top-level → `fn nombre(a: i64) -> i64 { ... }`.
 - Código top-level fuera de `fn` → cuerpo de `main`.
 - `for i in range(a, b)` → `for i in a..b`.
