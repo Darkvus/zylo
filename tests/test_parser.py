@@ -1,9 +1,9 @@
 import pytest
 
-from zylo import ast
-from zylo.errors import ZyloError
-from zylo.lexer import tokenize
-from zylo.parser import parse
+from zylo.domain import ast
+from zylo.domain.errors import ZyloError
+from zylo.syntax.lexer import tokenize
+from zylo.syntax.parser import parse
 
 
 def stmt(src: str):

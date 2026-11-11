@@ -14,44 +14,85 @@ Reglas:
 import re
 from dataclasses import dataclass, field
 
-from . import ast
-from .errors import ZyloError
-from .types import BOOL, FLOAT, INT, PRIMS, STR, UNIT, FnT, DictT, ListT, OptionT, ResultT, SetT, StructT, TupleT, Type, VarInfo, is_copy_type
+from zylo.domain import ast
+from zylo.domain.builtins import BUILTINS, SHADOWABLE  # noqa: F401
+from zylo.domain.errors import ZyloError
+from zylo.domain.types import (
+    BOOL,
+    FLOAT,
+    INT,
+    PRIMS,
+    STR,
+    UNIT,
+    DictT,
+    FnT,
+    ListT,
+    OptionT,
+    ResultT,
+    SetT,
+    StructT,
+    TupleT,
+    Type,
+    VarInfo,
+    is_copy_type,
+)
 
-BUILTINS = {"print", "range", "len", "int", "float", "str", "append", "exit",
-            "some", "ok", "err", "parse_int", "parse_float",
-            "sum", "min", "max", "abs", "sorted", "reversed", "enumerate", "zip",
-            "sqrt", "pow", "round", "floor", "ceil",
-            "argv", "input", "read_line", "read_stdin", "read_file", "write_file", "append_file",
-            "file_exists", "list_dir", "env", "eprint", "time", "sleep"}
-# Builtins a program may redefine with its own function (the core ones may not).
-SHADOWABLE = BUILTINS - {"print", "range", "len", "int", "float", "str", "append", "exit", "some", "ok", "err"}
 ARITH = {"+", "-", "*", "/", "%"}
 EQ = {"==", "!="}
 ORDER = {"<", ">", "<=", ">="}
 
 
 def err(msg: str, node: ast.Node) -> ZyloError:
+    """Build an error positioned at a node.
+
+    Args:
+        msg: The message.
+        node: The node the problem is about; it supplies the line, column and file.
+
+    Returns:
+        The error, ready to be raised.
+    """
     return ZyloError(msg, node.line, node.col, node.file)
 
 
 class Scopes:
+    """A stack of lexical scopes mapping names to the variables visible in them."""
     def __init__(self) -> None:
+        """Create a stack holding one empty (outermost) scope."""
         self.stack: list[dict[str, VarInfo]] = [{}]
 
     def push(self) -> None:
+        """Open a new innermost scope."""
         self.stack.append({})
 
     def pop(self) -> None:
+        """Close the innermost scope."""
         self.stack.pop()
 
     def lookup(self, name: str) -> VarInfo | None:
+        """Find a visible variable.
+
+        Args:
+            name: The variable's name.
+
+        Returns:
+            The innermost visible variable with that name, or None.
+        """
         for scope in reversed(self.stack):
             if name in scope:
                 return scope[name]
         return None
 
     def declare(self, name: str, ty: Type) -> VarInfo:
+        """Declare a variable in the innermost scope.
+
+        Args:
+            name: The variable's name.
+            ty: Its type.
+
+        Returns:
+            The new variable's record.
+        """
         info = VarInfo(name, ty)
         self.stack[-1][name] = info
         return info
@@ -59,6 +100,14 @@ class Scopes:
 
 @dataclass
 class StructInfo:
+    """What the checker knows about one struct.
+
+    Attributes:
+        name: The struct's name.
+        defn: Its definition node.
+        fields: Field types by name, in declaration order.
+        methods: Method signatures by name.
+    """
     name: str
     defn: ast.StructDef
     fields: dict[str, Type] = field(default_factory=dict)
@@ -66,7 +115,24 @@ class StructInfo:
 
 
 class Checker:
+    """Type checker for one program.
+
+    Resolves types, infers the types of expressions, tracks scopes, decides which variables are mutable and which
+    parameters can be borrowed, narrows `Option`/`Result` values after `is` checks, and annotates the tree for the code
+    generator. Use `check()` rather than this class directly: it reruns the checker until the set of methods that modify
+    `self` stops changing.
+
+    Example:
+        >>> from zylo.syntax.parser import parse
+        >>> prog = parse("x = 1 + 2")
+    >>> Checker().check(prog)
+    """
     def __init__(self, mutating: set[tuple[str, str]] | None = None) -> None:
+        """Create a checker.
+
+        Args:
+            mutating: `(struct, method)` pairs already known to modify `self`, from a previous run.
+        """
         self.fns: dict[str, FnT] = {}
         self.structs: dict[str, StructInfo] = {}
         self.mutating: set[tuple[str, str]] = set(mutating or ())  # (struct, method) pairs that modify self
@@ -78,6 +144,14 @@ class Checker:
     # ---- entrada ---------------------------------------------------------------------
 
     def check(self, prog: ast.Program) -> None:
+        """Check a whole program, annotating it in place.
+
+        Args:
+            prog: The program to check.
+
+        Raises:
+            ZyloError: On the first mistake found.
+        """
         defs = [s for s in prog.body if isinstance(s, ast.StructDef)]
         for d in defs:
             self.register_struct(d)
@@ -103,6 +177,17 @@ class Checker:
     # ---- tipos escritos ------------------------------------------------------------
 
     def resolve(self, t: ast.TypeRef) -> Type:
+        """Turn a written type into a real one.
+
+        Args:
+            t: The type as the user wrote it.
+
+        Returns:
+            The resolved type.
+
+        Raises:
+            ZyloError: If it names an unknown type or uses an invalid dict key.
+        """
         if t.name == "list":
             return ListT(self.resolve(t.args[0]))
         if t.name == "?":
@@ -125,6 +210,7 @@ class Checker:
     # ---- structs ----------------------------------------------------------------------
 
     def register_struct(self, d: ast.StructDef) -> None:
+        """Record a struct's name, rejecting duplicates and reserved names."""
         if d.name in self.structs:
             raise err(f"struct {d.name!r} is already defined", d)
         if d.name in BUILTINS or d.name in PRIMS or d.name in ("list", "unit", "Result"):
@@ -132,6 +218,7 @@ class Checker:
         self.structs[d.name] = StructInfo(d.name, d)
 
     def resolve_struct(self, d: ast.StructDef) -> None:
+        """Resolve the field types of a struct, rejecting duplicate fields and empty structs."""
         info = self.structs[d.name]
         if not d.fields:
             raise err(f"struct {d.name!r} needs at least one field", d)
@@ -141,6 +228,7 @@ class Checker:
             f.ty = info.fields[f.name] = self.resolve(f.type)
 
     def check_cycles(self, defs: list[ast.StructDef]) -> None:
+        """Reject structs that contain themselves directly or through other structs (lists are fine)."""
         def reaches(start: str, cur: str, seen: set[str]) -> bool:
             for t in self.structs[cur].fields.values():
                 if isinstance(t, StructT):
@@ -157,6 +245,7 @@ class Checker:
                 raise err(f"struct {d.name!r} contains itself (directly or indirectly); use a list", d)
 
     def declare_methods(self, d: ast.StructDef) -> None:
+        """Record the signatures of a struct's methods, rejecting duplicates and clashes with fields."""
         info = self.structs[d.name]
         for m in d.methods:
             if not m.has_self:
@@ -170,6 +259,17 @@ class Checker:
     # ---- funciones ------------------------------------------------------------------
 
     def signature(self, f: ast.FnDef) -> FnT:
+        """Compute a function's type from its declaration.
+
+        Args:
+            f: The function or method.
+
+        Returns:
+            Its parameter and return types.
+
+        Raises:
+            ZyloError: On a duplicate parameter name.
+        """
         seen: set[str] = set()
         for p in f.params:
             if p.name == "self":
@@ -181,6 +281,7 @@ class Checker:
         return FnT(tuple(self.resolve(p.type) for p in f.params), ret)
 
     def declare_fn(self, f: ast.FnDef) -> None:
+        """Record a top-level function (or `extern fn`) so it can be called before it is defined."""
         if f.name in BUILTINS - SHADOWABLE:
             raise err(f"{f.name!r} is a built-in function", f)
         if f.name in self.structs:
@@ -190,6 +291,7 @@ class Checker:
         f.ty = self.fns[f.name] = self.signature(f)
 
     def check_extern(self, f: ast.ExternFn) -> None:
+        """Validate an `extern fn`: it needs a template, and `{n}` placeholders must name real parameters."""
         if not f.template.strip():
             raise err(f"extern fn {f.name!r} needs a Rust path or template after `=`", f)
         for n in re.findall(r"\{(\d+)\}", f.template):
@@ -197,6 +299,17 @@ class Checker:
                 raise err(f"the template of {f.name!r} uses {{{n}}} but the function has {len(f.params)} parameter(s)", f)
 
     def check_fn(self, f: ast.FnDef, owner: str | None = None) -> None:
+        """Check a function or method body.
+
+        Also decides which parameters are never modified (and so can be borrowed) and whether a method modifies `self`.
+
+        Args:
+            f: The function.
+            owner: The struct's name when `f` is a method.
+
+        Raises:
+            ZyloError: On a type error in the body, or when a function with a return type can finish without returning.
+        """
         sig = f.ty
         top = self.scopes
         self.scopes, self.ret, self.loops, self.owner = Scopes(), sig.ret, 0, owner
@@ -219,8 +332,15 @@ class Checker:
     # ---- sentencias ------------------------------------------------------------------
 
     def block(self, body: list[ast.Stmt], bind: tuple[str | None, Type | None] | None = None) -> VarInfo | None:
-        """Check a block in its own scope. `bind` = (name, type) rebinds a variable with a narrowed
-        type for the whole block (see `is` narrowing); returns that new VarInfo."""
+        """Check a block in its own scope.
+
+        Args:
+            body: The statements.
+            bind: `(name, type)` to rebind a variable with a narrowed type for the whole block (see `is` narrowing).
+
+        Returns:
+            The new variable's record when `bind` was used, otherwise None.
+        """
         self.scopes.push()
         info = None
         if bind and bind[1] is not None:
@@ -232,8 +352,15 @@ class Checker:
         return info
 
     def narrowing(self, cond: ast.Expr) -> tuple[str, Type | None, Type | None] | None:
-        """For `x is K` on a plain variable: (name, type of x inside the then-branch, type inside
-        the else-branch); None means "no information"."""
+        """Work out what an `is` check tells about a variable.
+
+        Args:
+            cond: The condition of an `if`.
+
+        Returns:
+            For `x is K` on a plain variable, `(name, type of x in the then-branch, type in the else-branch)`, where a
+            type of None means no information; None for any other condition.
+        """
         if not (isinstance(cond, ast.IsCheck) and isinstance(cond.value, ast.Name)):
             return None
         t, k = cond.value.ty, cond.kind
@@ -244,6 +371,7 @@ class Checker:
         return cond.value.id, then_t, else_t
 
     def if_stmt(self, s: ast.If) -> None:
+        """Check an `if`, narrowing `Option`/`Result` variables tested with `is` inside its branches."""
         self.expect_bool(s.cond, "the `if` condition")
         nar = self.narrowing(s.cond)
         name, then_t, else_t = nar if nar else (None, None, None)
@@ -256,6 +384,11 @@ class Checker:
             s.after_bind = info
 
     def stmt(self, s: ast.Stmt) -> None:
+        """Check one statement.
+
+        Args:
+            s: The statement.
+        """
         match s:
             case ast.ExprStmt(e):
                 self.expr(e)
@@ -286,11 +419,18 @@ class Checker:
                 raise err("imports can only appear at the top level", s)
 
     def expect_bool(self, e: ast.Expr, what: str) -> None:
+        """Require an expression to be a bool.
+
+        Args:
+            e: The expression.
+            what: What it is, for the error message (such as "the `if` condition").
+        """
         t = self.expr(e)
         if t != BOOL:
             raise err(f"{what} must be bool, not {t}", e)
 
     def return_(self, s: ast.Return, value: ast.Expr | None) -> None:
+        """Check a `return` against the enclosing function's declared return type."""
         if self.ret is None:
             raise err("`return` outside a function", s)
         if value is None:
@@ -304,6 +444,7 @@ class Checker:
             raise err(f"returning {t} but the function declares {self.ret}", value)
 
     def unpack(self, s: ast.Unpack) -> None:
+        """Check a tuple unpacking assignment, declaring or reassigning each target."""
         t = self.expr(s.value)
         n = len(s.targets)
         if not isinstance(t, TupleT) or len(t.elems) != n:
@@ -333,6 +474,7 @@ class Checker:
             target.ty = et
 
     def for_loop(self, s: ast.For) -> None:
+        """Check a `for` loop and declare its loop variable(s) from the iterated type."""
         if "self" in (s.targets or [s.var]):
             raise err("`self` cannot be used as a loop variable", s)
         it = s.iter
@@ -373,6 +515,7 @@ class Checker:
         self.scopes.pop()
 
     def assign(self, s: ast.Assign) -> None:
+        """Check an assignment to a name, an index, a dict key or a field, deciding declare versus reassign."""
         target = s.target
         if isinstance(target, ast.Index):
             base_t = self.expr(target.value)
@@ -439,6 +582,11 @@ class Checker:
             info.mutable = True
 
     def expect_int(self, e: ast.Expr) -> None:
+        """Require an expression to be an int.
+
+        Args:
+            e: The expression.
+        """
         t = self.expr(e)
         if t != INT:
             raise err(f"expected int, not {t}", e)
@@ -446,6 +594,15 @@ class Checker:
     # ---- expresiones -----------------------------------------------------------------
 
     def expr(self, e: ast.Expr, expected: Type | None = None) -> Type:
+        """Infer the type of an expression and record it on the node.
+
+        Args:
+            e: The expression.
+            expected: The type the context wants, used for literals that cannot be typed alone (`[]`, `none`, `ok(...)`).
+
+        Returns:
+            The expression's type.
+        """
         e.ty = self._expr(e, expected)
         return e.ty
 
@@ -545,6 +702,7 @@ class Checker:
         raise err(f"unsupported expression: {type(e).__name__}", e)
 
     def unary(self, e: ast.UnaryOp, op: str, x: ast.Expr) -> Type:
+        """Type a prefix `-` or `not`."""
         t = self.expr(x)
         if op == "not":
             if t != BOOL:
@@ -554,22 +712,27 @@ class Checker:
             raise err(f"`-` expects int or float, not {t}", e)
         return t
 
-    def binop(self, e: ast.BinOp, op: str, l: ast.Expr, r: ast.Expr) -> Type:
+    def binop(self, e: ast.BinOp, op: str, left: ast.Expr, right: ast.Expr) -> Type:
+        """Type a binary operation, including `in`, `and`/`or` and comparisons.
+
+        Raises:
+            ZyloError: If the operand types do not fit the operator (there is no implicit int/float coercion).
+        """
         if op in ("in", "not in"):
-            rt = self.expr(r)
+            rt = self.expr(right)
             want = rt.elem if isinstance(rt, (ListT, SetT)) else rt.key if isinstance(rt, DictT) else STR if rt == STR else None
             if want is None:
                 raise err(f"`{op}` needs a list, str, set or dict on the right, not {rt}", e)
-            lt = self.expr(l, want)
+            lt = self.expr(left, want)
             if lt != want:
                 raise err(f"`{op}` on {rt} needs a {want} on the left, not {lt}", e)
             return BOOL
-        if isinstance(l, ast.NoneLit):  # `none == x`: the other side gives the type
-            rt = self.expr(r)
-            lt = self.expr(l, rt)
+        if isinstance(left, ast.NoneLit):  # `none == x`: the other side gives the type
+            rt = self.expr(right)
+            lt = self.expr(left, rt)
         else:
-            lt = self.expr(l)
-            rt = self.expr(r, lt)
+            lt = self.expr(left)
+            rt = self.expr(right, lt)
         if op in ("and", "or"):
             if lt != BOOL or rt != BOOL:
                 raise err(f"`{op}` expects bool and bool, not {lt} and {rt}", e)
@@ -590,6 +753,7 @@ class Checker:
         raise err(f"unknown operator {op!r}", e)
 
     def dict_lit(self, e: ast.DictLit, keys: list[ast.Expr], values: list[ast.Expr], expected: Type | None) -> Type:
+        """Type a dict literal, using the expected type for the empty `{}`."""
         if not keys:
             if isinstance(expected, (DictT, SetT)):
                 return expected  # `{}` is an empty set when the context says so
@@ -607,6 +771,7 @@ class Checker:
         return DictT(kt, vt)
 
     def list_lit(self, e: ast.ListLit, items: list[ast.Expr], expected: Type | None) -> Type:
+        """Type a list literal, using the expected type for the empty `[]`."""
         if not items:
             if isinstance(expected, ListT):
                 return expected
@@ -622,11 +787,25 @@ class Checker:
     # ---- structs: fields and methods -----------------------------------------------------
 
     def struct_of(self, t: Type, node: ast.Node, what: str) -> StructInfo:
+        """Look up the struct a value belongs to.
+
+        Args:
+            t: The value's type.
+            node: Where to report an error.
+            what: "fields" or "methods", for the error message.
+
+        Returns:
+            The struct's description.
+
+        Raises:
+            ZyloError: If `t` is not a struct.
+        """
         if not isinstance(t, StructT):
             raise err(f"{t} has no {what}", node)
         return self.structs[t.name]
 
     def attr(self, e: ast.Attr, v: ast.Expr, name: str) -> Type:
+        """Type a field access `value.name`."""
         t = self.expr(v)
         info = self.struct_of(t, e, "fields")
         ft = info.fields.get(name)
@@ -641,6 +820,7 @@ class Checker:
     SPEC_RE = re.compile(r"^(?:[<>^])?0?\d*(?:\.\d+)?([fdsxXb]?)$")
 
     def format_part(self, p: ast.FormatPart) -> None:
+        """Check one `{expression:spec}` field of an f-string: a printable value and a valid specification."""
         t = self.expr(p.value)
         if t == UNIT:
             raise err("the expression produces no value", p.value)
@@ -810,6 +990,12 @@ class Checker:
         raise err(f"{rt} has no method {n!r} (available: {have})", e)
 
     def try_op(self, e: ast.Try, v: ast.Expr) -> Type:
+        """Type the postfix `?` operator.
+
+        Raises:
+            ZyloError: Outside a function, on a value that is not an Option or Result, or when the enclosing function does not
+                return a compatible Option or Result.
+        """
         t = self.expr(v)
         if self.ret is None:
             raise err("`?` can only be used inside a function", e)
@@ -824,6 +1010,7 @@ class Checker:
         raise err(f"`?` can only be applied to an Option or a Result, not {t}", e)
 
     def builtin_method(self, e: ast.MethodCall, rt: Type) -> Type:
+        """Type `unwrap()` and `unwrap_or(default)` on an Option or Result."""
         inner = rt.inner if isinstance(rt, OptionT) else rt.ok
         if e.name == "unwrap":
             if e.args:
@@ -839,6 +1026,7 @@ class Checker:
         raise err(f"{rt} has no method {e.name!r} (available: unwrap, unwrap_or)", e)
 
     def method_call(self, e: ast.MethodCall) -> Type:
+        """Type a method call on a struct, a string, a list, a dict, a set, an Option or a Result."""
         rt = self.expr(e.value)
         if isinstance(rt, (OptionT, ResultT)):
             return self.builtin_method(e, rt)
@@ -858,6 +1046,7 @@ class Checker:
         return sig.ret
 
     def ctor(self, e: ast.Call) -> Type:
+        """Type a struct constructor call; arguments are positional and cover every field."""
         info = self.structs[e.func]
         types = list(info.fields.values())
         self.check_args(e, e.func, e.args, FnT(tuple(types), StructT(e.func)))
@@ -867,6 +1056,17 @@ class Checker:
     # ---- llamadas ------------------------------------------------------------------
 
     def check_args(self, e: ast.Node, name: str, args: list[ast.Expr], sig: FnT) -> None:
+        """Check call arguments against a signature.
+
+        Args:
+            e: The call, for error positions.
+            name: The callee's name, for messages.
+            args: The argument expressions.
+            sig: The callee's type.
+
+        Raises:
+            ZyloError: On a wrong number of arguments or a mismatched type.
+        """
         if len(args) != len(sig.params):
             raise err(f"{name} takes {len(sig.params)} argument(s), got {len(args)}", e)
         for i, (a, pt) in enumerate(zip(args, sig.params), start=1):
@@ -875,6 +1075,7 @@ class Checker:
                 raise err(f"argument {i} of {name}: expected {pt}, got {t}", a)
 
     def call(self, e: ast.Call, expected: Type | None = None) -> Type:
+        """Type a call: a struct constructor, a built-in, or a user function."""
         if e.func in self.structs:
             return self.ctor(e)
         if e.func in BUILTINS and not (e.func in SHADOWABLE and e.func in self.fns):
@@ -886,6 +1087,7 @@ class Checker:
         return sig.ret
 
     def builtin(self, e: ast.Call, expected: Type | None = None) -> Type:
+        """Type a call of a built-in function such as `print`, `len`, `sum` or `read_file`."""
         name, args = e.func, e.args
 
         def arity(n: int) -> None:
@@ -1042,10 +1244,26 @@ def key_ok(t: Type) -> bool:
 
 
 def sortable(t: Type) -> bool:
+    """Whether a list of this type can be sorted.
+
+    Args:
+        t: The element type.
+
+    Returns:
+        True for int, float, str, bool and tuples of the orderable ones.
+    """
     return t == FLOAT or key_ok(t)
 
 
 def always_returns(body: list[ast.Stmt]) -> bool:
+    """Whether a block always ends by returning.
+
+    Args:
+        body: The statements.
+
+    Returns:
+        True if every path through `body` ends in a `return`.
+    """
     if not body:
         return False
     last = body[-1]
@@ -1071,8 +1289,20 @@ def exits(body: list[ast.Stmt]) -> bool:
 
 
 def check(prog: ast.Program) -> ast.Program:
-    """Check the program. Repeats until the set of methods that modify `self`
-    stabilizes (a method that calls a modifying method is one too); converges in a few rounds."""
+    """Check a program.
+
+    Repeats the check until the set of methods that modify `self` stops changing (a method that calls a modifying
+    method is one too); this converges in a few rounds.
+
+    Args:
+        prog: The program, annotated in place.
+
+    Returns:
+        The same program.
+
+    Raises:
+        ZyloError: On the first mistake found.
+    """
     mutating: set[tuple[str, str]] = set()
     while True:
         c = Checker(mutating)

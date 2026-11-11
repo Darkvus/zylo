@@ -1,10 +1,10 @@
 import pytest
 
-from zylo import ast
-from zylo.checker import check
-from zylo.errors import ZyloError
-from zylo.parser import parse
-from zylo.types import FLOAT, INT, STR, UNIT, ListT, StructT
+from zylo.domain import ast
+from zylo.domain.errors import ZyloError
+from zylo.domain.types import FLOAT, INT, STR, UNIT, ListT, StructT
+from zylo.semantics.checker import check
+from zylo.syntax.parser import parse
 
 POINT = "struct Point:\n    x: float\n    y: float\n"
 

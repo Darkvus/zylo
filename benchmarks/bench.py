@@ -16,7 +16,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from zylo.cli import compile_rust, transpile
+from zylo.application.compile import transpile
+from zylo.infrastructure.rustc import compile_rust
 
 HERE = Path(__file__).parent
 PROGRAMS = ["fib", "loop", "primes", "sort", "listsum"]
@@ -28,6 +29,14 @@ NOTE = (
 
 
 def run_once(cmd: list[str]) -> tuple[float, str]:
+    """Run a command once.
+
+    Args:
+        cmd: The command line.
+
+    Returns:
+        The elapsed seconds and the command's standard output.
+    """
     t0 = time.perf_counter()
     r = subprocess.run(cmd, capture_output=True, text=True)
     dt = time.perf_counter() - t0
@@ -37,6 +46,15 @@ def run_once(cmd: list[str]) -> tuple[float, str]:
 
 
 def measure(cmd: list[str], runs: int) -> tuple[float, float, str]:
+    """Run a command several times.
+
+    Args:
+        cmd: The command line.
+        runs: How many times.
+
+    Returns:
+        The best time, the median time and the last output.
+    """
     times, out = [], ""
     for _ in range(runs):
         dt, out = run_once(cmd)
@@ -45,6 +63,11 @@ def measure(cmd: list[str], runs: int) -> tuple[float, float, str]:
 
 
 def main() -> int:
+    """Run the benchmark suite and print (and optionally write) the results table.
+
+    Returns:
+        The exit code.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--write", action="store_true", help="escribe benchmarks/RESULTS.md")

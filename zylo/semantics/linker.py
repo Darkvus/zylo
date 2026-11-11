@@ -8,12 +8,12 @@ import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import ast
-from .checker import BUILTINS, SHADOWABLE
-from .errors import ZyloError
-from .manifest import package_layout
-from .parser import parse
-from .types import PRIMS
+from zylo.domain import ast
+from zylo.domain.builtins import BUILTINS, SHADOWABLE
+from zylo.domain.errors import ZyloError
+from zylo.domain.types import PRIMS
+from zylo.packaging.manifest import package_layout
+from zylo.syntax.parser import parse
 
 SEP = "·"  # `·`
 RESERVED_TYPES = set(PRIMS) | {"list", "unit", "Result"}
@@ -21,6 +21,16 @@ RESERVED_TYPES = set(PRIMS) | {"list", "unit", "Result"}
 
 @dataclass
 class Module:
+    """One loaded source file.
+
+    Attributes:
+        id: Dotted module id (empty for the entry file).
+        path: The file.
+        program: Its parsed statements.
+        defs: Top-level names it defines, mapped to "fn" or "struct".
+        aliases: Names bound by `import a.b [as c]`.
+        froms: Names bound by `from a import x [as y]`.
+    """
     id: str  # "" for the entry module
     path: Path
     program: ast.Program
@@ -30,22 +40,53 @@ class Module:
 
     @property
     def is_entry(self) -> bool:
+        """Whether this is the program's entry file (its names are not mangled)."""
         return self.id == ""
 
     @property
     def display(self) -> str:
+        """The module's name for messages."""
         return self.id or self.path.stem
 
     def mangled(self, name: str) -> str:
+        """Return the linked name of one of this module's definitions.
+
+        Args:
+            name: The definition's own name.
+
+        Returns:
+            `name` for the entry module, otherwise `module·name`.
+        """
         return name if self.is_entry else f"{self.id.replace('.', SEP)}{SEP}{name}"
 
 
 def err(msg: str, node: ast.Node, path: Path | None = None) -> ZyloError:
+    """Build a positioned error.
+
+    Args:
+        msg: The message.
+        node: The node the problem is about.
+        path: File to report when the node carries none.
+
+    Returns:
+        The error, ready to be raised.
+    """
     return ZyloError(msg, node.line, node.col, node.file or (str(path) if path else None))
 
 
 class Linker:
+    """Resolves `import`s and merges the program and its modules into one.
+
+    Example:
+        >>> program = Linker(packages_dir).link(Path("main.zy"))
+    """
     def __init__(self, packages_dir: Path | None = None, trusted: set[str] | list[str] = ()):
+        """Create a linker.
+
+        Args:
+            packages_dir: Directory of installed packages (an environment's `packages/`), or None when no environment is active.
+            trusted: Package names the project allows to declare `extern fn`.
+        """
         self.packages_dir = packages_dir.resolve() if packages_dir else None
         self.trusted = set(trusted)  # packages the project allows to call Rust (`extern fn`)
         self.by_path: dict[Path, Module] = {}
@@ -56,6 +97,17 @@ class Linker:
     # ---- public entry point ---------------------------------------------------------------
 
     def link(self, entry: Path) -> ast.Program:
+        """Load the entry file and everything it imports.
+
+        Args:
+            entry: The program's entry file.
+
+        Returns:
+            One program: library definitions (renamed and rewritten) followed by the entry file's statements.
+
+        Raises:
+            ZyloError: On a missing module, an import cycle, a private or unknown name, or an untrusted `extern fn`.
+        """
         self.entry_dir = entry.resolve().parent
         main = self.load(entry, is_entry=True, stack=[])
         body: list[ast.Stmt] = []
@@ -68,6 +120,7 @@ class Linker:
     # ---- loading --------------------------------------------------------------------------------
 
     def load(self, path: Path, is_entry: bool, stack: list[Path]) -> Module:
+        """Parse one file, load its imports first, then rewrite its references; each file is loaded once."""
         key = path.resolve()
         if key in self.by_path:
             return self.by_path[key]
@@ -111,12 +164,14 @@ class Linker:
                     f"add it to `[rust] trusted-packages` in zylo.toml if you do", s, mod.path)
 
     def register_id(self, mod: Module, path: Path) -> None:
+        """Reject two different files that would get the same module id."""
         other = self.by_id.get(mod.id)
         if other is not None and other != path.resolve():
             raise ZyloError(f"two different modules are both named {mod.id!r}: {other} and {path}", file=str(path))
         self.by_id[mod.id] = path.resolve()
 
     def module_id(self, path: Path) -> str:
+        """Compute the dotted id of a module file, relative to the entry directory or to its package."""
         rp = path.resolve()
         if self.packages_dir and self.packages_dir in rp.parents:
             pkg = rp.relative_to(self.packages_dir).parts[0]
@@ -131,6 +186,21 @@ class Linker:
         return rp.stem
 
     def resolve_path(self, dotted: str, importer: Module, node: ast.Node) -> Path:
+        """Find the file an `import` names.
+
+        Local modules (relative to the importing file) win over installed packages.
+
+        Args:
+            dotted: The dotted module name.
+            importer: The module containing the import.
+            node: The import statement, for error positions.
+
+        Returns:
+            The module's file.
+
+        Raises:
+            ZyloError: If no file matches.
+        """
         parts = dotted.split(".")
         cand = importer.path.parent.joinpath(*parts).with_suffix(".zy")  # parts are identifiers: no `..`
         if cand.is_file():
@@ -149,6 +219,7 @@ class Linker:
     # ---- definitions and bindings ------------------------------------------------------------------
 
     def collect_defs(self, mod: Module) -> None:
+        """Record a module's top-level functions and structs, rejecting duplicates and reserved names."""
         for s in mod.program.body:
             if not isinstance(s, (ast.FnDef, ast.StructDef)):
                 continue
@@ -160,16 +231,19 @@ class Linker:
             mod.defs[s.name] = kind
 
     def bind_name(self, mod: Module, name: str, node: ast.Node) -> None:
+        """Reject a name that is already used by a definition or another import in the module."""
         if name in mod.defs or name in mod.aliases or name in mod.froms:
             raise err(f"{name!r} is already defined in this module", node, mod.path)
 
     def bind_import(self, mod: Module, s: ast.Import, stack: list[Path]) -> None:
+        """Load the module of an `import` and bind its alias."""
         dep = self.load(self.resolve_path(s.module, mod, s), False, stack)
         alias = s.alias or s.module.rsplit(".", 1)[-1]
         self.bind_name(mod, alias, s)
         mod.aliases[alias] = dep
 
     def bind_from(self, mod: Module, s: ast.FromImport, stack: list[Path]) -> None:
+        """Load the module of a `from ... import` and bind each imported name, which must exist and be public."""
         dep = self.load(self.resolve_path(s.module, mod, s), False, stack)
         for name, alias in s.names:
             self.export(dep, name, s, mod)  # must exist and be public
@@ -192,6 +266,7 @@ class Linker:
     # ---- rewriting ---------------------------------------------------------------------------------
 
     def rewrite(self, mod: Module) -> None:
+        """Rename a module's own definitions and rewrite every reference to imported names."""
         for n in ast.walk(mod.program):  # a variable must not hide an imported module
             names = []
             if isinstance(n, ast.Param):
@@ -213,6 +288,18 @@ class Linker:
                 s.name = mod.mangled(s.name)
 
     def rw(self, node: ast.Node, mod: Module) -> ast.Node:
+        """Rewrite one node (and its children) for linking.
+
+        Turns `alias.fn(...)` into a call of the mangled name, renames calls and types that refer to the module's own or
+        imported definitions, and rejects a module used as a value.
+
+        Args:
+            node: The node to rewrite.
+            mod: The module it belongs to.
+
+        Returns:
+            The node, or its replacement.
+        """
         if isinstance(node, ast.MethodCall) and isinstance(node.value, ast.Name) and node.value.id in mod.aliases:
             dep = mod.aliases[node.value.id]
             target = self.export(dep, node.name, node, mod)
@@ -241,6 +328,7 @@ class Linker:
         return node
 
     def rw_type(self, t: ast.TypeRef, mod: Module) -> None:
+        """Rewrite a type name that refers to a struct of this or an imported module."""
         if "." in t.name:
             head, _, name = t.name.rpartition(".")
             dep = mod.aliases.get(head)

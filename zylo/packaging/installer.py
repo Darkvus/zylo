@@ -2,13 +2,13 @@
 import hashlib
 import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
-from . import gitfetch
-from .env import Env
-from .errors import PackageError
-from .lock import Lock, LockEntry
-from .manifest import MANIFEST, Dependency, Manifest, load_manifest
+from zylo.domain.errors import PackageError
+from zylo.packaging.env import Env
+from zylo.packaging.lock import Lock, LockEntry
+from zylo.packaging.manifest import MANIFEST, Dependency, Manifest, load_manifest
 
 
 def walk_files(root: Path):
@@ -24,6 +24,17 @@ def walk_files(root: Path):
 
 
 def checksum_tree(root: Path) -> str:
+    """Hash the contents of a directory.
+
+    Args:
+        root: The directory.
+
+    Returns:
+        `sha256:<hex>` over the sorted relative paths and file contents.
+
+    Raises:
+        PackageError: If the directory contains a symbolic link.
+    """
     h = hashlib.sha256()
     for rel, p in sorted(walk_files(root)):
         h.update(rel.encode() + b"\0" + hashlib.sha256(p.read_bytes()).digest())
@@ -31,32 +42,70 @@ def checksum_tree(root: Path) -> str:
 
 
 def requirement(dep: Dependency) -> tuple:
+    """Return what a dependency asks for (source, ref, path), to detect conflicting requirements."""
     return (dep.git, dep.ref, dep.path)
 
 
 def describe(dep: Dependency) -> str:
+    """Describe a dependency's source for messages."""
     return f"path {dep.path}" if dep.is_path else f"{dep.git}" + (f"@{dep.ref}" if dep.ref else "")
 
 
+Fetcher = Callable[[str, str | None, Path], tuple[Path, str]]
+"""Downloads `(url, ref, workdir)` and returns `(directory, commit)`; implemented by `infrastructure.git`."""
+
+
 class Installer:
-    def __init__(self, env: Env, manifest: Manifest, lock: Lock, update: bool = False):
+    """Installs a project's dependencies (and theirs) into an environment.
+
+    The downloader is injected, so this class knows nothing about git.
+    """
+    def __init__(self, env: Env, manifest: Manifest, lock: Lock, fetcher: Fetcher, update: bool = False):
+        """Create an installer.
+
+        Args:
+            env: The environment to install into.
+            manifest: The project's manifest.
+            lock: The current lock file.
+            fetcher: Downloads `(url, ref, workdir)` and returns `(directory, commit)`.
+            update: Ignore the lock and resolve refs again.
+        """
         self.env, self.manifest, self.lock, self.update = env, manifest, lock, update
+        self._fetcher = fetcher
         self.prefetched: dict[tuple[str, str | None], tuple[Path, str]] = {}
 
     # ---- fetching ---------------------------------------------------------------------------------
 
     def fetch(self, url: str, ref: str | None) -> tuple[Path, str]:
+        """Download a package, reusing a download made by `prefetch` for the same source."""
         hit = self.prefetched.pop((url, ref), None)
-        return hit if hit else gitfetch.fetch(url, ref, self.env.tmp_dir)
+        return hit if hit else self._fetcher(url, ref, self.env.tmp_dir)
 
     def prefetch(self, url: str, ref: str | None) -> tuple[Path, str]:
-        got = gitfetch.fetch(url, ref, self.env.tmp_dir)
+        """Download a package ahead of installing it, for example to read its name."""
+        got = self._fetcher(url, ref, self.env.tmp_dir)
         self.prefetched[(url, ref)] = got
         return got
 
     # ---- one package ----------------------------------------------------------------------------------
 
     def install_one(self, dep: Dependency, base: Path) -> LockEntry:
+        """Install one dependency.
+
+        Reuses the installed copy when it already matches the lock, otherwise downloads (the locked commit, or the ref's
+        current commit), verifies the checksum against the lock, checks the package's declared name, and moves it into
+        place.
+
+        Args:
+            dep: The dependency.
+            base: Directory that relative path dependencies are resolved against.
+
+        Returns:
+            The lock entry describing what was installed.
+
+        Raises:
+            PackageError: On a checksum mismatch, a symbolic link, a name mismatch or a missing path.
+        """
         target = self.env.packages_dir / dep.name  # the name is a validated identifier
         locked = None if self.update else self.lock.entries.get(dep.name)
         commit: str | None = None

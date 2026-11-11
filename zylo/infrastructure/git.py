@@ -6,8 +6,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .errors import PackageError
-from .manifest import REF_RE
+from zylo.domain.errors import PackageError
+from zylo.packaging.manifest import REF_RE
 
 TIMEOUT = 180
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -30,7 +30,8 @@ def git(*args: str, cwd: Path | None = None) -> str:
 def fetch(url: str, ref: str | None, workdir: Path) -> tuple[Path, str]:
     """Clone `url` at `ref` (tag, branch or commit; default branch if None) under `workdir`.
 
-    Returns (directory without .git, exact commit hash)."""
+    Returns (directory without .git, exact commit hash).
+    """
     if url.startswith("-"):
         raise PackageError(f"invalid git URL {url!r}")
     if ref is not None and not (REF_RE.match(ref) or COMMIT_RE.match(ref)):

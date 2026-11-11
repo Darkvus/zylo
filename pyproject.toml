@@ -4,15 +4,39 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zylo"
-version = "0.7.0"
+version = "0.7.1"
 description = "Lenguaje Python-like que transpila a Rust"
 requires-python = ">=3.11"
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "ruff"]
 
 [project.scripts]
-zylo = "zylo.cli:main"
+zylo = "zylo.interface.cli:main"
 
-[tool.setuptools]
-packages = ["zylo"]
+[tool.setuptools.packages.find]
+include = ["zylo*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["build", "dist", ".venv"]
+
+[tool.ruff.lint]
+# D: docstrings (Google convention), E/F: pycodestyle and pyflakes, I: import order
+select = ["D", "E", "F", "I"]
+ignore = ["E501"]  # line length is a formatting taste, not enforced
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = ["zylo"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+"benchmarks/fib.py" = ["D"]
+"benchmarks/loop.py" = ["D"]
+"benchmarks/primes.py" = ["D"]
+"benchmarks/sort.py" = ["D"]
+"benchmarks/listsum.py" = ["D"]

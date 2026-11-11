@@ -11,10 +11,25 @@ imprimir `Point(x=1.0, y=2.0)`.
 """
 import re
 
-from . import ast
-from .checker import BUILTINS as BUILTIN_NAMES
-from .errors import ZyloError
-from .types import BOOL, FLOAT, INT, STR, UNIT, DictT, ListT, OptionT, ResultT, SetT, StructT, TupleT, Type, is_copy_type
+from zylo.domain import ast
+from zylo.domain.builtins import BUILTINS as BUILTIN_NAMES
+from zylo.domain.errors import ZyloError
+from zylo.domain.types import (
+    BOOL,
+    FLOAT,
+    INT,
+    STR,
+    UNIT,
+    DictT,
+    ListT,
+    OptionT,
+    ResultT,
+    SetT,
+    StructT,
+    TupleT,
+    Type,
+    is_copy_type,
+)
 
 PRELUDE = """#![allow(unused, unused_parens, while_true, unused_mut)]
 use std::collections::{BTreeMap, BTreeSet};
@@ -140,6 +155,14 @@ METHOD_CLASHES = {
 
 
 def ident(name: str) -> str:
+    """Make a Zylo name a valid Rust identifier.
+
+    Args:
+        name: A variable or function name (possibly linker-mangled).
+
+    Returns:
+        The name, with `·` turned into `__` and a trailing `_` if it is a Rust keyword.
+    """
     if name == "self":
         return name
     name = name.replace("\u00b7", "__")  # linker-mangled `module·name`
@@ -152,11 +175,30 @@ def mident(name: str) -> str:
 
 
 def tname(name: str) -> str:
+    """Make a Zylo struct name a valid Rust type name.
+
+    Args:
+        name: The struct's name.
+
+    Returns:
+        The name, with a trailing `_` if it clashes with a Rust prelude type or keyword.
+    """
     name = name.replace("\u00b7", "__")
     return name + "_" if name in RUST_TYPE_NAMES or name in RUST_KEYWORDS else name
 
 
 def rust_type(t: Type) -> str:
+    """Return the Rust spelling of a Zylo type.
+
+    Args:
+        t: The type.
+
+    Returns:
+        For example `Vec<i64>` for `list[int]`.
+
+    Raises:
+        ZyloError: If the type has no Rust equivalent.
+    """
     if t == INT:
         return "i64"
     if t == FLOAT:
@@ -185,10 +227,19 @@ def rust_type(t: Type) -> str:
 
 
 def is_copy(t: Type) -> bool:
+    """Whether values of this type are `Copy` in Rust, so reading them never needs `.clone()`."""
     return is_copy_type(t)
 
 
 def str_lit(v: str) -> str:
+    """Return a Rust string literal for a string value.
+
+    Args:
+        v: The text.
+
+    Returns:
+        The quoted literal with the necessary escapes.
+    """
     out = []
     for ch in v:
         if ch == "\\":
@@ -211,17 +262,32 @@ def str_lit(v: str) -> str:
 
 
 class Gen:
+    """Emits the Rust source of one program.
+
+    Statements are written line by line with indentation; expressions are rendered by module-level helpers. Use
+    `generate()` rather than this class directly.
+    """
     def __init__(self) -> None:
+        """Create an empty generator."""
         self.out: list[str] = []
         self.depth = 0
         self.tmp = 0
 
     def line(self, text: str) -> None:
+        """Append one line at the current indentation."""
         self.out.append("    " * self.depth + text)
 
     # ---- programa ----------------------------------------------------------------------
 
     def program(self, prog: ast.Program) -> str:
+        """Generate the whole Rust program.
+
+        Args:
+            prog: The checked program.
+
+        Returns:
+            The Rust source: struct definitions, functions, then `main` holding the top-level statements.
+        """
         self.out.append(PRELUDE)
         structs = [s for s in prog.body if isinstance(s, ast.StructDef)]
         fns = [s for s in prog.body if isinstance(s, ast.FnDef) and not isinstance(s, ast.ExternFn)]
@@ -238,6 +304,7 @@ class Gen:
         return "\n".join(self.out) + "\n"
 
     def struct(self, sd: ast.StructDef) -> None:
+        """Emit a struct, its `Debug` implementation and its methods."""
         name = tname(sd.name)
         self.line("#[derive(Clone, PartialEq)]")
         self.line(f"struct {name} {{")
@@ -264,6 +331,7 @@ class Gen:
             self.line("}")
 
     def fn(self, f: ast.FnDef) -> None:
+        """Emit a function or method; lent parameters are written `&T` and `self` as `&self` or `&mut self`."""
         params = []
         if f.has_self:
             params.append("&mut self" if f.self_mut else "&self")
@@ -278,6 +346,7 @@ class Gen:
         self.line("}")
 
     def block(self, body: list[ast.Stmt]) -> None:
+        """Emit the statements of an indented block."""
         self.depth += 1
         for s in body:
             self.stmt(s)
@@ -286,6 +355,7 @@ class Gen:
     # ---- sentencias --------------------------------------------------------------------
 
     def stmt(self, s: ast.Stmt) -> None:
+        """Emit one statement."""
         match s:
             case ast.ExprStmt(e):
                 self.line(f"{emit_ref(e)};")
@@ -311,6 +381,7 @@ class Gen:
                 raise ZyloError(f"{type(s).__name__} is not supported by codegen", s.line, s.col)
 
     def unpack(self, s: ast.Unpack) -> None:
+        """Emit a tuple unpacking through a temporary, declaring or assigning each target."""
         self.tmp += 1
         tmp = f"__t{self.tmp}"
         self.line(f"let {tmp}: {rust_type(s.value.ty)} = {emit(s.value)};")
@@ -322,6 +393,7 @@ class Gen:
                 self.line(f"{ident(t.id)} = {val};")
 
     def assign(self, s: ast.Assign) -> None:
+        """Emit an assignment, a declaration, an index or field store, or a dict insertion."""
         if isinstance(s.target, ast.Index) and isinstance(s.target.value.ty, DictT):
             base = emit_mut(s.target.value)
             self.line(f"{base}.insert({emit(s.target.index)}, {emit(s.value)});")
@@ -337,14 +409,29 @@ class Gen:
     OPPOSITE = {"some": "none", "none": "some", "ok": "err", "err": "ok"}
 
     def pattern(self, kind: str, bind) -> str:
+        """Return a Rust match pattern for an `is` check.
+
+        Args:
+            kind: "some", "none", "ok" or "err".
+            bind: The narrowed variable bound by the pattern, or None.
+
+        Returns:
+            For example `Some(x)` or `None`.
+        """
         if kind == "none":
             return "None"
         inner = f"{'mut ' if bind.mutable else ''}{ident(bind.name)}" if bind else "_"
         return f"{self.PATTERNS[kind]}({inner})"
 
     def narrowed_if(self, s: ast.If) -> None:
-        """`if x is K:` with narrowing -> `match x { K(x) => {...}, other(x) => {...} }`.
-        With an early exit and no else it becomes `let x = match x { K(x) => {exit}, other(x) => x };`."""
+        """Emit an `if x is K:` that narrows `x`.
+
+        It becomes `match x { K(x) => {...}, other(x) => {...} }`. With an early exit and no `else` it becomes
+        `let x = match x { K(x) => {exit}, other(x) => x };`, which narrows `x` for the rest of the block.
+
+        Args:
+            s: The `if` statement.
+        """
         kind, other = s.cond.kind, self.OPPOSITE[s.cond.kind]
         scrutinee = emit(s.cond.value)
         name = ident(s.cond.value.id)
@@ -371,6 +458,7 @@ class Gen:
         self.line("}")
 
     def if_(self, s: ast.If, kw: str) -> None:
+        """Emit an `if`; an `if` that narrows an Option or Result is emitted as a `match`."""
         if s.after_bind or s.then_bind or s.else_bind:
             self.narrowed_if(s)
             return
@@ -391,6 +479,7 @@ class Gen:
         self.line("}")
 
     def for_(self, s: ast.For) -> None:
+        """Emit a `for` loop, borrowing the list when nothing can modify it and cloning it otherwise."""
         mut = "mut " if s.info and s.info.mutable else ""
         it = s.iter
         if isinstance(it, ast.Call) and it.func == "range":
@@ -487,7 +576,9 @@ def emit_ref(e: ast.Expr) -> str:
         case ast.Index(v, i) if v.ty == STR:
             return f"__zy_char(&{emit_ref(v)}, {emit_ref(i)})"
         case ast.Slice(v, lo, hi):
-            b = lambda x: "None" if x is None else f"Some({emit_ref(x)})"
+            def b(x: ast.Expr | None) -> str:
+                return "None" if x is None else f"Some({emit_ref(x)})"
+
             if v.ty == STR:
                 return (f"{{ let __b: Vec<char> = {emit_ref(v)}.chars().collect(); "
                         f"let (__l, __h) = __zy_range(__b.len(), {b(lo)}, {b(hi)}); "
@@ -533,6 +624,14 @@ def emit_ref(e: ast.Expr) -> str:
 
 
 def fstring(parts: list) -> str:
+    """Render an f-string as a Rust `format!` call.
+
+    Args:
+        parts: The literal strings and `FormatPart`s of the f-string.
+
+    Returns:
+        The Rust expression.
+    """
     fmt, args = [], []
     for p in parts:
         if isinstance(p, str):
@@ -540,7 +639,7 @@ def fstring(parts: list) -> str:
             continue
         spec = p.spec[:-1] if p.spec and p.spec[-1] in "fds" else p.spec
         t = p.value.ty
-        if t == FLOAT or not (t in (INT, BOOL, STR)):
+        if t == FLOAT or t not in (INT, BOOL, STR):
             spec += "?"  # Debug: `2.0` for floats, and the container/struct representation
         fmt.append("{" + (f":{spec}" if spec else "") + "}")
         args.append(emit_ref(p.value))
@@ -569,6 +668,14 @@ def call_args(params: list[ast.Param], args: list[ast.Expr], by_ref_ok: bool = T
 
 
 def type_method(e: ast.MethodCall) -> str:
+    """Render a method call on a built-in str, list, dict or set.
+
+    Args:
+        e: The method call.
+
+    Returns:
+        The Rust expression.
+    """
     v, n, args = e.value, e.name, e.args
     a, t = emit_ref(v), v.ty
     m = emit_mut(v)
@@ -624,23 +731,42 @@ def type_method(e: ast.MethodCall) -> str:
     }[n]()
 
 
-def binop(e: ast.BinOp, op: str, l: ast.Expr, r: ast.Expr) -> str:
-    a, b = emit_ref(l), emit_ref(r)
+def binop(e: ast.BinOp, op: str, left: ast.Expr, right: ast.Expr) -> str:
+    """Render a binary operation, including string concatenation and `in`.
+
+    Args:
+        e: The operation node.
+        op: Its operator.
+        left: Left operand.
+        right: Right operand.
+
+    Returns:
+        The Rust expression, fully parenthesised.
+    """
+    a, b = emit_ref(left), emit_ref(right)
     if op in ("in", "not in"):
-        if r.ty == STR:
+        if right.ty == STR:
             test = f"{b}.contains({a}.as_str())"
-        elif isinstance(r.ty, DictT):
+        elif isinstance(right.ty, DictT):
             test = f"{b}.contains_key(&{a})"
         else:
             test = f"{b}.contains(&{a})"
         return f"(!{test})" if op == "not in" else f"({test})"
-    if op == "+" and l.ty == STR:
+    if op == "+" and left.ty == STR:
         return f'format!("{{}}{{}}", {a}, {b})'
     rust_op = {"and": "&&", "or": "||"}.get(op, op)
     return f"({a} {rust_op} {b})"
 
 
 def call(e: ast.Call) -> str:
+    """Render a call of a built-in, an `extern fn`, a struct constructor or a user function.
+
+    Args:
+        e: The call.
+
+    Returns:
+        The Rust expression.
+    """
     args = e.args
     if e.ctor_fields is not None:
         fields = ", ".join(f"{ident(n)}: {emit(a)}" for n, a in zip(e.ctor_fields, args))
@@ -754,6 +880,14 @@ def call(e: ast.Call) -> str:
 
 
 def generate(prog: ast.Program) -> str:
+    """Generate Rust source for a checked program.
+
+    Args:
+        prog: The program, annotated by the checker.
+
+    Returns:
+        The Rust source text, ready for `rustc`.
+    """
     _METHODS.clear()
     _EXTERNS.clear()
     _EXTERNS.update({s.name: s for s in prog.body if isinstance(s, ast.ExternFn)})

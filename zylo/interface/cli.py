@@ -1,102 +1,24 @@
+"""Command-line interface: `zylo check|emit|build|run`, and the package commands.
+
+Exit codes: 0 on success, 1 for a compile or package error, 2 for incorrect usage, and for `zylo run` the program's
+own exit code (101 when it stops on a runtime error).
+"""
+
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__
-from . import ast
-from . import cargo
-from . import env as envmod
-from . import pkgcmds as pkg
-from .checker import check
-from .codegen import generate
-from .diagnostics import format_error
-from .errors import BackendError, PackageError, ZyloError
-from .cargo import validate_rust_dep
-from .linker import Linker
-from .manifest import MANIFEST, find_manifest, load_manifest
-from .parser import parse
+from zylo import __version__
+from zylo.application import package_commands as pkg
+from zylo.application.compile import build_executable, check_file, compile_file
+from zylo.domain.errors import BackendError, PackageError, ZyloError
+from zylo.interface.diagnostics import format_error
 
 # CLI exit codes: 0 ok · 1 compile error · 2 incorrect usage (argparse)
 # `zylo run` returns the exit code of the program it ran.
-
-
-def transpile_source(src: str) -> str:
-    """Compile a single self-contained source string (no imports)."""
-    prog = parse(src)
-    if any(isinstance(s, (ast.Import, ast.FromImport)) for s in prog.body):
-        raise ZyloError("imports need a source file; compile a file instead of a string")
-    return generate(check(prog))
-
-
-def project_context(path: Path, env: str | Path | None = None):
-    """(manifest of the project containing `path`, or None; the active environment, or None)."""
-    active = envmod.discover(path.resolve().parent, env)
-    mf = find_manifest(path.resolve().parent)
-    return (load_manifest(mf) if mf else None), active
-
-
-def rust_crates(manifest, active) -> dict[str, object]:
-    """Crates to build with: the project's, plus those of the packages it trusts (conflicts are an error)."""
-    crates = dict(manifest.rust_dependencies) if manifest else {}
-    for pkg in (manifest.trusted_packages if manifest else []):
-        pm = active.packages_dir / pkg / MANIFEST if active else None
-        if pm is None or not pm.is_file():
-            continue
-        for name, spec in load_manifest(pm).rust_dependencies.items():
-            validate_rust_dep(name, spec, allow_path=False)
-            if name in crates and crates[name] != spec:
-                raise PackageError(f"conflicting requirements for crate {name!r}: {crates[name]!r} and {spec!r} (from package {pkg!r})")
-            crates[name] = spec
-    return crates
-
-
-def load_program(path: Path, env: str | Path | None = None) -> ast.Program:
-    """Parse a file and everything it imports (using the active environment, if any)."""
-    manifest, active = project_context(path, env)
-    trusted = manifest.trusted_packages if manifest else []
-    return Linker(active.packages_dir if active else None, trusted).link(path)
-
-
-def compile_file(path: Path, env: str | Path | None = None):
-    """(Rust source, crates it needs, the project manifest or None)."""
-    manifest, active = project_context(path, env)
-    trusted = manifest.trusted_packages if manifest else []
-    prog = Linker(active.packages_dir if active else None, trusted).link(path)
-    return generate(check(prog)), rust_crates(manifest, active), manifest
-
-
-def transpile(path: Path, env: str | Path | None = None) -> str:
-    return compile_file(path, env)[0]
-
-
-def build_executable(rs: str, crates: dict[str, object], manifest, out: Path, checks: bool, offline: bool) -> None:
-    """`rustc` when there are no Rust dependencies (fast), otherwise a Cargo project next to zylo.toml."""
-    if crates:
-        cargo.build(rs, crates, out, manifest.root, checks, offline)
-    else:
-        compile_rust(rs, out, checks)
-
-
-def compile_rust(rs: str, out: Path, overflow_checks: bool = True) -> None:
-    rustc = shutil.which("rustc")
-    if not rustc:
-        raise BackendError("rustc not found. Install Rust: https://rustup.rs")
-    with tempfile.TemporaryDirectory() as tmp:
-        src = Path(tmp) / "main.rs"
-        src.write_text(rs)
-        cmd = [rustc, "-O", "-o", str(out), str(src)]
-        if overflow_checks:
-            cmd[2:2] = ["-C", "overflow-checks=yes"]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        if r.returncode:
-            raise BackendError(
-                "rustc rejected the generated code. This is a Zylo bug; "
-                "use `zylo emit` to see the Rust and report it.\n" + r.stderr.rstrip()
-            )
 
 
 def exit_code(returncode: int) -> int:
@@ -105,6 +27,11 @@ def exit_code(returncode: int) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser with every subcommand.
+
+    Returns:
+        The parser.
+    """
     p = argparse.ArgumentParser(prog="zylo", description="Zylo: Python-like syntax, static typing, compiles to Rust.")
     p.add_argument("--version", action="version", version=f"zylo {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True, metavar="{check,emit,build,run,init,venv,add,remove,install,update,list}")
@@ -153,6 +80,14 @@ PACKAGE_COMMANDS = {"init", "venv", "add", "remove", "install", "update", "list"
 
 
 def package_main(a: argparse.Namespace) -> int:
+    """Run a package command (`init`, `venv`, `add`, `remove`, `install`, `update`, `list`).
+
+    Args:
+        a: The parsed arguments.
+
+    Returns:
+        The exit code.
+    """
     cwd = Path.cwd()
     try:
         match a.cmd:
@@ -177,6 +112,7 @@ def package_main(a: argparse.Namespace) -> int:
 
 
 def read_text_or_none(path: Path) -> str | None:
+    """Read a text file, returning None when it cannot be read; used to show code snippets in errors."""
     try:
         return path.read_text()
     except (OSError, UnicodeDecodeError):
@@ -184,10 +120,19 @@ def read_text_or_none(path: Path) -> str | None:
 
 
 def use_color() -> bool:
+    """Whether to colour output: standard error is a terminal and `NO_COLOR` is not set."""
     return sys.stderr.isatty() and "NO_COLOR" not in os.environ
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the `zylo` command.
+
+    Args:
+        argv: The arguments (without the program name); defaults to `sys.argv`.
+
+    Returns:
+        The process exit code.
+    """
     a = build_parser().parse_args(argv)
     if a.cmd in PACKAGE_COMMANDS:
         return package_main(a)
@@ -202,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if a.cmd == "check":
-            check(load_program(a.file, a.env))
+            check_file(a.file, a.env)
             return 0
         rs, crates, manifest = compile_file(a.file, a.env)
         if a.cmd == "emit":

@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from zylo import cli
-from zylo.checker import check
-from zylo.cli import exit_code, main
-from zylo.diagnostics import format_error
-from zylo.errors import BackendError, ZyloError
-from zylo.parser import parse
+from zylo.application import compile as pipeline
+from zylo.domain.errors import BackendError, ZyloError
+from zylo.interface.cli import exit_code, main
+from zylo.interface.diagnostics import format_error
+from zylo.semantics.checker import check
+from zylo.syntax.parser import parse
 
 needs_rustc = pytest.mark.skipif(shutil.which("rustc") is None, reason="rustc no instalado")
 
@@ -88,7 +88,7 @@ def test_exit_arity():
 
 
 def test_exit_codegen():
-    rs = cli.transpile_source("exit(3)\n")
+    rs = pipeline.transpile_source("exit(3)\n")
     assert "std::process::exit((3i64) as i32)" in rs
 
 
@@ -141,14 +141,14 @@ def test_unknown_command_is_usage_error():
 
 
 def test_rustc_missing_is_reported(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    monkeypatch.setattr(shutil, "which", lambda _: None)
     assert main(["run", str(write(tmp_path, "print(1)\n"))]) == 1
     err = capsys.readouterr().err
     assert "rustc not found" in err and "rustup.rs" in err
 
 
 def test_build_refuses_to_overwrite_source(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr(cli.shutil, "which", lambda _: "/usr/bin/true")
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/true")
     f = write(tmp_path, "print(1)\n", name="prog")  # no extension: the default output == the source
     assert main(["build", str(f)]) == 1
     assert "would overwrite" in capsys.readouterr().err

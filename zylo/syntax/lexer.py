@@ -1,6 +1,12 @@
+"""Lexer: source text to tokens.
+
+Handles significant indentation (INDENT/DEDENT tokens), comments, numbers, identifiers and keywords, strings with
+escapes, and f-strings (kept raw for the parser to split).
+"""
+
 from dataclasses import dataclass
 
-from .errors import ZyloError
+from zylo.domain.errors import ZyloError
 
 KEYWORDS = {
     "fn", "if", "elif", "else", "while", "for", "in", "return", "break", "continue",
@@ -13,6 +19,14 @@ ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "\\": "\\", '"': '"', "'"
 
 @dataclass(frozen=True)
 class Token:
+    """A lexical token.
+
+    Attributes:
+        kind: INT, FLOAT, STR, FSTR, IDENT, KW, OP, NEWLINE, INDENT, DEDENT or EOF.
+        value: The token's text (empty for layout tokens).
+        line: 1-based line.
+        col: 1-based column.
+    """
     kind: str  # INT FLOAT STR IDENT KW OP NEWLINE INDENT DEDENT EOF
     value: str
     line: int
@@ -20,6 +34,19 @@ class Token:
 
 
 def tokenize(src: str) -> list[Token]:
+    """Split a Zylo source text into tokens.
+
+    Args:
+        src: The whole source text.
+
+    Returns:
+        The tokens, ending with an EOF token. Logical lines end with NEWLINE; changes of indentation produce INDENT and
+        DEDENT.
+
+    Raises:
+        ZyloError: On a tab, inconsistent indentation, an unterminated string, an unknown escape or an unexpected
+            character.
+    """
     tokens: list[Token] = []
     indents = [0]
     end = (1, 1)  # position after the last line with code

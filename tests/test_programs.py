@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from zylo.cli import compile_rust, transpile
+from zylo.application.compile import transpile
+from zylo.infrastructure.rustc import compile_rust
 
 PROGRAMS = Path(__file__).parent / "programs"
 EXAMPLES = Path(__file__).parent.parent / "examples"

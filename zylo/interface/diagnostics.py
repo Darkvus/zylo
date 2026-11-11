@@ -1,10 +1,21 @@
 """Terminal error format: `file:line:col: error: message` + a code snippet."""
-from .errors import BackendError, ZyloError
+from zylo.domain.errors import BackendError, ZyloError
 
 RED, BOLD, RESET = "\033[1;31m", "\033[1m", "\033[0m"
 
 
 def format_error(err: ZyloError, source: str | None, filename: str, color: bool = False) -> str:
+    """Format an error for a terminal.
+
+    Args:
+        err: The error.
+        source: Text of the file the error is in, for the code snippet, or None.
+        filename: The file's name for the heading.
+        color: Whether to use ANSI colours.
+
+    Returns:
+        `file:line:col: error: message` followed by the source line and a caret.
+    """
     label = f"{RED}error{RESET}{BOLD}" if color else "error"
     end = RESET if color else ""
 

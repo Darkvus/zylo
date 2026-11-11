@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from zylo.checker import check
-from zylo.errors import ZyloError
-from zylo.parser import parse
-from zylo.types import BOOL, FLOAT, INT, STR, UNIT, ListT, OptionT, ResultT
+from zylo.domain.errors import ZyloError
+from zylo.domain.types import BOOL, FLOAT, INT, STR, ListT, OptionT, ResultT
+from zylo.semantics.checker import check
+from zylo.syntax.parser import parse
 
 needs_rustc = pytest.mark.skipif(shutil.which("rustc") is None, reason="rustc not installed")
 
