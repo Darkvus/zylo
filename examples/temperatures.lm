@@ -1,0 +1,5 @@
+# Conversión Celsius -> Fahrenheit. No hay coerción: int y float se convierten a mano.
+for step in range(5):
+    celsius = step * 10
+    fahrenheit = float(celsius) * 9.0 / 5.0 + 32.0
+    print(str(celsius) + " C = " + str(fahrenheit) + " F")

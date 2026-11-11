@@ -1,0 +1,16 @@
+# Producto de matrices 3x3 con listas anidadas
+fn multiply(a: list[list[int]], b: list[list[int]], n: int) -> list[list[int]]:
+    result = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+    for i in range(n):
+        for j in range(n):
+            total = 0
+            for k in range(n):
+                total += a[i][k] * b[k][j]
+            result[i][j] = total
+    return result
+
+a = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+b = [[9, 8, 7], [6, 5, 4], [3, 2, 1]]
+c = multiply(a, b, 3)
+for row in c:
+    print(row)

@@ -1,0 +1,26 @@
+# Estadísticas básicas de una lista
+fn total(xs: list[int]) -> int:
+    s = 0
+    for x in xs:
+        s += x
+    return s
+
+fn minimum(xs: list[int]) -> int:
+    m = xs[0]
+    for x in xs:
+        if x < m:
+            m = x
+    return m
+
+fn maximum(xs: list[int]) -> int:
+    m = xs[0]
+    for x in xs:
+        if x > m:
+            m = x
+    return m
+
+data = [4, 8, 15, 16, 23, 42]
+print(total(data))
+print(minimum(data))
+print(maximum(data))
+print(float(total(data)) / float(len(data)))

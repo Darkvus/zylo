@@ -1,0 +1,22 @@
+fn make(n: int) -> list[int]:
+    xs: list[int] = []
+    seed = 12345
+    for i in range(n):
+        seed = (seed * 1103515245 + 12345) % 2147483648
+        append(xs, seed % 100000)
+    return xs
+
+fn bubble_sort(xs: list[int]) -> list[int]:
+    n = len(xs)
+    for i in range(n):
+        for j in range(n - 1 - i):
+            if xs[j] > xs[j + 1]:
+                tmp = xs[j]
+                xs[j] = xs[j + 1]
+                xs[j + 1] = tmp
+    return xs
+
+data = bubble_sort(make(3000))
+print(data[0])
+print(data[1500])
+print(data[2999])

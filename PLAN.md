@@ -32,6 +32,7 @@ print(fib(35))
 - [x] Rust 1.99.1 instalado; `lumo run examples/hello.lm` funciona de punta a punta.
 - [x] **Fase 4 hecha (2026-11-11):** `lumo/codegen.py` completo (fn, let/let mut, if/elif/else, while, for range/list, listas, strings, conversiones, builtins). 10 programas e2e en `tests/programs/` (`.lm` + `.out`) compilados con rustc real + test de panic por overflow. 85 tests.
 - [x] **Fase 5 hecha (2026-11-11):** `lumo/diagnostics.py` (errores `archivo:línea:col: error: msg` + fragmento + `^`, color solo en TTY y sin `NO_COLOR`), CLI con subcomandos `check|emit|build|run`, `build --emit-rs`, `--no-overflow-checks`, `--version`, `run` devuelve el exit code del programa (señal → 128+N), builtin `exit(int)`, errores del backend (`BackendError`) separados de los del usuario. Mensajes de parseo legibles y posición real al final del archivo. 113 tests.
+- [x] **Fase 6 hecha (2026-11-11) — MVP completo.** 13 ejemplos documentados en `examples/` (salidas calculadas con Python independiente), benchmark reproducible en `benchmarks/` (`python benchmarks/bench.py --write` → `RESULTS.md`).
 - Repo privado: https://github.com/Darkvus/lumo
 
 Limitaciones actuales: solo sentencias de expresión (`print(...)`); el lexer ya reconoce
@@ -110,7 +111,12 @@ lumo/
 - Ver Rust generado: `.venv/bin/lumo emit examples/hello.lm`
 - Avanzar siempre en vertical: cada construcción nueva debe pasar lexer → parser → tipos → codegen → rustc antes de pasar a la siguiente.
 
-## Criterio de éxito del MVP
+## Criterio de éxito del MVP — CUMPLIDO
+- [x] `fib(35)` ≥ 20× más rápido que Python: **28×** con overflow-checks, 46× sin ellos (ver `benchmarks/RESULTS.md`).
+- [x] Errores de sintaxis y de tipos con línea y columna (+ fragmento de código).
+- [x] 10 ejemplos que compilan y pasan tests: 13 en `examples/`.
+
+### Criterio original
 - `fib(35)` en `.lm` al menos 20× más rápido que en Python.
 - Errores de sintaxis y de tipos con línea y columna.
 - 10 ejemplos que compilan y pasan tests.

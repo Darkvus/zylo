@@ -1,0 +1,14 @@
+# Máximo común divisor y mínimo común múltiplo
+fn gcd(a: int, b: int) -> int:
+    while b != 0:
+        t = a % b
+        a = b
+        b = t
+    return a
+
+fn lcm(a: int, b: int) -> int:
+    return a / gcd(a, b) * b
+
+print(gcd(84, 36))
+print(lcm(4, 6))
+print(lcm(21, 6))

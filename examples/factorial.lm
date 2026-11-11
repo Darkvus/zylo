@@ -1,0 +1,9 @@
+# Factoriales hasta 20! (el último que cabe en un int de 64 bits)
+fn factorial(n: int) -> int:
+    result = 1
+    for i in range(2, n + 1):
+        result *= i
+    return result
+
+for n in range(0, 21):
+    print(str(n) + "! = " + str(factorial(n)))
