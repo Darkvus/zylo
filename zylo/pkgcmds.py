@@ -58,8 +58,9 @@ def cmd_init(cwd: Path, name: str | None) -> int:
         (src / "main.zy").write_text(HELLO)
     ignore = cwd / ".gitignore"
     text = ignore.read_text() if ignore.exists() else ""
-    if ENV_DIR not in text.split():
-        ignore.write_text(text + ("" if not text or text.endswith("\n") else "\n") + f"{ENV_DIR}/\n")
+    missing = [d for d in (ENV_DIR, ".zylo-build") if d not in text.split() and f"{d}/" not in text.split()]
+    if missing:
+        ignore.write_text(text + ("" if not text or text.endswith("\n") else "\n") + "".join(f"{d}/\n" for d in missing))
     print(f"created {MANIFEST} and src/main.zy for package {name!r}")
     return 0
 

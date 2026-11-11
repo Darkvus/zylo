@@ -9,6 +9,8 @@ Structs: `#[derive(Clone, PartialEq)] struct` + an `impl` with their methods. `s
 `&mut self` depending on what the checker inferred (`FnDef.self_mut`). `Debug` is written by hand to
 imprimir `Point(x=1.0, y=2.0)`.
 """
+import re
+
 from . import ast
 from .checker import BUILTINS as BUILTIN_NAMES
 from .errors import ZyloError
@@ -222,7 +224,7 @@ class Gen:
     def program(self, prog: ast.Program) -> str:
         self.out.append(PRELUDE)
         structs = [s for s in prog.body if isinstance(s, ast.StructDef)]
-        fns = [s for s in prog.body if isinstance(s, ast.FnDef)]
+        fns = [s for s in prog.body if isinstance(s, ast.FnDef) and not isinstance(s, ast.ExternFn)]
         rest = [s for s in prog.body if not isinstance(s, (ast.FnDef, ast.StructDef))]
         for sd in structs:
             self.struct(sd)
@@ -547,6 +549,15 @@ def fstring(parts: list) -> str:
 
 _METHODS: dict[tuple[str, str], ast.FnDef] = {}
 _FNS: dict[str, ast.FnDef] = {}  # the program's top-level functions by (linked) name
+_EXTERNS: dict[str, ast.ExternFn] = {}
+
+
+def extern_call(x: ast.ExternFn, args: list[ast.Expr]) -> str:
+    """Expand an `extern fn`: a template with {0}, {1}... or a Rust path called with the arguments (by value)."""
+    vals = [emit(a) for a in args]
+    if re.search(r"\{\d+\}", x.template):
+        return "(" + re.sub(r"\{(\d+)\}", lambda m: f"({vals[int(m.group(1))]})", x.template) + ")"
+    return f"({x.template}({', '.join(vals)}))"
 
 
 def call_args(params: list[ast.Param], args: list[ast.Expr], by_ref_ok: bool = True) -> str:
@@ -634,6 +645,8 @@ def call(e: ast.Call) -> str:
     if e.ctor_fields is not None:
         fields = ", ".join(f"{ident(n)}: {emit(a)}" for n, a in zip(e.ctor_fields, args))
         return f"{tname(e.func)} {{ {fields} }}"
+    if e.func in _EXTERNS:
+        return extern_call(_EXTERNS[e.func], args)
     if e.func in _FNS and e.func in BUILTIN_NAMES:  # a user function shadowing a builtin name
         return f"{ident(e.func)}({call_args(_FNS[e.func].params, args)})"
     match e.func:
@@ -742,6 +755,8 @@ def call(e: ast.Call) -> str:
 
 def generate(prog: ast.Program) -> str:
     _METHODS.clear()
+    _EXTERNS.clear()
+    _EXTERNS.update({s.name: s for s in prog.body if isinstance(s, ast.ExternFn)})
     _FNS.clear()
     _FNS.update({s.name: s for s in prog.body if isinstance(s, ast.FnDef)})
     for s in prog.body:

@@ -13,7 +13,7 @@ and is built vertically (lexer → parser → checker → codegen → tests).
 | **Installers and releases** | `install.sh` for Linux/macOS, a Windows installer, standalone binaries and a wheel built by CI on every merge to `main` | done |
 | **v0.3.0 Modules and packages** | `import`, virtual environments (`zylo venv`), git packages with a lock file (`zylo add/install/update/remove/list`), see [docs/packages.md](docs/packages.md) | done |
 | **Standard library** | A minimal bundled library (`math`, `os`, text helpers) | |
-| **v0.7 Rust interop** | Use crates (Cargo backend) and call Rust functions from Zylo | |
+| **v0.7 Rust interop** | `extern fn` with Rust paths and templates, crates from `[rust-dependencies]` built with Cargo, and a trust rule for community packages | done |
 | **v0.8 Tooling** | VS Code syntax highlighting, formatter, several errors per run, LSP | |
 | **Community** | Documentation translations (the docs are English-only for now) and localized diagnostics | |
 

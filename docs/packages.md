@@ -133,7 +133,13 @@ you run the result. Mitigations built into the tool:
   outside itself.
 - Checksums in the lock detect tampering and upstream force-pushes.
 
-## 7. Out of scope (for now)
+## 7. Rust access and trust
+
+A package is Zylo source and cannot call Rust by default. If a package contains an `extern fn`, or declares
+`[rust-dependencies]`, your project must list it in `[rust] trusted-packages` in `zylo.toml`; otherwise the first is an
+error and the second is ignored. See [rust-interop.md](rust-interop.md).
+
+## 8. Out of scope (for now)
 
 A central registry and `zylo publish`, semantic-version ranges and a resolver, module-level
 constants, re-exports, wrapping Rust crates (see the Rust interop milestone), and per-package feature

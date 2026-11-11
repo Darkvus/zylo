@@ -8,13 +8,16 @@ from pathlib import Path
 
 from . import __version__
 from . import ast
+from . import cargo
 from . import env as envmod
 from . import pkgcmds as pkg
 from .checker import check
 from .codegen import generate
 from .diagnostics import format_error
 from .errors import BackendError, PackageError, ZyloError
+from .cargo import validate_rust_dep
 from .linker import Linker
+from .manifest import MANIFEST, find_manifest, load_manifest
 from .parser import parse
 
 # CLI exit codes: 0 ok · 1 compile error · 2 incorrect usage (argparse)
@@ -29,14 +32,53 @@ def transpile_source(src: str) -> str:
     return generate(check(prog))
 
 
+def project_context(path: Path, env: str | Path | None = None):
+    """(manifest of the project containing `path`, or None; the active environment, or None)."""
+    active = envmod.discover(path.resolve().parent, env)
+    mf = find_manifest(path.resolve().parent)
+    return (load_manifest(mf) if mf else None), active
+
+
+def rust_crates(manifest, active) -> dict[str, object]:
+    """Crates to build with: the project's, plus those of the packages it trusts (conflicts are an error)."""
+    crates = dict(manifest.rust_dependencies) if manifest else {}
+    for pkg in (manifest.trusted_packages if manifest else []):
+        pm = active.packages_dir / pkg / MANIFEST if active else None
+        if pm is None or not pm.is_file():
+            continue
+        for name, spec in load_manifest(pm).rust_dependencies.items():
+            validate_rust_dep(name, spec, allow_path=False)
+            if name in crates and crates[name] != spec:
+                raise PackageError(f"conflicting requirements for crate {name!r}: {crates[name]!r} and {spec!r} (from package {pkg!r})")
+            crates[name] = spec
+    return crates
+
+
 def load_program(path: Path, env: str | Path | None = None) -> ast.Program:
     """Parse a file and everything it imports (using the active environment, if any)."""
-    active = envmod.discover(path.resolve().parent, env)
-    return Linker(active.packages_dir if active else None).link(path)
+    manifest, active = project_context(path, env)
+    trusted = manifest.trusted_packages if manifest else []
+    return Linker(active.packages_dir if active else None, trusted).link(path)
+
+
+def compile_file(path: Path, env: str | Path | None = None):
+    """(Rust source, crates it needs, the project manifest or None)."""
+    manifest, active = project_context(path, env)
+    trusted = manifest.trusted_packages if manifest else []
+    prog = Linker(active.packages_dir if active else None, trusted).link(path)
+    return generate(check(prog)), rust_crates(manifest, active), manifest
 
 
 def transpile(path: Path, env: str | Path | None = None) -> str:
-    return generate(check(load_program(path, env)))
+    return compile_file(path, env)[0]
+
+
+def build_executable(rs: str, crates: dict[str, object], manifest, out: Path, checks: bool, offline: bool) -> None:
+    """`rustc` when there are no Rust dependencies (fast), otherwise a Cargo project next to zylo.toml."""
+    if crates:
+        cargo.build(rs, crates, out, manifest.root, checks, offline)
+    else:
+        compile_rust(rs, out, checks)
 
 
 def compile_rust(rs: str, out: Path, overflow_checks: bool = True) -> None:
@@ -71,6 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("file", type=Path, help=".zy source file")
         sp.add_argument("--env", metavar="DIR", help="virtual environment to use (default: $ZYLO_ENV or the nearest .zylo-env)")
         if backend:
+            sp.add_argument("--offline", action="store_true", help="build with Cargo without downloading crates")
             sp.add_argument("--no-overflow-checks", action="store_true",
                             help="no integer overflow checks (faster; integers wrap around silently)")
 
@@ -161,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
         if a.cmd == "check":
             check(load_program(a.file, a.env))
             return 0
-        rs = transpile(a.file, a.env)
+        rs, crates, manifest = compile_file(a.file, a.env)
         if a.cmd == "emit":
             sys.stdout.write(rs)
             return 0
@@ -169,14 +212,14 @@ def main(argv: list[str] | None = None) -> int:
         if a.cmd == "run":
             with tempfile.TemporaryDirectory() as tmp:
                 exe = Path(tmp) / "prog"
-                compile_rust(rs, exe, checks)
+                build_executable(rs, crates, manifest, exe, checks, a.offline)
                 sys.stdout.flush()
                 prog_args = [x for x in a.args if x != "--"][:] if a.args[:1] != ["--"] else a.args[1:]
                 return exit_code(subprocess.run([str(exe), *prog_args]).returncode)
         out = a.out or a.file.with_suffix("")
         if out.resolve() == a.file.resolve():
             raise BackendError(f"output {out} would overwrite the source file; use -o")
-        compile_rust(rs, out, checks)
+        build_executable(rs, crates, manifest, out, checks, a.offline)
         if a.emit_rs:
             out.with_name(out.name + ".rs").write_text(rs)
         print(f"built {out}")

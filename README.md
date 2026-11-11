@@ -96,6 +96,10 @@ zylo add github.com/ana/textkit@v1.0.0   # installs it and records the exact com
 zylo run src/main.zy                     # import textkit, from textkit import shout...
 ```
 
+**Rust when you need it.** `extern fn` calls any Rust function, and `[rust-dependencies]` in `zylo.toml` brings in
+crates. Community packages stay plain Zylo unless you explicitly trust them
+([docs/rust-interop.md](docs/rust-interop.md)).
+
 The full language is documented in the [language guide](docs/guide.md); design decisions and their
 reasons are in [docs/design.md](docs/design.md).
 

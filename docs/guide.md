@@ -381,6 +381,22 @@ zylo run src/main.zy                     # finds .zylo-env on its own
 Everything about modules, environments, the lock file and the security model is in
 [packages.md](packages.md).
 
+## Calling Rust
+
+`extern fn` declares a Zylo function whose body is Rust: a path, or a template where `{0}`, `{1}`... are the
+arguments. Crates come from `[rust-dependencies]` in `zylo.toml`.
+
+```zylo
+extern fn hypot(a: float, b: float) -> float = "f64::hypot"
+extern fn shout(s: str) -> str = "{0}.to_uppercase()"
+extern fn parse_hex(s: str) -> Result[int, str] = "i64::from_str_radix(&{0}, 16).map_err(|e| e.to_string())"
+
+print(hypot(3.0, 4.0), shout("hi"), parse_hex("ff"))
+```
+
+Packages from the community may not call Rust unless your project trusts them. Details, the type mapping and the
+trust rules are in [rust-interop.md](rust-interop.md).
+
 ## Built-in functions
 
 | Function | Description |
