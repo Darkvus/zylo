@@ -48,16 +48,21 @@ class Parser:
 
     Use `parse()` rather than this class directly.
     """
-    def __init__(self, tokens: list[Token]):
+    def __init__(self, tokens: list[Token], collect: bool = False):
         """Create a parser.
 
         Args:
             tokens: The token list produced by `tokenize`.
+            collect: Recover from a syntax error, remember it in `errors` and go on with the next statement, instead
+                of raising on the first one.
         """
         self.toks = tokens
         self.pos = 0
+        self.depth = 0  # how many INDENTs are open: needed to find the end of a bad statement
+        self.errors: list[ZyloError] = []
+        self.collect = collect
 
-    # ---- utilidades -------------------------------------------------------------
+    # ---- helpers -------------------------------------------------------------
 
     @property
     def cur(self) -> Token:
@@ -79,7 +84,35 @@ class Parser:
         """Consume and return the current token."""
         tok = self.cur
         self.pos += 1
+        if tok.kind == "INDENT":
+            self.depth += 1
+        elif tok.kind == "DEDENT":
+            self.depth -= 1
         return tok
+
+    def recover(self, depth: int) -> None:
+        """Skip to the end of the statement that failed, so parsing can continue.
+
+        A statement ends at the NEWLINE that returns to `depth`; if that line opens an indented block (the failed
+        statement was a block header) the whole block is skipped too.
+
+        Args:
+            depth: The indentation depth of the statement that failed.
+        """
+        start = self.pos
+        prev = self.toks[self.pos - 1] if self.pos else None
+        if prev is not None and prev.kind == "NEWLINE" and self.depth == depth and not self.check("INDENT"):
+            return  # the error was found after the end of the line had already been consumed
+        while not self.check("EOF"):
+            if self.depth == depth and self.check("DEDENT") and self.pos > start:
+                return  # the enclosing block ends here; leave its DEDENT for the caller
+            tok = self.advance()
+            if tok.kind == "NEWLINE" and self.depth == depth and not self.check("INDENT"):
+                return
+            if tok.kind == "DEDENT" and self.depth == depth:
+                return
+        if self.pos == start and not self.check("EOF"):
+            self.advance()
 
     def check(self, kind: str, value: str | None = None) -> bool:
         """Test the current token.
@@ -125,7 +158,7 @@ class Parser:
             raise ZyloError(f"expected {want}, found {describe(tok)}", tok.line, tok.col)
         return self.advance()
 
-    # ---- programa y bloques -------------------------------------------------------
+    # ---- program and blocks -------------------------------------------------------
 
     def parse_program(self) -> ast.Program:
         """Parse a whole module.
@@ -135,8 +168,23 @@ class Parser:
         """
         body = []
         while not self.check("EOF"):
-            body.append(self.parse_stmt())
+            self.parse_one(body, 0)
         return ast.Program(body, line=1, col=1)
+
+    def parse_one(self, body: list[ast.Stmt], depth: int) -> None:
+        """Parse one statement into `body`; in collecting mode a syntax error is recorded and skipped.
+
+        Args:
+            body: The statement list being built.
+            depth: The indentation depth the statement is at.
+        """
+        try:
+            body.append(self.parse_stmt())
+        except ZyloError as e:
+            if not self.collect:
+                raise
+            self.errors.append(e)
+            self.recover(depth)
 
     def parse_block(self) -> list[ast.Stmt]:
         """Parse `: NEWLINE INDENT statements DEDENT`.
@@ -153,14 +201,15 @@ class Parser:
             raise ZyloError("expected an indented block", self.cur.line, self.cur.col)
         self.advance()
         body = []
+        depth = self.depth
         while not self.check("DEDENT"):
             if self.check("EOF"):
                 raise ZyloError("unclosed block", self.cur.line, self.cur.col)
-            body.append(self.parse_stmt())
+            self.parse_one(body, depth)
         self.expect("DEDENT")
         return body
 
-    # ---- sentencias ---------------------------------------------------------------
+    # ---- statements ---------------------------------------------------------------
 
     def parse_stmt(self) -> ast.Stmt:
         """Parse one statement, dispatching on its leading keyword.
@@ -406,7 +455,7 @@ class Parser:
         self.advance()
         return ast.Param(name.value, self.parse_type(), line=name.line, col=name.col)
 
-    # ---- tipos --------------------------------------------------------------------
+    # ---- types --------------------------------------------------------------------
 
     def parse_type(self) -> ast.TypeRef:
         """Parse a type: `int`, `list[T]`, `tuple[A, B]`, `dict[K, V]`, `set[T]`, `Result[T, E]`, `mod.Struct`, with `?` suffixes.
@@ -456,7 +505,7 @@ class Parser:
             t = ast.TypeRef("?", [t], line=t.line, col=t.col)
         return t
 
-    # ---- expresiones ----------------------------------------------------------------
+    # ---- expressions ----------------------------------------------------------------
 
     def parse_expr(self, min_prec: int = 1) -> ast.Expr:
         """Parse an expression with precedence climbing.
@@ -724,6 +773,38 @@ class Parser:
     def parse_call(self, name: Token) -> ast.Call:
         """Parse the arguments of a call to the function named by `name`."""
         return ast.Call(name.value, self.parse_args(), line=name.line, col=name.col)
+
+
+def parse_collect(src: str, file: str | None = None) -> tuple[ast.Program, list[ZyloError]]:
+    """Parse a module and report every syntax error, not only the first.
+
+    After an error the parser skips the bad statement (and its block) and carries on, so one run reports the mistakes
+    of several statements. The returned program holds only the statements that parsed.
+
+    Args:
+        src: The module's source text.
+        file: Its file name, stamped on nodes and errors.
+
+    Returns:
+        The (possibly partial) program and the errors found, in source order. A lexical error (an unterminated string,
+        a tab) stops the run, so it is the only error reported.
+    """
+    try:
+        tokens = tokenize(src)
+    except ZyloError as e:
+        e.file = e.file or file
+        return ast.Program([], line=1, col=1), [e]
+    parser = Parser(tokens, collect=True)
+    try:
+        prog = parser.parse_program()
+    except ZyloError as e:  # an error the recovery could not absorb, such as a block that never closes
+        parser.errors.append(e)
+        prog = ast.Program([], line=1, col=1)
+    for e in parser.errors:
+        e.file = e.file or file
+    if file is not None:
+        ast.stamp(prog, file)
+    return prog, parser.errors
 
 
 def parse(src: str, file: str | None = None) -> ast.Program:

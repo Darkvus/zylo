@@ -397,6 +397,14 @@ print(hypot(3.0, 4.0), shout("hi"), parse_hex("ff"))
 Packages from the community may not call Rust unless your project trusts them. Details, the type mapping and the
 trust rules are in [rust-interop.md](rust-interop.md).
 
+## Tools
+
+- `zylo check file.zy` reports **every** mistake in a program, not only the first. After a syntax error the parser skips
+  the bad statement and carries on; the type checker checks each statement on its own and does not repeat an error for
+  a variable whose declaration already failed. The output ends with `error: aborting due to N previous errors`.
+- `zylo fmt` formats files in the canonical style and `zylo lsp` runs a language server. Both, and the Visual Studio
+  Code extension, are described in [editors.md](editors.md).
+
 ## Built-in functions
 
 | Function | Description |

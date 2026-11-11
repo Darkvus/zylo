@@ -1,0 +1,305 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Zylo",
+  "scopeName": "source.zylo",
+  "fileTypes": [
+    "zy"
+  ],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#fstrings"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#definitions"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#builtins"
+    },
+    {
+      "include": "#self"
+    },
+    {
+      "include": "#struct-names"
+    },
+    {
+      "include": "#calls"
+    },
+    {
+      "include": "#operators"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "name": "comment.line.number-sign.zylo",
+      "match": "#.*$"
+    },
+    "escape": {
+      "name": "constant.character.escape.zylo",
+      "match": "\\\\[nrt0\\\\\\\"']"
+    },
+    "fstrings": {
+      "patterns": [
+        {
+          "name": "string.quoted.fstring.zylo",
+          "begin": "\\b(f)(\")",
+          "end": "\"",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.string.zylo"
+            },
+            "2": {
+              "name": "punctuation.definition.string.begin.zylo"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.zylo"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#escape"
+            },
+            {
+              "match": "\\{\\{|\\}\\}",
+              "name": "constant.character.escape.zylo"
+            },
+            {
+              "name": "meta.interpolation.zylo",
+              "begin": "\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.begin.zylo"
+                }
+              },
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.end.zylo"
+                }
+              },
+              "patterns": [
+                {
+                  "match": ":[^}]*",
+                  "name": "constant.other.format-spec.zylo"
+                },
+                {
+                  "include": "$self"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.fstring.zylo",
+          "begin": "\\b(f)(')",
+          "end": "'",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.string.zylo"
+            },
+            "2": {
+              "name": "punctuation.definition.string.begin.zylo"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.zylo"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#escape"
+            },
+            {
+              "match": "\\{\\{|\\}\\}",
+              "name": "constant.character.escape.zylo"
+            },
+            {
+              "name": "meta.interpolation.zylo",
+              "begin": "\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.begin.zylo"
+                }
+              },
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.section.interpolation.end.zylo"
+                }
+              },
+              "patterns": [
+                {
+                  "match": ":[^}]*",
+                  "name": "constant.other.format-spec.zylo"
+                },
+                {
+                  "include": "$self"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.zylo",
+          "begin": "\"",
+          "end": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.zylo"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.zylo"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#escape"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.zylo",
+          "begin": "'",
+          "end": "'",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.zylo"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.zylo"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#escape"
+            }
+          ]
+        }
+      ]
+    },
+    "definitions": {
+      "patterns": [
+        {
+          "match": "\\b(extern)\\s+(fn)\\s+([A-Za-z_]\\w*)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.zylo"
+            },
+            "2": {
+              "name": "storage.type.function.zylo"
+            },
+            "3": {
+              "name": "entity.name.function.zylo"
+            }
+          }
+        },
+        {
+          "match": "\\b(fn)\\s+([A-Za-z_]\\w*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.zylo"
+            },
+            "2": {
+              "name": "entity.name.function.zylo"
+            }
+          }
+        },
+        {
+          "match": "\\b(struct)\\s+([A-Za-z_]\\w*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.struct.zylo"
+            },
+            "2": {
+              "name": "entity.name.type.struct.zylo"
+            }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.zylo",
+          "match": "\\b(as|break|continue|elif|else|for|from|if|import|in|return|while)\\b"
+        },
+        {
+          "name": "keyword.operator.word.zylo",
+          "match": "\\b(and|is|not|or)\\b"
+        },
+        {
+          "name": "storage.type.zylo",
+          "match": "\\b(extern|fn|struct)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "name": "constant.language.zylo",
+      "match": "\\b(false|none|true)\\b"
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.zylo",
+          "match": "\\b\\d+\\.\\d+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.zylo",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+    "types": {
+      "name": "support.type.zylo",
+      "match": "\\b(Result|bool|dict|float|int|list|set|str|tuple)\\b"
+    },
+    "builtins": {
+      "name": "support.function.builtin.zylo",
+      "match": "\\b(abs|append|append_file|argv|ceil|enumerate|env|eprint|err|exit|file_exists|float|floor|input|int|len|list_dir|max|min|ok|parse_float|parse_int|pow|print|range|read_file|read_line|read_stdin|reversed|round|sleep|some|sorted|sqrt|str|sum|time|write_file|zip)\\b(?=\\s*\\()"
+    },
+    "self": {
+      "name": "variable.language.self.zylo",
+      "match": "\\bself\\b"
+    },
+    "struct-names": {
+      "name": "entity.name.type.zylo",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    },
+    "calls": {
+      "name": "entity.name.function.call.zylo",
+      "match": "\\b[A-Za-z_]\\w*(?=\\s*\\()"
+    },
+    "operators": {
+      "name": "keyword.operator.zylo",
+      "match": "->|==|!=|<=|>=|\\+=|-=|\\*=|/=|%=|[+\\-*/%<>=?]"
+    }
+  }
+}

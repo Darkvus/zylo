@@ -96,6 +96,10 @@ zylo add github.com/ana/textkit@v1.0.0   # installs it and records the exact com
 zylo run src/main.zy                     # import textkit, from textkit import shout...
 ```
 
+**Good tooling.** `zylo check` reports every error at once, `zylo fmt` formats your code without ever changing its
+meaning, and `zylo lsp` plus a Visual Studio Code extension give you live diagnostics, formatting, an outline and
+completion in your editor ([docs/editors.md](docs/editors.md)).
+
 **Rust when you need it.** `extern fn` calls any Rust function, and `[rust-dependencies]` in `zylo.toml` brings in
 crates. Community packages stay plain Zylo unless you explicitly trust them
 ([docs/rust-interop.md](docs/rust-interop.md)).

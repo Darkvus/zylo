@@ -43,7 +43,7 @@ class TypeRef(Node):
     args: list["TypeRef"]
 
 
-# ---- expresiones ---------------------------------------------------------------
+# ---- expressions ---------------------------------------------------------------
 
 @dataclass
 class Int(Node):
@@ -221,7 +221,7 @@ Expr = (Int | Float | Str | Bool | Name | BinOp | UnaryOp | Call | ListLit | Ind
         | MethodCall | NoneLit | IsCheck | Try | FString | TupleLit | DictLit | SetLit | Slice)
 
 
-# ---- sentencias ----------------------------------------------------------------
+# ---- statements ----------------------------------------------------------------
 
 @dataclass
 class ExprStmt(Node):

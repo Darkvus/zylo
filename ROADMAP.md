@@ -14,12 +14,15 @@ and is built vertically (lexer → parser → checker → codegen → tests).
 | **v0.3.0 Modules and packages** | `import`, virtual environments (`zylo venv`), git packages with a lock file (`zylo add/install/update/remove/list`), see [docs/packages.md](docs/packages.md) | done |
 | **Standard library** | A minimal bundled library (`math`, `os`, text helpers) | |
 | **v0.7 Rust interop** | `extern fn` with Rust paths and templates, crates from `[rust-dependencies]` built with Cargo, and a trust rule for community packages | done |
-| **v0.8 Tooling** | VS Code syntax highlighting, formatter, several errors per run, LSP | |
+| **v0.8 Tooling** | `zylo fmt`, every error in one run, a language server (`zylo lsp`) and a VS Code extension with a generated grammar | done |
 | **Community** | Documentation translations (the docs are English-only for now) and localized diagnostics | |
 
 Later: generics, closures, enums with data, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
 
 ## Open questions
+
+- Language server: hover, go to definition, rename and signature help.
+- Formatter: wrapping of very long lines.
 
 - Narrowing beyond plain variables: `and` chains and struct fields (`self.age is some`).
 - Default values for struct fields and constructors with named arguments (`Point(x=1.0, y=2.0)`).

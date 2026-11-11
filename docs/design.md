@@ -103,11 +103,20 @@ fast `rustc` path. Because compiling a crate runs its `build.rs` and `extern fn`
 package may use either only if the project lists it under `[rust] trusted-packages`; otherwise packages are plain
 Zylo, which is what makes installing and compiling them safe to reason about.
 
+**Tooling is built on the same pipeline.** Reporting every error needed no second front end: the parser recovers by
+skipping to the end of the failed statement (and its block), the checker checks each statement on its own and
+"poisons" a variable whose declaration failed so its later uses are not reported again, and `check()` still raises the
+first error for callers that want one. The formatter prints the syntax tree rather than rewriting text, so it cannot
+change a program's meaning, and a test proves it on every program in the repository. The language server is a thin
+translation (in the interface layer) of use cases in the application layer, and the VS Code grammar is generated from
+the lexer's keywords and the built-in catalog, so highlighting cannot drift from the language.
+
 ## Known limitations
 
 - Values are still cloned when stored (assigned to another variable, put in a struct or a list) or returned.
 - `is` narrowing works on plain variables and a single condition (no `and` chains, no fields).
 - Rust generics and traits are not exposed, and there are no callbacks from Rust into Zylo.
-- No closures, generics or list comprehensions yet. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
+- No closures, generics or list comprehensions yet.
+- The language server has no hover, go to definition or rename yet. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
 - No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.
 - Diagnostics are in English only.
