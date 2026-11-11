@@ -19,7 +19,7 @@ from pathlib import Path
 from zylo.cli import compile_rust, transpile
 
 HERE = Path(__file__).parent
-PROGRAMS = ["fib", "loop", "primes", "sort"]
+PROGRAMS = ["fib", "loop", "primes", "sort", "listsum"]
 NOTE = (
     "Beware of `loop`: it is a trivial arithmetic loop that LLVM can transform very aggressively, so its "
     "speedup es una cota superior poco representativa. `fib`, `primes` y `sort` (llamadas, ramas y acceso a listas) "
@@ -76,7 +76,7 @@ def main() -> int:
     for name, py, chk, raw, ct in rows:
         lines.append(f"| {name} | {py:.3f} s | {chk:.3f} s | **{py / chk:.0f}×** | {raw:.3f} s | {py / raw:.0f}× | {ct:.2f} s |")
     rustc = subprocess.run(["rustc", "--version"], capture_output=True, text=True).stdout.strip()
-    meta = (f"Mediana de {a.runs} ejecuciones, incluye el arranque del proceso. "
+    meta = (f"Median of {a.runs} runs, including process start-up. "
             f"Python {platform.python_version()} (CPython), {rustc}, {platform.machine()}, "
             f"{platform.system()} ({'WSL2' if 'microsoft' in platform.release().lower() else platform.release()}).")
     table = "\n".join(lines)

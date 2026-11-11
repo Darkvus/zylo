@@ -31,8 +31,15 @@ conversions are explicit (`float(x)`).
 **Value semantics, no visible borrow checker.** Zylo programs never mention lifetimes or moves.
 Everything behaves like a value: reading a non-`Copy` variable (`str`, `list`, struct) as a value
 emits `.clone()` in the Rust, while pure reads (indexing, `len`, `print`, comparisons) take a
-reference and do not clone. Consequence: passing a list to a function copies it. This is the main
-known performance cost; inferring borrows is on the [roadmap](../ROADMAP.md).
+reference and do not clone.
+
+**Borrows are inferred.** The checker already knows which variables are ever modified (it needs that to emit
+`let mut`). A parameter that its function never modifies is declared `&T` in the Rust and callers lend the
+argument (`f(&xs)`) instead of cloning it; a parameter that is modified stays by value, so the caller never sees
+the change. Two details keep this safe: a method that modifies `self` takes its arguments by value (they may be
+parts of `self`, which cannot be lent while `self` is borrowed mutably), and `for x in xs` iterates by reference
+when `xs` is never modified anywhere, and over a snapshot otherwise (like Python, the body may modify the list).
+Before this, calling a function in a loop with a large list was slower than Python (see `benchmarks/listsum.zy`).
 
 **Declaration vs reassignment is inferred.** `x = 1` declares the first time and reassigns after,
 like Python. The checker marks variables that are reassigned or mutated (`append`, `xs[i] = v`,
@@ -89,7 +96,7 @@ the container is a variable, field or index chain (no side effects); other expre
 
 ## Known limitations
 
-- Lists and structs are cloned when passed to functions.
+- Values are still cloned when stored (assigned to another variable, put in a struct or a list) or returned.
 - `is` narrowing works on plain variables and a single condition (no `and` chains, no fields).
 - No closures, generics or list comprehensions yet. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
 - No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.

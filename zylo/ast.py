@@ -46,6 +46,7 @@ class Bool(Node):
 @dataclass
 class Name(Node):
     id: str
+    var: VarInfo | None = None  # filled in by the checker: the variable this name refers to
 
 
 @dataclass

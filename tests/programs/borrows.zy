@@ -1,0 +1,77 @@
+struct Bag:
+    items: list[str]
+    label: str
+
+    fn add_all(self, more: list[str]):
+        for m in more:
+            append(self.items, m)
+
+    fn dup(self):
+        self.add_all(self.items)
+
+    fn count(self, other: list[str]) -> int:
+        return len(self.items) + len(other)
+
+fn longest(words: list[str]) -> str:
+    best = ""
+    for w in words:
+        if len(w) > len(best):
+            best = w
+    return best
+
+fn shout(words: list[str]) -> list[str]:
+    out: list[str] = []
+    for w in words:
+        append(out, w.upper())
+    return out
+
+fn grow(xs: list[int]) -> int:
+    append(xs, 99)
+    xs[0] = -1
+    return len(xs)
+
+fn first(xs: list[int]) -> int:
+    return xs[0]
+
+fn chain(xs: list[int]) -> int:
+    return first(xs) + len(xs)
+
+fn total(xs: list[int], i: int) -> int:
+    if i >= len(xs):
+        return 0
+    return xs[i] + total(xs, i + 1)
+
+fn tag(label: str, n: int) -> str:
+    return label + str(n)
+
+fn lookup(d: dict[str, int], k: str) -> int:
+    return d.get(k, 0)
+
+fn describe(b: Bag) -> str:
+    return b.label + ":" + str(len(b.items))
+
+fn keep(xs: list[int]) -> list[int]:
+    return xs
+
+fn maybe(s: str?) -> int:
+    if s is none:
+        return -1
+    return len(s)
+
+words = ["pear", "fig", "banana"]
+print(longest(words), shout(words), words)
+nums = [3, 1, 2]
+print(grow(nums), nums)
+print(chain(nums), total(nums, 0))
+b = Bag(["a"], "bag")
+b.dup()
+print(b.items, b.count(b.items), describe(b))
+print(tag("n", 5), lookup({"a": 1}, "a"), lookup({"a": 1}, "z"))
+kept = keep(nums)
+kept[0] = 7
+print(nums, kept)
+print(maybe(some("abc")), maybe(none))
+copy = words
+for w in words:
+    append(copy, w)
+print(len(copy), len(words))

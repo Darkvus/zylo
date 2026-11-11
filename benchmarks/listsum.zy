@@ -1,0 +1,14 @@
+fn count_long(words: list[str]) -> int:
+    n = 0
+    for w in words:
+        if len(w) > 3:
+            n += 1
+    return n
+
+words: list[str] = []
+for i in range(2000):
+    append(words, "word" + str(i))
+total = 0
+for k in range(1000):
+    total += count_long(words)
+print(total)
