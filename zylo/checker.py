@@ -21,7 +21,9 @@ from .types import BOOL, FLOAT, INT, PRIMS, STR, UNIT, FnT, DictT, ListT, Option
 BUILTINS = {"print", "range", "len", "int", "float", "str", "append", "exit",
             "some", "ok", "err", "parse_int", "parse_float",
             "sum", "min", "max", "abs", "sorted", "reversed", "enumerate", "zip",
-            "sqrt", "pow", "round", "floor", "ceil"}
+            "sqrt", "pow", "round", "floor", "ceil",
+            "argv", "input", "read_line", "read_stdin", "read_file", "write_file", "append_file",
+            "file_exists", "list_dir", "env", "eprint", "time", "sleep"}
 # Builtins a program may redefine with its own function (the core ones may not).
 SHADOWABLE = BUILTINS - {"print", "range", "len", "int", "float", "str", "append", "exit", "some", "ok", "err"}
 ARITH = {"+", "-", "*", "/", "%"}
@@ -984,6 +986,37 @@ class Checker:
                     if t != FLOAT:
                         raise err(f"{name} expects float, not {t} (use float(x))", a)
                 return FLOAT if name in ("sqrt", "pow") else INT
+            case "argv" | "read_stdin" | "read_line" | "time":
+                arity(0)
+                return {"argv": ListT(STR), "read_stdin": STR, "read_line": OptionT(STR), "time": FLOAT}[name]
+            case "input":
+                if len(args) > 1:
+                    raise err(f"input takes 0 or 1 argument(s), got {len(args)}", e)
+                if args and self.expr(args[0], STR) != STR:
+                    raise err(f"input expects a str prompt, not {args[0].ty}", args[0])
+                return STR
+            case "read_file" | "file_exists" | "list_dir" | "env":
+                arity(1)
+                if self.expr(args[0], STR) != STR:
+                    raise err(f"{name} expects a str, not {args[0].ty}", args[0])
+                return {"read_file": ResultT(STR, STR), "file_exists": BOOL, "list_dir": ResultT(ListT(STR), STR),
+                        "env": OptionT(STR)}[name]
+            case "write_file" | "append_file":
+                arity(2)
+                for a in args:
+                    if self.expr(a, STR) != STR:
+                        raise err(f"{name} expects (path: str, text: str), not {a.ty}", a)
+                return ResultT(INT, STR)
+            case "eprint":
+                for a in args:
+                    if self.expr(a) == UNIT:
+                        raise err("the expression produces no value", a)
+                return UNIT
+            case "sleep":
+                arity(1)
+                if self.expr(args[0], FLOAT) != FLOAT:
+                    raise err(f"sleep expects float seconds, not {args[0].ty} (use float(x))", args[0])
+                return UNIT
             case "range":
                 raise err("range(...) can only be used in a `for`", e)
         raise err(f"unknown built-in function {name!r}", e)

@@ -200,6 +200,43 @@ empty: dict[str, list[int]] = {}
 - Dict methods: `get`, `keys()`, `values()`, `items()` (a list of `(key, value)` tuples), `pop(k)` (a `V?`),
   `clear()`. Set methods: `add(v)`, `remove(v)` (a `bool`), `union(o)`, `intersection(o)`, `difference(o)`, `clear()`.
 
+## Input, output and files
+
+```zylo
+args = argv()                       # the arguments after the program: `zylo run prog.zy a b`
+name = input("name? ")              # prints the prompt, reads one line
+print(f"hello {name}, you passed {len(args)} arguments")
+
+total = 0
+while true:
+    line = read_line()              # a str?: none at the end of the input
+    if line is none:
+        break
+    n = parse_int(line)
+    if n is none:
+        eprint("skipping", line)    # to standard error
+        continue
+    total += n
+print(total)
+
+result = write_file("notes.txt", "one\ntwo\n")
+if result is err:
+    print("could not write:", result)
+else:
+    print(read_file("notes.txt"))   # Ok("one\ntwo\n")
+print(env("HOME").unwrap_or("?"), file_exists("notes.txt"))
+```
+
+- **Arguments:** `zylo run prog.zy a b` passes `a` and `b` to the program. A built binary receives them directly.
+  Put `--` first to pass something that looks like an option.
+- **Input:** `input(prompt)` reads a line without its line ending and stops the program (exit code 101) at the end of the
+  input; `read_line()` returns `none` instead; `read_stdin()` reads everything.
+- **Files** return a `Result` whose error is a message that includes the path, so failures are values, not crashes:
+  `read_file(path)` (`Result[str, str]`), `write_file(path, text)` and `append_file(path, text)` (`Result[int, str]`: the
+  number of characters written), `list_dir(path)` (`Result[list[str], str]`, sorted) and `file_exists(path)` (`bool`).
+- **Environment:** `env(name)` is a `str?`. `eprint(...)` is `print` for standard error.
+- **Time:** `time()` is the Unix time in seconds (a `float`), `sleep(seconds)` pauses.
+
 ## Structs
 
 ```zylo
@@ -361,6 +398,10 @@ Everything about modules, environments, the lock file and the security model is 
 | `enumerate(xs)`, `zip(a, b)` | lists of `(index, item)` and `(a_item, b_item)` tuples |
 | `sqrt(x)`, `pow(x, y)` | `float` math |
 | `round(x)`, `floor(x)`, `ceil(x)` | a `float` to an `int` (`round` rounds half away from zero, unlike Python) |
+| `argv()` | the program's arguments, a `list[str]` |
+| `input(prompt)`, `read_line()`, `read_stdin()` | read standard input (see above) |
+| `read_file(p)`, `write_file(p, t)`, `append_file(p, t)`, `list_dir(p)`, `file_exists(p)` | files |
+| `env(name)`, `eprint(...)`, `time()`, `sleep(s)` | environment, standard error, clock |
 | `exit(code)` | stop the program with an exit code |
 | `range(n)`, `range(a, b)` | only in a `for` |
 
@@ -375,4 +416,4 @@ These stop the program with exit code **101**: integer overflow (compile with
 
 ## Known limitations
 
-No closures or generics, no list comprehensions, no standard input, files or command-line arguments. See the [roadmap](../ROADMAP.md).
+No closures or generics, no list comprehensions. See the [roadmap](../ROADMAP.md).
