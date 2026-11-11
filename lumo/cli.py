@@ -5,13 +5,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+from .checker import check
 from .codegen import generate
 from .errors import LumoError
 from .parser import parse
 
 
 def transpile(path: Path) -> str:
-    return generate(parse(path.read_text()))
+    return generate(check(parse(path.read_text())))
 
 
 def compile_rust(rs: str, out: Path) -> None:

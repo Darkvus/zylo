@@ -28,7 +28,9 @@ print(fib(35))
 - [x] CLI: `lumo emit|build|run archivo.lm` (`lumo/cli.py`)
 - [x] 5 tests pasando (`tests/test_pipeline.py`)
 - [x] **Fase 2 hecha (2026-11-11):** parser/AST completos (assign, `x: T = v`, `+=`, if/elif/else, while, for, break/continue, fn, return, listas, índices, and/or/not, posiciones en nodos), 30 tests
-- [ ] **Pendiente para probar `run`/`build`:** instalar Rust (`curl https://sh.rustup.rs -sSf | sh`)
+- [x] **Fase 3 hecha (2026-11-11):** `lumo/types.py` + `lumo/checker.py` (inferencia local, ámbitos de bloque, declarar vs reasignar, mutabilidad marcada en `VarInfo.mutable`, errores con línea/columna), 75 tests. Conectado en el CLI (`parse → check → generate`).
+- [x] Rust 1.99.1 instalado; `lumo run examples/hello.lm` funciona de punta a punta.
+- Repo privado: https://github.com/Darkvus/lumo
 
 Limitaciones actuales: solo sentencias de expresión (`print(...)`); el lexer ya reconoce
 las keywords `fn if else while return let true false` y el token `->`, pero el parser aún no las usa.
@@ -56,6 +58,13 @@ las keywords `fn if else while return let true false` y el token `->`, pero el p
 - Pasada de chequeo sobre el AST que anota cada expresión con su tipo.
 - Reglas: sin coerción implícita int↔float, condiciones deben ser `bool`, `return` coherente con el tipo declarado, variables declaradas antes de usar.
 - Reasignación: `let x = 1` inmutable por defecto; `let mut x` (o decidir sintaxis) para reasignables. **Decisión abierta.**
+
+### Decisiones tomadas en la fase 3
+- Sin coerción; conversiones explícitas `int()`, `float()`, `str()`. Builtins: `print len int float str append range` (range solo en `for`).
+- `int / int` es división entera (como Rust). Sin overflow checking por ahora.
+- Ámbito de bloque; las funciones no ven variables globales; funciones solo a nivel superior, con firma visible antes de su definición.
+- El checker anota `node.ty` en expresiones, `Assign.declares/var` y `Param.info`/`For.info` (con `mutable`) para que el codegen emita `let` / `let mut`.
+- Lista vacía requiere anotación (`xs: list[int] = []`) salvo si el contexto da el tipo (argumento, retorno, reasignación).
 
 ### Fase 4: detalle
 - Funciones top-level → `fn nombre(a: i64) -> i64 { ... }`.

@@ -1,10 +1,13 @@
 from dataclasses import dataclass
 
+from .types import Type, VarInfo
+
 
 @dataclass(kw_only=True)
 class Node:
     line: int = 0
     col: int = 0
+    ty: Type | None = None  # lo rellena el checker en las expresiones
 
 
 # ---- tipos escritos por el usuario -------------------------------------------
@@ -88,6 +91,8 @@ class Assign(Node):
     target: Name | Index
     annotation: TypeRef | None
     value: Expr
+    declares: bool = False  # lo rellena el checker: True si es declaración
+    var: VarInfo | None = None
 
 
 @dataclass
@@ -108,6 +113,7 @@ class For(Node):
     var: str
     iter: Expr
     body: list["Stmt"]
+    info: VarInfo | None = None
 
 
 @dataclass
@@ -129,6 +135,7 @@ class Continue(Node):
 class Param(Node):
     name: str
     type: TypeRef
+    info: VarInfo | None = None
 
 
 @dataclass
