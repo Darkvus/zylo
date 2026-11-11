@@ -21,6 +21,7 @@ class Token:
 def tokenize(src: str) -> list[Token]:
     tokens: list[Token] = []
     indents = [0]
+    end = (1, 1)  # posición tras la última línea con código
     for lineno, raw in enumerate(src.splitlines(), start=1):
         line = raw.rstrip()
         if not line.strip() or line.lstrip().startswith("#"):
@@ -38,10 +39,11 @@ def tokenize(src: str) -> list[Token]:
             raise LumoError("indentación inconsistente", lineno, width + 1)
         _lex_line(line, width, lineno, tokens)
         tokens.append(Token("NEWLINE", "", lineno, len(line) + 1))
+        end = (lineno, len(line) + 1)
     while len(indents) > 1:
         indents.pop()
-        tokens.append(Token("DEDENT", "", 0, 0))
-    tokens.append(Token("EOF", "", 0, 0))
+        tokens.append(Token("DEDENT", "", *end))
+    tokens.append(Token("EOF", "", *end))
     return tokens
 
 

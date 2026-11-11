@@ -12,7 +12,7 @@ from . import ast
 from .errors import LumoError
 from .types import BOOL, FLOAT, INT, PRIMS, STR, UNIT, FnT, ListT, Type, VarInfo
 
-BUILTINS = {"print", "range", "len", "int", "float", "str", "append"}
+BUILTINS = {"print", "range", "len", "int", "float", "str", "append", "exit"}
 ARITH = {"+", "-", "*", "/", "%"}
 EQ = {"==", "!="}
 ORDER = {"<", ">", "<=", ">="}
@@ -357,6 +357,10 @@ class Checker:
                 if vt != lt.elem:
                     raise err(f"no se puede añadir {vt} a {lt}", args[1])
                 self.mark_mutable(args[0])
+                return UNIT
+            case "exit":
+                arity(1)
+                self.expect_int(args[0])
                 return UNIT
             case "range":
                 raise err("range(...) solo puede usarse en un `for`", e)

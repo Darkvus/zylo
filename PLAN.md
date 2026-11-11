@@ -31,6 +31,7 @@ print(fib(35))
 - [x] **Fase 3 hecha (2026-11-11):** `lumo/types.py` + `lumo/checker.py` (inferencia local, ámbitos de bloque, declarar vs reasignar, mutabilidad marcada en `VarInfo.mutable`, errores con línea/columna), 75 tests. Conectado en el CLI (`parse → check → generate`).
 - [x] Rust 1.99.1 instalado; `lumo run examples/hello.lm` funciona de punta a punta.
 - [x] **Fase 4 hecha (2026-11-11):** `lumo/codegen.py` completo (fn, let/let mut, if/elif/else, while, for range/list, listas, strings, conversiones, builtins). 10 programas e2e en `tests/programs/` (`.lm` + `.out`) compilados con rustc real + test de panic por overflow. 85 tests.
+- [x] **Fase 5 hecha (2026-11-11):** `lumo/diagnostics.py` (errores `archivo:línea:col: error: msg` + fragmento + `^`, color solo en TTY y sin `NO_COLOR`), CLI con subcomandos `check|emit|build|run`, `build --emit-rs`, `--no-overflow-checks`, `--version`, `run` devuelve el exit code del programa (señal → 128+N), builtin `exit(int)`, errores del backend (`BackendError`) separados de los del usuario. Mensajes de parseo legibles y posición real al final del archivo. 113 tests.
 - Repo privado: https://github.com/Darkvus/lumo
 
 Limitaciones actuales: solo sentencias de expresión (`print(...)`); el lexer ya reconoce
@@ -73,6 +74,11 @@ las keywords `fn if else while return let true false` y el token `->`, pero el p
 - `float` se imprime con `{:?}` (`2.0`); listas con `{:?}` (las listas de str salen con comillas dobles, distinto de Python). `len(str)` cuenta caracteres, no bytes.
 - Identificadores que son keywords de Rust (`type`, `match`, `main`...) se emiten con sufijo `_`.
 - Limitación conocida: pasar una lista a una función la clona (sin préstamos todavía). Optimización candidata para v2.
+
+### Decisiones tomadas en la fase 5
+- Exit codes de la CLI: 0 ok · 1 error de compilación/archivo · 2 uso incorrecto · en `run`, el del programa.
+- `lumo run` no pasa argumentos al programa: Lumo aún no tiene acceso a argv (candidato v2, junto con stdin/archivos).
+- Si rustc rechaza el Rust generado se informa como bug de Lumo (nunca debería ocurrir con un programa que pasó el checker).
 
 ### Fase 4: detalle (original)
 - Funciones top-level → `fn nombre(a: i64) -> i64 { ... }`.

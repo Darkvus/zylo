@@ -231,6 +231,8 @@ def call(e: ast.Call) -> str:
             if t == FLOAT:
                 return f'format!("{{:?}}", {x})'
             return f"{x}.to_string()"
+        case "exit":
+            return f"std::process::exit(({emit_ref(args[0])}) as i32)"
         case "range":
             raise LumoError("range(...) solo puede usarse en un `for`", e.line, e.col)
         case name:

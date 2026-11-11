@@ -14,6 +14,15 @@ PRECEDENCE = {
 NOT_PREC = 3  # `not a == b` es `not (a == b)`
 AUG_OPS = {"+=": "+", "-=": "-", "*=": "*", "/=": "/", "%=": "%"}
 TYPE_NAMES = {"int", "float", "bool", "str", "list"}
+KIND_NAMES = {
+    "NEWLINE": "fin de línea", "EOF": "fin del archivo", "INDENT": "indentación",
+    "DEDENT": "fin de bloque", "IDENT": "un nombre", "INT": "un entero",
+    "FLOAT": "un decimal", "STR": "una cadena",
+}
+
+
+def describe(tok: Token) -> str:
+    return repr(tok.value) if tok.value else KIND_NAMES.get(tok.kind, tok.kind)
 
 
 class Parser:
@@ -45,8 +54,8 @@ class Parser:
     def expect(self, kind: str, value: str | None = None) -> Token:
         tok = self.cur
         if tok.kind != kind or (value is not None and tok.value != value):
-            want = value or kind
-            raise LumoError(f"se esperaba {want!r}, encontrado {tok.value or tok.kind!r}", tok.line, tok.col)
+            want = repr(value) if value else KIND_NAMES.get(kind, kind)
+            raise LumoError(f"se esperaba {want}, encontrado {describe(tok)}", tok.line, tok.col)
         return self.advance()
 
     # ---- programa y bloques -------------------------------------------------------
@@ -60,7 +69,9 @@ class Parser:
     def parse_block(self) -> list[ast.Stmt]:
         self.expect("OP", ":")
         self.expect("NEWLINE")
-        self.expect("INDENT")
+        if not self.check("INDENT"):
+            raise LumoError("se esperaba un bloque indentado", self.cur.line, self.cur.col)
+        self.advance()
         body = []
         while not self.check("DEDENT"):
             if self.check("EOF"):
@@ -249,7 +260,7 @@ class Parser:
                     items.append(self.parse_expr())
             self.expect("OP", "]")
             return ast.ListLit(items, **pos)
-        raise LumoError(f"expresión inesperada {tok.value or tok.kind!r}", tok.line, tok.col)
+        raise LumoError(f"expresión inesperada: {describe(tok)}", tok.line, tok.col)
 
     def parse_call(self, name: Token) -> ast.Call:
         self.expect("OP", "(")
