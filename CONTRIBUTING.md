@@ -1,5 +1,27 @@
 # Contributing to Zylo
 
+## Workflow: one pull request per version
+
+Nothing is pushed to `main` directly. Every change is a pull request that carries **one version**, developed
+in its own [git worktree](https://git-scm.com/docs/git-worktree):
+
+```
+git worktree add ../zylo-worktrees/v0.6-name -b v0.6-name main
+cd ../zylo-worktrees/v0.6-name
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'      # each worktree has its own environment
+# ...work, then bump the version in pyproject.toml and zylo/__init__.py...
+git push -u origin v0.6-name && gh pr create --fill
+```
+
+1. **CI** (`.github/workflows/ci.yml`) runs on the pull request: the test suite on Linux and macOS (Python 3.11 and 3.12),
+   a smoke test on Windows, a packaging check (wheel and standalone binary), and a check that the version is higher than `main`'s.
+2. When every job passes, the same workflow **approves and squash-merges** the pull request and deletes the branch.
+3. The merge starts the **Release** workflow (`.github/workflows/release.yml`), which builds the binaries for
+   Linux, macOS and Windows, the Windows installer, the wheel and `SHA256SUMS`, and publishes the GitHub release
+   `v<version>`. A version that is already released is skipped, so re-running is harmless.
+
+Check a pull request with `gh pr checks <number> --watch`. A pull request that fails stays open until it is fixed.
+
 ## Setup
 
 ```

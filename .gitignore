@@ -5,3 +5,4 @@ build/
 .venv/
 .cargo/
 *.rs.out
+dist/
