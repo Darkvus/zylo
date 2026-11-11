@@ -231,6 +231,39 @@ value or the default.
 
 `print` shows these values as `Some(3)`, `None`, `Ok(18)` and `Err("message")`.
 
+## Modules and packages
+
+A program can be split over several files, and use libraries written by others.
+
+```
+# shapes.zy                      # main.zy
+struct Rect:                     import shapes
+    w: int                       from shapes import Rect as R
+    h: int                       print(shapes.area(R(3, 4)))
+
+fn area(r: Rect) -> int:
+    return r.w * r.h
+```
+
+- `import shapes` gives you `shapes.area(...)`, `shapes.Rect(...)` and the type `shapes.Rect`.
+  `from shapes import area, Rect` brings the names in directly; `as` renames either form.
+- A library module may only contain imports, functions and structs. Names starting with `_` are private.
+- `import a.b` loads `a/b.zy`, relative to the file that imports it; if there is no such file, it
+  looks for an installed package named `a`.
+- Import cycles are an error.
+
+Install packages from git into a per-project environment:
+
+```
+zylo init myapp                          # zylo.toml + src/main.zy
+zylo venv                                # create .zylo-env/
+zylo add github.com/ana/textkit@v1.0.0   # install it, update zylo.toml and zylo.lock
+zylo run src/main.zy                     # finds .zylo-env on its own
+```
+
+Everything about modules, environments, the lock file and the security model is in
+[packages.md](packages.md).
+
 ## Built-in functions
 
 | Function | Description |
@@ -253,5 +286,5 @@ These stop the program with exit code **101**: integer overflow (compile with
 
 ## Known limitations
 
-No modules or imports, no `dict` / `set` / tuples, no string indexing or methods, no closures or
+No `dict` / `set` / tuples, no string indexing or methods, no closures or
 generics, no standard input, files or command-line arguments. See the [roadmap](../ROADMAP.md).

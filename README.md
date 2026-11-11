@@ -3,7 +3,7 @@
 A small statically typed language with Python-like syntax that compiles to Rust.
 Write code that reads like Python, get a native binary that runs 30–90× faster.
 
-**Status:** v0.2 — early but complete enough to write real programs. See the [roadmap](ROADMAP.md).
+**Status:** v0.3 — early but complete enough to write real programs and share libraries. See the [roadmap](ROADMAP.md).
 
 ```zylo
 fn fib(n: int) -> int:
@@ -76,6 +76,16 @@ fn double_sum(a: str, b: str) -> Result[int, str]:
     return ok(s * 2)
 ```
 
+**Modules and community packages.** Split a program over files with `import`, and install libraries
+from git into a per-project virtual environment, pinned by a lock file:
+
+```
+zylo init myapp
+zylo venv                                # create .zylo-env/
+zylo add github.com/ana/textkit@v1.0.0   # installs it and records the exact commit in zylo.lock
+zylo run src/main.zy                     # import textkit, from textkit import shout...
+```
+
 The full language is documented in the [language guide](docs/guide.md); design decisions and their
 reasons are in [docs/design.md](docs/design.md).
 
@@ -96,7 +106,7 @@ Reproduce with `python benchmarks/bench.py`.
 
 ## Examples
 
-Seventeen programs in [examples/](examples/) — FizzBuzz, primes, Collatz, sorting, binary search,
+Eighteen programs in [examples/](examples/) — FizzBuzz, primes, Collatz, sorting, binary search,
 matrices, a bank account, an inventory, vectors, number parsing with `Option`/`Result`, and more.
 Every one is compiled and checked in the test suite.
 

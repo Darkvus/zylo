@@ -93,6 +93,10 @@ class Parser:
                     return self.parse_fn()
                 case "struct":
                     return self.parse_struct()
+                case "import":
+                    return self.parse_import()
+                case "from":
+                    return self.parse_from_import()
                 case "if":
                     return self.parse_if()
                 case "while":
@@ -195,6 +199,34 @@ class Parser:
         nxt = self.peek()
         return self.check("IDENT", "self") and not (nxt.kind == "OP" and nxt.value == ":")
 
+    def parse_dotted(self) -> str:
+        name = self.expect("IDENT").value
+        while self.check("OP", "."):
+            self.advance()
+            name += "." + self.expect("IDENT").value
+        return name
+
+    def parse_import(self) -> ast.Import:
+        kw = self.advance()
+        module = self.parse_dotted()
+        alias = self.expect("IDENT").value if self.match("KW", "as") else None
+        self.expect("NEWLINE")
+        return ast.Import(module, alias, line=kw.line, col=kw.col)
+
+    def parse_from_import(self) -> ast.FromImport:
+        kw = self.advance()
+        module = self.parse_dotted()
+        self.expect("KW", "import")
+        names: list[tuple[str, str | None]] = []
+        while True:
+            name = self.expect("IDENT").value
+            alias = self.expect("IDENT").value if self.match("KW", "as") else None
+            names.append((name, alias))
+            if not self.match("OP", ","):
+                break
+        self.expect("NEWLINE")
+        return ast.FromImport(module, names, line=kw.line, col=kw.col)
+
     def parse_struct(self) -> ast.StructDef:
         kw = self.advance()
         name = self.expect("IDENT")
@@ -235,18 +267,22 @@ class Parser:
 
     def parse_type(self) -> ast.TypeRef:
         tok = self.expect("IDENT")
+        name = tok.value
+        while self.check("OP", ".") and self.peek().kind == "IDENT":  # qualified: module.Struct
+            self.advance()
+            name += "." + self.advance().value
         args: list[ast.TypeRef] = []
-        if tok.value == "list":
+        if name == "list":
             self.expect("OP", "[")
             args.append(self.parse_type())
             self.expect("OP", "]")
-        elif tok.value == "Result":
+        elif name == "Result":
             self.expect("OP", "[")
             args.append(self.parse_type())
             self.expect("OP", ",")
             args.append(self.parse_type())
             self.expect("OP", "]")
-        t = ast.TypeRef(tok.value, args, line=tok.line, col=tok.col)
+        t = ast.TypeRef(name, args, line=tok.line, col=tok.col)
         while self.check("OP", "?"):  # `T?` is Option; internally TypeRef("?", [T])
             q = self.advance()
             if t.name == "?":
@@ -355,5 +391,14 @@ class Parser:
         return ast.Call(name.value, self.parse_args(), line=name.line, col=name.col)
 
 
-def parse(src: str) -> ast.Program:
-    return Parser(tokenize(src)).parse_program()
+def parse(src: str, file: str | None = None) -> ast.Program:
+    """Parse a module. `file` (if given) is stamped on every node and on syntax errors."""
+    try:
+        prog = Parser(tokenize(src)).parse_program()
+    except ZyloError as e:
+        if e.file is None:
+            e.file = file
+        raise
+    if file is not None:
+        ast.stamp(prog, file)
+    return prog

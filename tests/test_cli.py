@@ -162,7 +162,7 @@ def test_build_and_emit_rs(tmp_path, capsys):
     f = write(tmp_path, 'print("hola")\n')
     out = tmp_path / "hola"
     assert main(["build", str(f), "-o", str(out), "--emit-rs"]) == 0
-    assert "generado" in capsys.readouterr().out
+    assert "built" in capsys.readouterr().out
     assert subprocess.run([str(out)], capture_output=True, text=True).stdout == "hola\n"
     assert "fn main()" in (tmp_path / "hola.rs").read_text()
 

@@ -1,0 +1,14 @@
+# A library module: only imports, functions and structs are allowed here
+struct Rect:
+    w: int
+    h: int
+
+    fn grow(self, k: int):
+        self.w += k
+        self.h += k
+
+fn area(r: Rect) -> int:
+    return r.w * r.h
+
+fn describe(r: Rect) -> str:
+    return str(r.w) + "x" + str(r.h) + " = " + str(area(r))

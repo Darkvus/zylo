@@ -38,6 +38,7 @@ METHOD_CLASHES = {
 def ident(name: str) -> str:
     if name == "self":
         return name
+    name = name.replace("\u00b7", "__")  # linker-mangled `module·name`
     return name + "_" if name in RUST_KEYWORDS else name
 
 
@@ -47,6 +48,7 @@ def mident(name: str) -> str:
 
 
 def tname(name: str) -> str:
+    name = name.replace("\u00b7", "__")
     return name + "_" if name in RUST_TYPE_NAMES or name in RUST_KEYWORDS else name
 
 
@@ -122,7 +124,7 @@ class Gen:
         args = ", ".join(f"self.{ident(f.name)}" for f in sd.fields)
         self.line(f"impl std::fmt::Debug for {name} {{")
         self.line("    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {")
-        self.line(f'        write!(f, "{sd.name}({shown})", {args})')
+        self.line(f'        write!(f, "{sd.display or sd.name}({shown})", {args})')
         self.line("    }")
         self.line("}")
         if sd.methods:

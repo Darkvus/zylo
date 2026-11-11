@@ -25,7 +25,7 @@ ORDER = {"<", ">", "<=", ">="}
 
 
 def err(msg: str, node: ast.Node) -> ZyloError:
-    return ZyloError(msg, node.line, node.col)
+    return ZyloError(msg, node.line, node.col, node.file)
 
 
 class Scopes:
@@ -253,6 +253,8 @@ class Checker:
                 raise err("functions can only be defined at the top level", s)
             case ast.StructDef():
                 raise err("structs can only be defined at the top level", s)
+            case ast.Import() | ast.FromImport():
+                raise err("imports can only appear at the top level", s)
 
     def expect_bool(self, e: ast.Expr, what: str) -> None:
         t = self.expr(e)

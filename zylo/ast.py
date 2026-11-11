@@ -1,3 +1,5 @@
+import dataclasses
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from .types import Type, VarInfo
@@ -8,6 +10,7 @@ class Node:
     line: int = 0
     col: int = 0
     ty: Type | None = None  # filled in by the checker for expressions
+    file: str | None = None  # source file, so errors in imported modules point at the right file
 
 
 # ---- types written by the user -------------------------------------------
@@ -197,11 +200,57 @@ class StructDef(Node):
     name: str
     fields: list[Field]
     methods: list[FnDef]
+    display: str | None = None  # original name when the linker has mangled `name`
 
 
-Stmt = ExprStmt | Assign | If | While | For | Return | Break | Continue | FnDef | StructDef
+@dataclass
+class Import(Node):
+    """`import a.b` / `import a.b as c`."""
+    module: str
+    alias: str | None
+
+
+@dataclass
+class FromImport(Node):
+    """`from a.b import x, y as z`; names are (name, alias) pairs."""
+    module: str
+    names: list[tuple[str, str | None]]
+
+
+Stmt = (ExprStmt | Assign | If | While | For | Return | Break | Continue | FnDef | StructDef
+        | Import | FromImport)
 
 
 @dataclass
 class Program(Node):
     body: list[Stmt]
+
+
+# ---- generic traversal -----------------------------------------------------------------------
+
+_ANNOTATIONS = {"ty", "var", "info", "then_bind", "else_bind", "after_bind"}
+
+
+def children(node: Node) -> Iterator[Node]:
+    """Direct child nodes (skipping checker annotations such as types and variable infos)."""
+    for f in dataclasses.fields(node):
+        if f.name in _ANNOTATIONS:
+            continue
+        v = getattr(node, f.name)
+        if isinstance(v, Node):
+            yield v
+        elif isinstance(v, list):
+            for x in v:
+                if isinstance(x, Node):
+                    yield x
+
+
+def walk(node: Node) -> Iterator[Node]:
+    yield node
+    for c in children(node):
+        yield from walk(c)
+
+
+def stamp(node: Node, file: str) -> None:
+    for n in walk(node):
+        n.file = file

@@ -68,9 +68,21 @@ prelude (`type`, `match`, `String`, a method called `clone`...) get a trailing `
 A `rustc` failure on generated code is reported as a Zylo bug (`BackendError`), never as a mistake
 in the user's program.
 
+**Modules are linked, not compiled separately.** Zylo emits one Rust program, so the linker loads the
+entry file and every imported module, renames each library definition to `module·name`, rewrites the
+references and hands one merged program to the checker. This keeps type checking and code generation
+unchanged and makes imported code optimize together with yours. Libraries may contain only imports,
+functions and structs, so importing has no side effects.
+
+**Packages are source code pinned by git commit.** There is no central registry to run or trust: a
+dependency is a git URL and a ref, and `zylo.lock` records the exact commit and a checksum of the files
+(see [packages.md](packages.md)). Environments are per project, so two projects never share versions.
+Installing never executes package code.
+
 ## Known limitations
 
 - Lists and structs are cloned when passed to functions.
 - `is` narrowing works on plain variables and a single condition (no `and` chains, no fields).
-- No modules, `dict`/`set`/tuples, string indexing/methods, closures, generics or I/O yet.
+- No `dict`/`set`/tuples, string indexing/methods, closures, generics or I/O yet.
+- No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.
 - Diagnostics are in English only.

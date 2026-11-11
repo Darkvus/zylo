@@ -1,0 +1,9 @@
+# A multi-file program: run it with `zylo run examples/modules/main.zy`
+from shapes import Rect, describe
+import shapes
+
+r = Rect(3, 4)
+print(describe(r))
+print(shapes.area(r))
+r.grow(2)
+print(describe(r))

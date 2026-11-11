@@ -24,7 +24,7 @@ def build(lm: Path, tmp_path: Path) -> Path:
     return exe
 
 
-CASES = sorted(PROGRAMS.glob("*.out")) + sorted(EXAMPLES.glob("*.out"))
+CASES = sorted(PROGRAMS.glob("*.out")) + sorted(EXAMPLES.rglob("*.out"))
 
 
 @pytest.mark.parametrize("lm", CASES, ids=lambda p: f"{p.parent.name}/{p.stem}")

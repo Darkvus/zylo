@@ -7,7 +7,7 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest -q          # the end-to-end tests need rustc; without it they are skipped
 ```
 
-Install Rust from <https://rustup.rs>. If `rustc` is not on your `PATH`, the end-to-end tests are
+Install Rust from <https://rustup.rs> and make sure `git` is available (the package manager tests create real local git repositories). If `rustc` is not on your `PATH`, the end-to-end tests are
 skipped silently — run `source ~/.cargo/env` first.
 
 ## How it is built
@@ -23,6 +23,8 @@ skipped silently — run `source ~/.cargo/env` first.
 | `zylo/parser.py` | Hand-written recursive descent |
 | `zylo/types.py`, `zylo/checker.py` | Types, local inference, scopes, mutability, narrowing |
 | `zylo/codegen.py` | Typed AST → Rust |
+| `zylo/linker.py` | Resolves `import`s and merges modules into one program |
+| `zylo/manifest.py`, `zylo/env.py`, `zylo/lock.py`, `zylo/gitfetch.py`, `zylo/packages.py`, `zylo/pkgcmds.py` | `zylo.toml`, virtual environments, the lock file, git download and the package commands |
 | `zylo/diagnostics.py`, `zylo/cli.py` | Readable errors and the commands |
 
 Design reasons are in [docs/design.md](docs/design.md); the language is described in
