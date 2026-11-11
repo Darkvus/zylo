@@ -95,3 +95,15 @@ class VarInfo:
     ty: Type
     mutable: bool = False
     narrowed: bool = False  # rebound by `is` narrowing; cannot be reassigned
+    by_ref: bool = False  # a parameter the function never modifies: passed by reference, not cloned
+
+
+def is_copy_type(t: Type) -> bool:
+    """Types that are `Copy` in the generated Rust (cheap to duplicate, never need `.clone()`)."""
+    if isinstance(t, TupleT):
+        return all(is_copy_type(x) for x in t.elems)
+    if isinstance(t, OptionT):
+        return is_copy_type(t.inner)
+    if isinstance(t, ResultT):
+        return is_copy_type(t.ok) and is_copy_type(t.err)
+    return t in (INT, FLOAT, BOOL)

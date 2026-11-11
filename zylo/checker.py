@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from . import ast
 from .errors import ZyloError
-from .types import BOOL, FLOAT, INT, PRIMS, STR, UNIT, FnT, DictT, ListT, OptionT, ResultT, SetT, StructT, TupleT, Type, VarInfo
+from .types import BOOL, FLOAT, INT, PRIMS, STR, UNIT, FnT, DictT, ListT, OptionT, ResultT, SetT, StructT, TupleT, Type, VarInfo, is_copy_type
 
 BUILTINS = {"print", "range", "len", "int", "float", "str", "append", "exit",
             "some", "ok", "err", "parse_int", "parse_float",
@@ -201,6 +201,10 @@ class Checker:
             if self_info.mutable:
                 self.mutating.add((owner, f.name))
             f.self_mut = (owner, f.name) in self.mutating
+        # A parameter that is never modified is lent instead of cloned. A method that modifies `self` takes its
+        # arguments by value: they may be parts of `self`, which cannot be lent while `self` is borrowed mutably.
+        for p in f.params:
+            p.info.by_ref = not p.info.mutable and not is_copy_type(p.info.ty) and not f.self_mut
         self.scopes, self.ret, self.owner = top, None, None
 
     # ---- sentencias ------------------------------------------------------------------
@@ -454,6 +458,7 @@ class Checker:
                     if id in self.fns or id in BUILTINS:
                         raise err(f"{id!r} is a function; call it with parentheses", e)
                     raise err(f"undefined variable {id!r}", e)
+                e.var = info
                 return info.ty
             case ast.UnaryOp(op, x):
                 return self.unary(e, op, x)

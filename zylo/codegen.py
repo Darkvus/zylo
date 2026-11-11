@@ -10,8 +10,9 @@ Structs: `#[derive(Clone, PartialEq)] struct` + an `impl` with their methods. `s
 imprimir `Point(x=1.0, y=2.0)`.
 """
 from . import ast
+from .checker import BUILTINS as BUILTIN_NAMES
 from .errors import ZyloError
-from .types import BOOL, FLOAT, INT, STR, UNIT, DictT, ListT, OptionT, ResultT, SetT, StructT, TupleT, Type
+from .types import BOOL, FLOAT, INT, STR, UNIT, DictT, ListT, OptionT, ResultT, SetT, StructT, TupleT, Type, is_copy_type
 
 PRELUDE = """#![allow(unused, unused_parens, while_true, unused_mut)]
 use std::collections::{BTreeMap, BTreeSet};
@@ -182,13 +183,7 @@ def rust_type(t: Type) -> str:
 
 
 def is_copy(t: Type) -> bool:
-    if isinstance(t, TupleT):
-        return all(is_copy(x) for x in t.elems)
-    if isinstance(t, OptionT):
-        return is_copy(t.inner)
-    if isinstance(t, ResultT):
-        return is_copy(t.ok) and is_copy(t.err)
-    return t in (INT, FLOAT, BOOL)
+    return is_copy_type(t)
 
 
 def str_lit(v: str) -> str:
@@ -271,7 +266,7 @@ class Gen:
         if f.has_self:
             params.append("&mut self" if f.self_mut else "&self")
         params += [
-            f"{'mut ' if p.info and p.info.mutable else ''}{ident(p.name)}: {rust_type(p.info.ty)}"
+            f"{'mut ' if p.info and p.info.mutable else ''}{ident(p.name)}: {'&' if p.info.by_ref else ''}{rust_type(p.info.ty)}"
             for p in f.params
         ]
         ret = "" if f.ty.ret == UNIT else f" -> {rust_type(f.ty.ret)}"
@@ -405,6 +400,8 @@ class Gen:
             src = f"{emit_ref(it)}.iter().cloned().collect::<Vec<_>>()"
         elif it.ty == STR:
             src = f"{emit_ref(it)}.chars().map(|c| c.to_string()).collect::<Vec<String>>()"
+        elif is_readonly_place(it):
+            src = f"{emit_ref(it)}.iter().cloned()"  # nothing can modify it: borrow instead of cloning the list
         else:
             src = emit(it)  # owned: clones the list once, so the body may mutate the original like in Python
         if s.targets:
@@ -424,6 +421,13 @@ def emit(e: ast.Expr) -> str:
     if isinstance(e, (ast.Name, ast.Index, ast.Attr)) and not is_copy(e.ty):
         return f"{code}.clone()"
     return code
+
+
+def is_readonly_place(e: ast.Expr) -> bool:
+    """A variable (or a field/index path from one) that is never modified anywhere in its scope."""
+    while isinstance(e, (ast.Attr, ast.Index)):
+        e = e.value
+    return isinstance(e, ast.Name) and e.var is not None and not e.var.mutable and e.var.name != "self"
 
 
 def is_place(e: ast.Expr) -> bool:
@@ -463,7 +467,7 @@ def emit_ref(e: ast.Expr) -> str:
         case ast.Bool(v):
             return "true" if v else "false"
         case ast.Name(i):
-            return ident(i)
+            return f"(*{ident(i)})" if e.var is not None and e.var.by_ref else ident(i)
         case ast.TupleLit(items):
             return "(" + ", ".join(emit(x) for x in items) + ")"
         case ast.DictLit(keys, values):
@@ -508,7 +512,9 @@ def emit_ref(e: ast.Expr) -> str:
         case ast.MethodCall(v, name, args):
             target = _METHODS.get((v.ty.name, name))
             recv = emit_mut(v) if target is not None and target.self_mut else emit_ref(v)
-            return f"{recv}.{mident(name)}({', '.join(emit(a) for a in args)})"
+            # a method that borrows `self` mutably cannot also lend out parts of it: pass those arguments by value
+            code = call_args(target.params, args, by_ref_ok=not target.self_mut) if target else ", ".join(emit(a) for a in args)
+            return f"{recv}.{mident(name)}({code})"
         case ast.ListLit(items):
             if not items:
                 return "Vec::new()"
@@ -540,7 +546,15 @@ def fstring(parts: list) -> str:
 
 
 _METHODS: dict[tuple[str, str], ast.FnDef] = {}
-_USER_FNS: set[str] = set()
+_FNS: dict[str, ast.FnDef] = {}  # the program's top-level functions by (linked) name
+
+
+def call_args(params: list[ast.Param], args: list[ast.Expr], by_ref_ok: bool = True) -> str:
+    """Call arguments: parameters the callee never modifies are lent (`&x`) instead of cloned."""
+    out = []
+    for p, a in zip(params, args):
+        out.append("&" + emit_ref(a) if by_ref_ok and p.info is not None and p.info.by_ref else emit(a))
+    return ", ".join(out)
 
 
 def type_method(e: ast.MethodCall) -> str:
@@ -620,8 +634,8 @@ def call(e: ast.Call) -> str:
     if e.ctor_fields is not None:
         fields = ", ".join(f"{ident(n)}: {emit(a)}" for n, a in zip(e.ctor_fields, args))
         return f"{tname(e.func)} {{ {fields} }}"
-    if e.func in _USER_FNS:  # a user function shadowing a builtin name
-        return f"{ident(e.func)}({', '.join(emit(a) for a in args)})"
+    if e.func in _FNS and e.func in BUILTIN_NAMES:  # a user function shadowing a builtin name
+        return f"{ident(e.func)}({call_args(_FNS[e.func].params, args)})"
     match e.func:
         case "print":
             if not args:
@@ -722,13 +736,14 @@ def call(e: ast.Call) -> str:
         case "range":
             raise ZyloError("range(...) can only be used in a `for`", e.line, e.col)
         case name:
-            return f"{ident(name)}({', '.join(emit(a) for a in args)})"
+            fd = _FNS.get(name)
+            return f"{ident(name)}({call_args(fd.params, args) if fd else ', '.join(emit(a) for a in args)})"
 
 
 def generate(prog: ast.Program) -> str:
     _METHODS.clear()
-    _USER_FNS.clear()
-    _USER_FNS.update(s.name for s in prog.body if isinstance(s, ast.FnDef))
+    _FNS.clear()
+    _FNS.update({s.name: s for s in prog.body if isinstance(s, ast.FnDef)})
     for s in prog.body:
         if isinstance(s, ast.StructDef):
             _METHODS.update({(s.name, m.name): m for m in s.methods})

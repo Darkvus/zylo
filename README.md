@@ -1,7 +1,7 @@
 # Zylo
 
 A small statically typed language with Python-like syntax that compiles to Rust.
-Write code that reads like Python, get a native binary that runs 30–90× faster.
+Write code that reads like Python, get a native binary that runs 25–80× faster on compute-heavy code.
 
 **Status:** v0.4 — early but complete enough to write real programs and share libraries. See the [roadmap](ROADMAP.md).
 
@@ -105,10 +105,11 @@ The same programs in Zylo and in CPython (median of 5 runs):
 
 | Program | Python | Zylo | Speedup |
 |---|---:|---:|---:|
-| fib(35), recursive | 1.021 s | 0.037 s | **28×** |
-| primes below 300 000 | 0.648 s | 0.019 s | **35×** |
-| bubble sort, 3 000 items | 0.388 s | 0.004 s | **90×** |
-| arithmetic loop, 20 M iterations | 1.364 s | 0.016 s | 87× (*) |
+| fib(35), recursive | 1.015 s | 0.039 s | **26×** |
+| primes below 300 000 | 0.649 s | 0.018 s | **35×** |
+| bubble sort, 3 000 items | 0.355 s | 0.004 s | **82×** |
+| a list passed to a function 1 000 times | 0.100 s | 0.032 s | **3×** |
+| arithmetic loop, 20 M iterations | 1.284 s | 0.016 s | 79× (*) |
 
 (*) LLVM optimizes this trivial loop very aggressively, so treat it as an upper bound.
 Method and the variant without overflow checks: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
