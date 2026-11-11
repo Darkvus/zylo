@@ -94,10 +94,18 @@ deterministic (a hash map would print in a different order on every run) and key
 in the generated Rust prelude. Negative indexing needs to evaluate the container twice, so it is applied when
 the container is a variable, field or index chain (no side effects); other expressions use plain indexing.
 
+**Rust interop is a template, and Rust access is opt-in for packages.** `extern fn` is a Zylo signature (so the
+checker keeps its guarantees) plus a Rust path or template expanded at each call, with arguments passed by value.
+Crates are built through a generated Cargo project only when a project declares some, so ordinary programs keep the
+fast `rustc` path. Because compiling a crate runs its `build.rs` and `extern fn` can run anything, a community
+package may use either only if the project lists it under `[rust] trusted-packages`; otherwise packages are plain
+Zylo, which is what makes installing and compiling them safe to reason about.
+
 ## Known limitations
 
 - Values are still cloned when stored (assigned to another variable, put in a struct or a list) or returned.
 - `is` narrowing works on plain variables and a single condition (no `and` chains, no fields).
+- Rust generics and traits are not exposed, and there are no callbacks from Rust into Zylo.
 - No closures, generics or list comprehensions yet. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
 - No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.
 - Diagnostics are in English only.

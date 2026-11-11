@@ -45,8 +45,9 @@ def err(msg: str, node: ast.Node, path: Path | None = None) -> ZyloError:
 
 
 class Linker:
-    def __init__(self, packages_dir: Path | None = None):
+    def __init__(self, packages_dir: Path | None = None, trusted: set[str] | list[str] = ()):
         self.packages_dir = packages_dir.resolve() if packages_dir else None
+        self.trusted = set(trusted)  # packages the project allows to call Rust (`extern fn`)
         self.by_path: dict[Path, Module] = {}
         self.by_id: dict[str, Path] = {}
         self.order: list[Module] = []  # dependencies before dependents
@@ -86,6 +87,7 @@ class Linker:
             for s in prog.body:
                 if not isinstance(s, (ast.Import, ast.FromImport, ast.FnDef, ast.StructDef)):
                     raise err("library modules can only contain imports, functions and structs", s, path)
+        self.check_trust(mod)
         self.collect_defs(mod)
         for s in prog.body:
             if isinstance(s, ast.Import):
@@ -96,6 +98,17 @@ class Linker:
         self.by_path[key] = mod
         self.order.append(mod)
         return mod
+
+    def check_trust(self, mod: Module) -> None:
+        """A package from the community is plain Zylo unless the project trusts it with Rust access."""
+        if not (self.packages_dir and self.packages_dir in mod.path.resolve().parents):
+            return
+        pkg = mod.path.resolve().relative_to(self.packages_dir).parts[0]
+        for s in mod.program.body:
+            if isinstance(s, ast.ExternFn) and pkg not in self.trusted:
+                raise err(
+                    f"package {pkg!r} declares `extern fn` (it calls Rust directly), but the project does not trust it; "
+                    f"add it to `[rust] trusted-packages` in zylo.toml if you do", s, mod.path)
 
     def register_id(self, mod: Module, path: Path) -> None:
         other = self.by_id.get(mod.id)

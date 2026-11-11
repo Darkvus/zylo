@@ -95,6 +95,11 @@ class Parser:
             match tok.value:
                 case "fn":
                     return self.parse_fn()
+                case "extern":
+                    self.advance()
+                    if not self.check("KW", "fn"):
+                        raise ZyloError("expected 'fn' after 'extern'", self.cur.line, self.cur.col)
+                    return self.parse_fn(extern=True)
                 case "struct":
                     return self.parse_struct()
                 case "import":
@@ -201,7 +206,7 @@ class Parser:
         self.expect("NEWLINE")
         return ast.Return(value, line=kw.line, col=kw.col)
 
-    def parse_fn(self, in_struct: bool = False) -> ast.FnDef:
+    def parse_fn(self, in_struct: bool = False, extern: bool = False) -> ast.FnDef:
         kw = self.advance()
         name = self.expect("IDENT").value
         self.expect("OP", "(")
@@ -219,6 +224,11 @@ class Parser:
                 params.append(self.parse_param())
         self.expect("OP", ")")
         ret = self.parse_type() if self.match("OP", "->") else None
+        if extern:
+            self.expect("OP", "=")
+            template = self.expect("STR").value
+            self.expect("NEWLINE")
+            return ast.ExternFn(name, params, ret, [], False, False, template, line=kw.line, col=kw.col)
         body = self.parse_block()
         return ast.FnDef(name, params, ret, body, has_self, line=kw.line, col=kw.col)
 

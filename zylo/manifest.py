@@ -5,6 +5,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .cargo import toml_value, validate_rust_dep
 from .errors import PackageError
 
 MANIFEST = "zylo.toml"
@@ -84,6 +85,8 @@ class Manifest:
     entry: str | None = None
     dependencies: dict[str, Dependency] = field(default_factory=dict)
     path: Path | None = None  # where it was loaded from
+    rust_dependencies: dict[str, object] = field(default_factory=dict)  # Cargo-style, see docs/rust-interop.md
+    trusted_packages: list[str] = field(default_factory=list)  # packages allowed to call Rust
 
     @property
     def root(self) -> Path:
@@ -101,7 +104,9 @@ def load_manifest(path: Path) -> Manifest:
     if not isinstance(pkg, dict) or "name" not in pkg:
         raise PackageError(f"{path}: missing [package] name")
     deps = {n: parse_dependency(n, v) for n, v in (data.get("dependencies") or {}).items()}
-    return Manifest(check_name(str(pkg["name"])), str(pkg.get("version", "0.1.0")), pkg.get("entry"), deps, path)
+    rust = {n: validate_rust_dep(n, v) for n, v in (data.get("rust-dependencies") or {}).items()}
+    trusted = [check_name(str(t), "trusted package name") for t in (data.get("rust") or {}).get("trusted-packages", [])]
+    return Manifest(check_name(str(pkg["name"])), str(pkg.get("version", "0.1.0")), pkg.get("entry"), deps, path, rust, trusted)
 
 
 def dump_manifest(m: Manifest) -> str:
@@ -111,6 +116,10 @@ def dump_manifest(m: Manifest) -> str:
     lines += ["", "[dependencies]"]
     for name in sorted(m.dependencies):
         lines.append(f"{name} = {m.dependencies[name].to_toml_value()}")
+    if m.rust_dependencies:
+        lines += ["", "[rust-dependencies]"] + [f"{n} = {toml_value(v)}" for n, v in sorted(m.rust_dependencies.items())]
+    if m.trusted_packages:
+        lines += ["", "[rust]", f"trusted-packages = {toml_value(sorted(m.trusted_packages))}"]
     return "\n".join(lines) + "\n"
 
 

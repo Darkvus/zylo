@@ -90,7 +90,9 @@ class Checker:
         for d in defs:
             self.declare_methods(d)
         for s in prog.body:
-            if isinstance(s, ast.FnDef):
+            if isinstance(s, ast.ExternFn):
+                self.check_extern(s)
+            elif isinstance(s, ast.FnDef):
                 self.check_fn(s)
             elif isinstance(s, ast.StructDef):
                 for m in s.methods:
@@ -186,6 +188,13 @@ class Checker:
         if f.name in self.fns:
             raise err(f"function {f.name!r} is already defined", f)
         f.ty = self.fns[f.name] = self.signature(f)
+
+    def check_extern(self, f: ast.ExternFn) -> None:
+        if not f.template.strip():
+            raise err(f"extern fn {f.name!r} needs a Rust path or template after `=`", f)
+        for n in re.findall(r"\{(\d+)\}", f.template):
+            if int(n) >= len(f.params):
+                raise err(f"the template of {f.name!r} uses {{{n}}} but the function has {len(f.params)} parameter(s)", f)
 
     def check_fn(self, f: ast.FnDef, owner: str | None = None) -> None:
         sig = f.ty

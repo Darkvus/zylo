@@ -239,6 +239,12 @@ class FnDef(Node):
 
 
 @dataclass
+class ExternFn(FnDef):
+    """`extern fn f(a: int) -> int = "rust::path"`: a function whose body is Rust (see docs/rust-interop.md)."""
+    template: str = ""
+
+
+@dataclass
 class Field(Node):
     name: str
     type: TypeRef
