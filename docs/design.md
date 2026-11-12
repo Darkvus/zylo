@@ -70,6 +70,29 @@ with no hidden control flow and no runtime cost. Three features make them pleasa
 - `expr?` is Rust's `?`: it requires the enclosing function to return an `Option`, or a `Result`
   with the same error type.
 
+**Defaults are constants resolved by the checker.** A default (`b: int = 2`, `x: float = 0.0`) must be a compile-time
+constant: a literal, `none`, an empty list or dict, an enum variant with constant data, or a tuple of those. That keeps every call site trivially correct
+(no evaluation-time questions, no Python-style shared mutable default). The checker rewrites each call into a full
+positional argument list, copying the default expression into the arguments that were left out and ordering named
+arguments by parameter. After checking, a call has exactly one argument per parameter, so the code generator,
+borrow inference and `extern fn` templates are unchanged. The price is that arguments are evaluated in parameter
+order rather than the order written; that only matters when two arguments have side effects. Positional arguments
+come first, then named ones (the Python rule), and a parameter without a default may not follow one with a default.
+Built-in functions and enum variant constructors stay positional: their signatures are fixed by the language.
+
+**`match` is one statement with several pattern families.** Besides `Enum.Variant(a, b)`, an arm may be a literal
+(`0`, `-1`, `"stop"`, `true`), or `some(x)` / `none` / `ok(v)` / `err(e)`; the family is chosen by the type of the
+scrutinee. Literal and wrapper patterns reuse the enum machinery (arms bind names, `_` is the catch-all, a `match`
+must be exhaustive and an unreachable arm is an error). Integers and strings are open sets, so they always need
+`_`; `bool` is closed and is complete with `true` and `false`. Floats are rejected because matching on float equality
+is almost always a bug. It is generated as a Rust `match` on an owned copy (a `&str` for strings), so bindings are
+plain values just like the enum case. `is` narrowing is untouched: `match` is for choosing between cases, `is` for
+guarding a single one.
+
+**Enum methods mirror struct methods.** `fn` with `self` inside an `enum` body is emitted in an `impl` block. Enum
+values are immutable (there is nothing to assign to), so a method always takes `&self` and the usual body is
+`match self:`.
+
 **Generated names never collide.** Zylo identifiers that are Rust keywords or would clash with the
 prelude (`type`, `impl`, `String`, a method called `clone`...) get a trailing `_` in the output.
 
@@ -116,7 +139,7 @@ the lexer's keywords and the built-in catalog, so highlighting cannot drift from
 - Values are still cloned when stored (assigned to another variable, put in a struct or a list) or returned.
 - `is` narrowing works on plain variables and a single condition (no `and` chains, no fields).
 - Rust generics and traits are not exposed, and there are no callbacks from Rust into Zylo.
-- No closures, generics or list comprehensions yet.
+- No closures, generics or list comprehensions yet. `match` has no guards, no or-patterns (`1 | 2`) and no nested patterns.
 - The language server has no hover, go to definition or rename yet. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
 - No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.
 - Diagnostics are in English only.

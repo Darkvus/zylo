@@ -1,0 +1,20 @@
+0 4 30
+L-mid2 Z-top Q-low
+Mid(6) Mid(15) Low
+92
+Config(name="svc", port=8080, ratio=0.5, tags=[], limit=None, pair=(1, "x"), verbose=false)
+5432 0.25 [] None (1, "x") false
+Some(3) ["a", "b"]
+["changed"] []
+123 153 129 231 456
+[7] [7] [1, 2] [3]
+zero,one,minus one,many
+1 2 0
+got 3 nothing
+error: bad
+5 -1
+yes no
+mutated copy 6
+Some(5)
+narrowed 6
+9 4

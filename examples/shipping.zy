@@ -1,0 +1,78 @@
+# Shipping costs: enum methods, default and named arguments, and `match` on values and Option.
+
+enum Speed:
+    Standard
+    Express(int)
+    Pickup
+
+    fn base(self) -> int:
+        match self:
+            Speed.Standard:
+                return 500
+            Speed.Express(days):
+                return 1500 - days * 100
+            Speed.Pickup:
+                return 0
+
+    fn name(self) -> str:
+        match self:
+            Speed.Standard:
+                return "standard"
+            Speed.Express(days):
+                return f"express-{days}d"
+            Speed.Pickup:
+                return "pickup"
+
+struct Parcel:
+    weight: int
+    speed: Speed = Speed.Standard
+    insured: bool = false
+    coupon: str? = none
+
+fn discount(code: str) -> int:
+    match code:
+        "WELCOME":
+            return 10
+        "VIP":
+            return 25
+        _:
+            return 0
+
+fn price(p: Parcel, per_kg: int = 120) -> int:
+    cost = p.speed.base() + p.weight * per_kg
+    match p.insured:
+        true:
+            cost += cost / 10
+        false:
+            cost += 0
+    match p.coupon:
+        some(code):
+            cost -= cost * discount(code) / 100
+        none:
+            cost += 0
+    return cost
+
+fn size_class(grams: int) -> str:
+    match grams / 1000:
+        0:
+            return "small"
+        1:
+            return "medium"
+        _:
+            return "large"
+
+p1 = Parcel(2)
+p2 = Parcel(5, Speed.Express(2))
+p3 = Parcel(3, insured=true)
+p4 = Parcel(weight=1, speed=Speed.Pickup, coupon=some("VIP"))
+p5 = Parcel(4, Speed.Express(1), true, some("WELCOME"))
+p6 = Parcel(7, coupon=some("EXPIRED"))
+parcels = [p1, p2, p3, p4, p5, p6]
+total = 0
+for p in parcels:
+    cost = price(p)
+    total += cost
+    print(f"{p.speed.name():10} {p.weight}kg -> {cost}")
+print("total", total)
+print("cheap kg", price(parcels[0], per_kg=50))
+print(size_class(450), size_class(1500), size_class(9000))

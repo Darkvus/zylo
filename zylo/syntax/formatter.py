@@ -81,8 +81,10 @@ def expr_text(e: ast.Expr, min_prec: int = 0, q: str = '"') -> str:
     return f"({text})" if prec < min_prec else text
 
 
-def _args(items: list[ast.Expr], q: str) -> str:
-    return ", ".join(expr_text(a, 0, q) for a in items)
+def _args(items: list[ast.Expr], q: str, named: list[ast.NamedArg] | None = None) -> str:
+    parts = [expr_text(a, 0, q) for a in items]
+    parts += [f"{n.name}={expr_text(n.value, 0, q)}" for n in named or []]
+    return ", ".join(parts)
 
 
 def _expr(e: ast.Expr, q: str) -> tuple[str, int]:
@@ -115,10 +117,10 @@ def _expr(e: ast.Expr, q: str) -> tuple[str, int]:
             return f"{expr_text(v, IS_PREC, q)} is {kind}", IS_PREC
         case ast.Try(v):
             return f"{expr_text(v, ATOM, q)}?", ATOM
-        case ast.Call(func, args):
-            return f"{func}({_args(args, q)})", ATOM
-        case ast.MethodCall(v, name, args):
-            return f"{expr_text(v, ATOM, q)}.{name}({_args(args, q)})", ATOM
+        case ast.Call(func, args, named=named):
+            return f"{func}({_args(args, q, named)})", ATOM
+        case ast.MethodCall(v, name, args, named=named):
+            return f"{expr_text(v, ATOM, q)}.{name}({_args(args, q, named)})", ATOM
         case ast.Attr(v, name):
             return f"{expr_text(v, ATOM, q)}.{name}", ATOM
         case ast.Index(v, i):
@@ -294,13 +296,13 @@ class _Formatter:
                 for n, v in enumerate(s.variants):
                     shown = f"({', '.join(type_text(t) for t in v.fields)})" if v.fields else ""
                     self.line(v.line, indent + 1, v.name + shown, first_in_block=n == 0)
+                for m in s.methods:
+                    self.blank()
+                    self.stmt(m, indent + 1, first_in_block=True)
             case ast.Match():
                 self.header(s, indent, f"match {expr_text(s.value)}", first_in_block)
                 for n, arm in enumerate(s.arms):
-                    if arm.type is None:
-                        head = "_"
-                    else:
-                        head = f"{type_text(arm.type)}.{arm.variant}" + (f"({', '.join(arm.binds)})" if arm.binds else "")
+                    head = self.pattern_text(arm)
                     self.header(arm, indent + 1, head, first_in_block=n == 0)
                     self.block(arm.body, indent + 2)
             case ast.Import():
@@ -310,6 +312,16 @@ class _Formatter:
                 self.line(s.line, indent, f"from {s.module} import {names}", first_in_block)
             case _:
                 raise ValueError(f"cannot format {type(s).__name__}")
+
+    @staticmethod
+    def pattern_text(arm: ast.MatchArm) -> str:
+        """Return the pattern of a `match` arm as written."""
+        binds = f"({', '.join(arm.binds)})" if arm.binds else ""
+        if arm.literal is not None:
+            return expr_text(arm.literal)
+        if arm.type is not None:
+            return f"{type_text(arm.type)}.{arm.variant}{binds}"
+        return arm.variant + binds
 
     def assign_text(self, s: ast.Assign) -> str:
         """Return an assignment, keeping `x += 1` when that is how it was written."""
@@ -322,7 +334,10 @@ class _Formatter:
 
     def signature(self, f: ast.FnDef) -> str:
         """Return `fn name(params) -> ret` for a function or method."""
-        params = (["self"] if f.has_self else []) + [f"{p.name}: {type_text(p.type)}" for p in f.params]
+        params = (["self"] if f.has_self else []) + [
+            f"{p.name}: {type_text(p.type)}" + (f" = {expr_text(p.default)}" if p.default is not None else "")
+            for p in f.params
+        ]
         ret = f" -> {type_text(f.ret)}" if f.ret else ""
         return f"fn {f.name}({', '.join(params)}){ret}"
 
@@ -340,7 +355,8 @@ class _Formatter:
         """Write a struct: its fields, then its methods separated by blank lines."""
         self.header(s, indent, f"struct {s.name}", first_in_block)
         for n, f in enumerate(s.fields):
-            self.line(f.line, indent + 1, f"{f.name}: {type_text(f.type)}", first_in_block=n == 0)
+            default = f" = {expr_text(f.default)}" if f.default is not None else ""
+            self.line(f.line, indent + 1, f"{f.name}: {type_text(f.type)}{default}", first_in_block=n == 0)
         for m in s.methods:
             self.blank()
             self.stmt(m, indent + 1, first_in_block=True)

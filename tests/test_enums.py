@@ -108,8 +108,8 @@ def test_pattern_arity_and_enum_are_checked():
 
 
 def test_match_needs_an_enum():
-    fails("match 5:\n    _:\n        print(1)\n", "needs an enum value, not int")
-    fails("x: int? = none\nmatch x:\n    _:\n        print(1)\n", "use `is some`")
+    fails("match [1]:\n    _:\n        print(1)\n", "needs an enum, int, str, bool, Option or Result value, not list\\[int\\]")
+    fails("match 1.5:\n    _:\n        print(1)\n", "cannot be used on a float")
 
 
 def test_bound_names_stay_inside_their_arm():

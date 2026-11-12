@@ -316,24 +316,52 @@ class Gen:
             data = f"({', '.join(rust_type(t) for t in v.tys)})" if v.tys else ""
             self.line(f"    {v.name}{data},")
         self.line("}")
+        if ed.methods:
+            self.out.append("")
+            self.line(f"impl {tname(ed.name)} {{")
+            self.depth += 1
+            for i, m in enumerate(ed.methods):
+                if i:
+                    self.out.append("")
+                self.fn(m)
+            self.depth -= 1
+            self.line("}")
 
     def match(self, s: ast.Match) -> None:
-        """Emit a `match` as a Rust `match` on an owned copy of the value, binding each variant's data by value."""
-        self.line(f"match {emit(s.value)} {{")
+        """Emit a `match` as a Rust `match` on an owned copy of the value, binding each arm's data by value.
+
+        Strings are matched as `&str`; `Option` and `Result` arms become `Some`/`None`/`Ok`/`Err` patterns.
+        """
+        scrutinee = f"{emit_ref(s.value)}.as_str()" if s.value.ty == STR else emit(s.value)
+        self.line(f"match {scrutinee} {{")
         self.depth += 1
         for arm in s.arms:
-            if arm.type is None:
-                head = "_"
-            elif not arm.binds:
-                head = f"{tname(s.enum)}::{arm.variant}"
-            else:
-                binds = ", ".join("_" if v is None else f"{'mut ' if v.mutable else ''}{ident(v.name)}" for v in arm.vars)
-                head = f"{tname(s.enum)}::{arm.variant}({binds})"
-            self.line(f"{head} => {{")
+            self.line(f"{self.arm_pattern(s, arm)} => {{")
             self.block(arm.body)
             self.line("}")
         self.depth -= 1
         self.line("}")
+
+    ARM_WRAPPERS = {"some": "Some", "ok": "Ok", "err": "Err"}
+
+    def arm_pattern(self, s: ast.Match, arm: ast.MatchArm) -> str:
+        """Return the Rust pattern of one `match` arm."""
+        if arm.variant == "_":
+            return "_"
+        if arm.variant == "none":
+            return "None"
+        if arm.literal is not None:
+            lit = arm.literal
+            if isinstance(lit, ast.Str):
+                return str_lit(lit.value)
+            if isinstance(lit, ast.Bool):
+                return "true" if lit.value else "false"
+            return emit_ref(lit)
+        if not arm.binds:
+            return f"{tname(s.enum)}::{arm.variant}"
+        binds = ", ".join("_" if v is None else f"{'mut ' if v.mutable else ''}{ident(v.name)}" for v in arm.vars)
+        head = self.ARM_WRAPPERS.get(arm.variant) if arm.type is None else f"{tname(s.enum)}::{arm.variant}"
+        return f"{head}({binds})"
 
     def struct(self, sd: ast.StructDef) -> None:
         """Emit a struct, its `Debug` implementation and its methods."""
@@ -932,6 +960,6 @@ def generate(prog: ast.Program) -> str:
     _FNS.clear()
     _FNS.update({s.name: s for s in prog.body if isinstance(s, ast.FnDef)})
     for s in prog.body:
-        if isinstance(s, ast.StructDef):
+        if isinstance(s, (ast.StructDef, ast.EnumDef)):
             _METHODS.update({(s.name, m.name): m for m in s.methods})
     return Gen().program(prog)

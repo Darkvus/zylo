@@ -108,17 +108,31 @@ class UnaryOp(Node):
 
 
 @dataclass
+class NamedArg(Node):
+    """A named argument `name=value` in a call.
+
+    Attributes:
+        name: The parameter (or struct field) it sets.
+        value: The argument expression.
+    """
+    name: str
+    value: "Expr"
+
+
+@dataclass
 class Call(Node):
     """A call of a function, a built-in, or a struct constructor.
 
     Attributes:
         func: Name of the callee (mangled `module·name` after linking).
-        args: Argument expressions.
+        args: Argument expressions. After checking, one per parameter: named arguments and defaults are folded in.
         ctor_fields: Field names when the checker found this is a struct constructor, otherwise None.
+        named: Named arguments as written; the checker moves them into `args` and empties this list.
     """
     func: str
     args: list["Expr"]
     ctor_fields: list[str] | None = None  # filled in by the checker if this is a struct constructor
+    named: list[NamedArg] = field(default_factory=list)
 
 
 @dataclass
@@ -205,13 +219,15 @@ class MethodCall(Node):
     Attributes:
         value: The receiver.
         name: The method or variant name.
-        args: Argument expressions.
+        args: Argument expressions (completed with defaults by the checker, like `Call.args`).
         variant: `(enum, variant)` when the checker found a variant constructor, otherwise None.
+        named: Named arguments as written; the checker moves them into `args` and empties this list.
     """
     value: "Expr"
     name: str
     args: list["Expr"]
     variant: tuple[str, str] | None = None
+    named: list[NamedArg] = field(default_factory=list)
 
 
 @dataclass
@@ -336,10 +352,12 @@ class Param(Node):
         name: Parameter name.
         type: Its declared type.
         info: The checker's record of the variable; says whether the function modifies it or may borrow it.
+        default: The default value (a constant expression), or None when the argument is required.
     """
     name: str
     type: TypeRef
     info: VarInfo | None = None
+    default: "Expr | None" = None
 
 
 @dataclass
@@ -370,9 +388,10 @@ class ExternFn(FnDef):
 
 @dataclass
 class Field(Node):
-    """One field of a struct definition (`name: type`)."""
+    """One field of a struct definition (`name: type`), with an optional default (`name: type = value`)."""
     name: str
     type: TypeRef
+    default: "Expr | None" = None
 
 
 @dataclass
@@ -407,33 +426,40 @@ class EnumDef(Node):
         name: Enum name (mangled after linking).
         variants: The variants, in order.
         display: Original name to show to users when `name` was mangled.
+        methods: Methods defined inside the enum; `self` is the enum value.
     """
     name: str
     variants: list[Variant]
     display: str | None = None
+    methods: list[FnDef] = field(default_factory=list)
 
 
 @dataclass
 class MatchArm(Node):
-    """One arm of a `match`: `Enum.Variant(a, b):` followed by a block, or `_:` for every other variant.
+    """One arm of a `match`, followed by its block.
+
+    The pattern is one of: `Enum.Variant(a, b)`, a literal (`0`, `"a"`, `true`), `some(x)` / `none` / `ok(v)` /
+    `err(e)`, or `_` for everything else.
 
     Attributes:
-        type: The enum as written (`Shape` or `mod.Shape`), or None for the `_` arm.
-        variant: The variant name, or `_`.
+        type: The enum as written (`Shape` or `mod.Shape`) for a variant pattern, otherwise None.
+        variant: The variant name, `some` / `none` / `ok` / `err`, `_`, or `literal` for a literal pattern.
         binds: Names bound to the variant's data, in order.
         body: Statements of the arm.
         vars: The variables for `binds` (set by the checker).
+        literal: The literal expression of a literal pattern, otherwise None.
     """
     type: TypeRef | None
     variant: str
     binds: list[str]
     body: list["Stmt"]
     vars: list = field(default_factory=list)
+    literal: "Expr | None" = None
 
 
 @dataclass
 class Match(Node):
-    """`match value:` with one arm per variant; it must cover every variant or end with `_`."""
+    """`match value:` on an enum, `int`, `str`, `bool`, `Option` or `Result`; it must be exhaustive."""
     value: "Expr"
     arms: list[MatchArm]
     enum: str | None = None  # the enum matched on, set by the checker

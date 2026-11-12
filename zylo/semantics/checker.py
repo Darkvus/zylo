@@ -11,6 +11,7 @@ Reglas:
   receive `self` by reference; the checker infers whether they modify it (`self_mut`), also
   when they do so by calling another modifying method (fixed point in `check`).
 """
+import copy
 import re
 from dataclasses import dataclass, field
 
@@ -127,10 +128,12 @@ class EnumInfo:
         name: The enum's name.
         defn: Its definition node.
         variants: The types of each variant's data, by variant name, in declaration order.
+        methods: Method signatures by name.
     """
     name: str
     defn: ast.EnumDef
     variants: dict[str, list[Type]] = field(default_factory=dict)
+    methods: dict[str, FnT] = field(default_factory=dict)
 
 
 class Checker:
@@ -162,6 +165,8 @@ class Checker:
         self.loops = 0
         self.errors: list[ZyloError] = []  # every mistake found; the checker goes on after one
         self.poisoned: set[str] = set()  # names whose declaration failed: later uses are not reported again
+        # parameters (or struct fields) with their defaults, for calls: by function name, `Type.method` or struct name
+        self.specs: dict[str, list] = {}
 
     # ---- entry point ---------------------------------------------------------------------
 
@@ -185,11 +190,13 @@ class Checker:
                 self.resolve_struct(d)
             for en in enums:
                 self.resolve_enum(en)
+            for d in defs:  # field defaults may name enum variants, so they wait until enums are resolved
+                self.check_defaults(d.fields, "field", [f.ty for f in d.fields])
             self.check_cycles(defs, enums)
             for s in prog.body:  # function signatures, so they can be used before their definition
                 if isinstance(s, ast.FnDef):
                     self.declare_fn(s)
-            for d in defs:
+            for d in [*defs, *enums]:
                 self.declare_methods(d)
         except ZyloError as e:  # a broken declaration makes the rest meaningless: report it and stop
             self.errors.append(e)
@@ -200,9 +207,7 @@ class Checker:
                     self.check_extern(s)
                 elif isinstance(s, ast.FnDef):
                     self.check_fn(s)
-                elif isinstance(s, ast.EnumDef):
-                    pass  # checked with the declarations
-                elif isinstance(s, ast.StructDef):
+                elif isinstance(s, (ast.StructDef, ast.EnumDef)):  # enum variants were checked with the declarations
                     for m in s.methods:
                         try:
                             self.check_fn(m, s.name)
@@ -267,6 +272,7 @@ class Checker:
             if f.name in info.fields:
                 raise err(f"duplicate field {f.name!r} in {d.name!r}", f)
             f.ty = info.fields[f.name] = self.resolve(f.type)
+        self.specs[d.name] = d.fields
 
     def check_cycles(self, defs: list[ast.StructDef], enums: list[ast.EnumDef]) -> None:
         """Reject structs and enums that contain themselves directly or through others (lists are fine)."""
@@ -342,49 +348,110 @@ class Checker:
         return EnumT(info.name)
 
     def match_stmt(self, s: ast.Match) -> None:
-        """Check a `match`: every arm names a variant of the same enum, binds its data, and together they cover the enum."""
+        """Check a `match` on an enum, `int`, `str`, `bool`, `Option` or `Result`.
+
+        Every arm must fit the value's type, bind its data, and together the arms must cover every case (or end with
+        a `_` arm); an arm that could never run is an error.
+        """
         t = self.expr(s.value)
-        if not isinstance(t, EnumT):
-            hint = " (use `is some` / `is ok` for Option and Result)" if isinstance(t, (OptionT, ResultT)) else ""
-            raise err(f"`match` needs an enum value, not {t}{hint}", s.value)
-        info = self.enums[t.name]
-        s.enum = t.name
-        seen: set[str] = set()
+        info: EnumInfo | None = None
+        if isinstance(t, EnumT):
+            info = self.enums[t.name]
+            s.enum = t.name
+        elif t == FLOAT:
+            raise err("`match` cannot be used on a float: floats are not matched exactly; use `if` and comparisons", s.value)
+        elif not isinstance(t, (OptionT, ResultT)) and t not in (INT, STR, BOOL):
+            raise err(f"`match` needs an enum, int, str, bool, Option or Result value, not {t}", s.value)
+        seen: set = set()
         wildcard = False
         for arm in s.arms:
             try:
                 if wildcard:
-                    raise err("this arm can never run: `_` already covers every variant", arm)
-                if arm.type is None:
+                    raise err("this arm can never run: `_` already covers every case", arm)
+                if arm.variant == "_":
                     wildcard = True
                     arm.vars = []
+                    self.arm_body(arm, [])
                 else:
                     self.check_arm(arm, t, info, seen)
-                    seen.add(arm.variant)
             except ZyloError as ex:
                 self.errors.append(ex)
-        missing = [v for v in info.variants if v not in seen]
-        if wildcard and not missing:
-            raise err("the `_` arm can never run: every variant is already matched", s.arms[-1])
+        universe = self.match_cases(t, info)
+        missing = [c for c in universe if c not in seen] if universe is not None else []
+        if universe is None and not wildcard:
+            raise err(f"`match` on {t} needs a final `_` arm for every other value", s)
+        if wildcard and universe is not None and not missing:
+            raise err("the `_` arm can never run: every case is already matched", s.arms[-1])
         if missing and not wildcard:
-            raise err(f"`match` on {t} does not cover {', '.join(f'{t}.{v}' for v in missing)}; add arms or a final `_` arm", s)
+            if info is not None:
+                names = ", ".join(f"{t}.{v}" for v in missing)
+            else:
+                names = ", ".join({"some": "some(_)", "ok": "ok(_)", "err": "err(_)", True: "true", False: "false"}.get(c, str(c))
+                                  for c in missing)
+            raise err(f"`match` on {t} does not cover {names}; add arms or a final `_` arm", s)
 
-    def check_arm(self, arm: ast.MatchArm, t: EnumT, info: EnumInfo, seen: set[str]) -> None:
-        """Check one `Enum.Variant(a, b):` arm and its body."""
-        named = self.resolve(arm.type)
-        if named != t:
-            raise err(f"this `match` is on {t}, not {named}", arm)
-        tys = info.variants.get(arm.variant)
-        if tys is None:
-            raise err(f"enum {t} has no variant {arm.variant!r} (has: {', '.join(info.variants)})", arm)
-        if arm.variant in seen:
-            raise err(f"variant {t}.{arm.variant} is matched twice", arm)
-        if len(arm.binds) != len(tys):
-            want = f"{len(tys)} name(s)" if tys else "no names"
-            raise err(f"{t}.{arm.variant} carries {len(tys)} value(s): write {want} in the pattern", arm)
+    def match_cases(self, t: Type, info: EnumInfo | None) -> list | None:
+        """The cases a `match` on `t` must cover, or None for a type with too many values (`int`, `str`)."""
+        if info is not None:
+            return list(info.variants)
+        if isinstance(t, OptionT):
+            return ["some", "none"]
+        if isinstance(t, ResultT):
+            return ["ok", "err"]
+        if t == BOOL:
+            return [True, False]
+        return None
+
+    def check_arm(self, arm: ast.MatchArm, t: Type, info: EnumInfo | None, seen: set) -> None:
+        """Check one arm: its pattern against the matched value's type, then its body."""
+        if arm.literal is not None:
+            key, tys = self.literal_pattern(arm, t), []
+        elif arm.type is not None:
+            if info is None:
+                raise err(f"`{arm.type.name}.{arm.variant}` is a variant pattern, but the value is {t}", arm)
+            named = self.resolve(arm.type)
+            if named != t:
+                raise err(f"this `match` is on {t}, not {named}", arm)
+            tys = info.variants.get(arm.variant)
+            if tys is None:
+                raise err(f"enum {t} has no variant {arm.variant!r} (has: {', '.join(info.variants)})", arm)
+            if len(arm.binds) != len(tys):
+                want = f"{len(tys)} name(s)" if tys else "no names"
+                raise err(f"{t}.{arm.variant} carries {len(tys)} value(s): write {want} in the pattern", arm)
+            key = arm.variant
+        else:
+            key = arm.variant
+            if key in ("some", "none"):
+                if not isinstance(t, OptionT):
+                    raise err(f"`{key}` can only match an Option, not {t}", arm)
+                tys = [t.inner] if key == "some" else []
+            else:
+                if not isinstance(t, ResultT):
+                    raise err(f"`{key}` can only match a Result, not {t}", arm)
+                tys = [t.ok if key == "ok" else t.err]
+        if key in seen:
+            shown = f"variant {t}.{key}" if info is not None else f"`{key}`" if arm.literal is None else "this value"
+            raise err(f"{shown} is matched twice", arm)
+        seen.add(key)
         names = [b for b in arm.binds if b != "_"]
         if len(set(names)) != len(names):
             raise err("a pattern cannot bind the same name twice", arm)
+        self.arm_body(arm, tys)
+
+    def literal_pattern(self, arm: ast.MatchArm, t: Type):
+        """Check a literal pattern against the matched type and return its value."""
+        lit = arm.literal
+        if isinstance(lit, ast.Float) or (isinstance(lit, ast.UnaryOp) and isinstance(lit.operand, ast.Float)):
+            raise err("floats cannot be matched; use `if` and comparisons", arm)
+        if isinstance(lit, ast.UnaryOp) and not (lit.op == "-" and isinstance(lit.operand, ast.Int)):
+            raise err("a `match` pattern must be a literal such as `3`, `-1`, `\"a\"` or `true`", arm)
+        lt = self.expr(lit)
+        if lt != t:
+            raise err(f"this `match` is on {t}, but the pattern is {lt}", arm)
+        return -lit.operand.value if isinstance(lit, ast.UnaryOp) else lit.value
+
+    def arm_body(self, arm: ast.MatchArm, tys: list[Type]) -> None:
+        """Check an arm's body with its pattern's names bound to `tys`."""
         self.scopes.push()
         try:
             arm.vars = [None if b == "_" else self.scopes.declare(b, ty) for b, ty in zip(arm.binds, tys)]
@@ -393,17 +460,68 @@ class Checker:
         finally:
             self.scopes.pop()
 
-    def declare_methods(self, d: ast.StructDef) -> None:
-        """Record the signatures of a struct's methods, rejecting duplicates and clashes with fields."""
-        info = self.structs[d.name]
+    def declare_methods(self, d: ast.StructDef | ast.EnumDef) -> None:
+        """Record the signatures of the methods of a struct or enum, rejecting duplicates and clashes."""
+        info = self.structs[d.name] if isinstance(d, ast.StructDef) else self.enums[d.name]
+        clash = info.fields if isinstance(d, ast.StructDef) else info.variants
+        what = "field" if isinstance(d, ast.StructDef) else "variant"
         for m in d.methods:
             if not m.has_self:
                 raise err(f"method {m.name!r} must take `self` as its first parameter", m)
-            if m.name in info.fields:
-                raise err(f"{m.name!r} is both a field and a method of {d.name!r}", m)
+            if m.name in clash:
+                raise err(f"{m.name!r} is both a {what} and a method of {d.name!r}", m)
             if m.name in info.methods:
                 raise err(f"method {m.name!r} is already defined in {d.name!r}", m)
             m.ty = info.methods[m.name] = self.signature(m)
+            self.specs[f"{d.name}.{m.name}"] = m.params
+
+    def is_constant(self, e: ast.Expr) -> bool:
+        """Whether an expression may be a default value.
+
+        Allowed: a literal, `none`, an empty list or dict, an enum variant (with constant data), or a tuple of those.
+        """
+        if isinstance(e, (ast.Int, ast.Float, ast.Str, ast.Bool, ast.NoneLit)):
+            return True
+        if isinstance(e, ast.UnaryOp):
+            return e.op == "-" and isinstance(e.operand, (ast.Int, ast.Float))
+        if isinstance(e, ast.ListLit):
+            return not e.items
+        if isinstance(e, ast.DictLit):
+            return not e.keys
+        if isinstance(e, ast.TupleLit):
+            return all(self.is_constant(x) for x in e.items)
+        if isinstance(e, ast.Attr):
+            return self.variant_of(e.value) is not None
+        if isinstance(e, ast.MethodCall):
+            return self.variant_of(e.value) is not None and not e.named and all(self.is_constant(a) for a in e.args)
+        return False
+
+    def check_defaults(self, items: list, what: str, types: list[Type]) -> None:
+        """Check the default values of parameters or struct fields.
+
+        A default must be a constant of the right type, and an item without a default cannot follow one with a default.
+
+        Args:
+            items: The parameters or fields (anything with `name` and `default`).
+            what: "parameter" or "field", for messages.
+            types: The resolved type of each item.
+
+        Raises:
+            ZyloError: On a non-constant default, a mismatched type or a required item after an optional one.
+        """
+        previous: str | None = None
+        for item, ty in zip(items, types):
+            if item.default is None:
+                if previous is not None:
+                    raise err(f"{what} {item.name!r} has no default but follows {previous!r}, which has one", item)
+                continue
+            previous = previous or item.name
+            if not self.is_constant(item.default):
+                raise err("a default value must be a constant: a number, string, true/false, none, an empty list or dict, "
+                          "or a tuple of those", item.default)
+            t = self.expr(item.default, ty)
+            if t != ty:
+                raise err(f"the default of {what} {item.name!r} is {t} but it is declared {ty}", item.default)
 
     # ---- functions ------------------------------------------------------------------
 
@@ -427,7 +545,9 @@ class Checker:
                 raise err(f"duplicate parameter {p.name!r}", p)
             seen.add(p.name)
         ret = self.resolve(f.ret) if f.ret else UNIT
-        return FnT(tuple(self.resolve(p.type) for p in f.params), ret)
+        params = tuple(self.resolve(p.type) for p in f.params)
+        self.check_defaults(f.params, "parameter", list(params))
+        return FnT(params, ret)
 
     def declare_fn(self, f: ast.FnDef) -> None:
         """Record a top-level function (or `extern fn`) so it can be called before it is defined."""
@@ -438,6 +558,7 @@ class Checker:
         if f.name in self.fns:
             raise err(f"function {f.name!r} is already defined", f)
         f.ty = self.fns[f.name] = self.signature(f)
+        self.specs[f.name] = f.params
 
     def check_extern(self, f: ast.ExternFn) -> None:
         """Validate an `extern fn`: it needs a template, and `{n}` placeholders must name real parameters."""
@@ -454,7 +575,7 @@ class Checker:
 
         Args:
             f: The function.
-            owner: The struct's name when `f` is a method.
+            owner: The struct's or enum's name when `f` is a method.
 
         Raises:
             ZyloError: On a type error in the body, or when a function with a return type can finish without returning.
@@ -463,7 +584,7 @@ class Checker:
         top, saved_poison = self.scopes, self.poisoned
         self.scopes, self.ret, self.loops, self.owner, self.poisoned = Scopes(), sig.ret, 0, owner, set()
         try:
-            self_info = self.scopes.declare("self", StructT(owner)) if owner else None
+            self_info = self.scopes.declare("self", EnumT(owner) if owner in self.enums else StructT(owner)) if owner else None
             for p, pt in zip(f.params, sig.params):
                 p.info = self.scopes.declare(p.name, pt)
             before = len(self.errors)
@@ -724,6 +845,7 @@ class Checker:
             return
         if target.id == "self":
             raise err("`self` cannot be declared or reassigned" if self.owner is None
+                      else "enum values are immutable: return a new value instead of reassigning `self`" if self.owner in self.enums
                       else "cannot reassign `self`; modify its fields (`self.x = ...`)", s)
         existing = self.scopes.lookup(target.id)
         if s.annotation:
@@ -1213,45 +1335,56 @@ class Checker:
         if enum:
             return self.variant_ctor(e, enum, e.name, e.args)
         rt = self.expr(e.value)
+        if e.named and (isinstance(rt, (OptionT, ResultT, ListT, DictT, SetT)) or rt == STR):
+            raise err(f"{rt}.{e.name} takes positional arguments only", e.named[0])
         if isinstance(rt, (OptionT, ResultT)):
             return self.builtin_method(e, rt)
         if rt == STR or isinstance(rt, (ListT, DictT, SetT)):
             return self.type_method(e, rt)
-        info = self.struct_of(rt, e, "methods")
+        info = self.enums[rt.name] if isinstance(rt, EnumT) else self.struct_of(rt, e, "methods")
         sig = info.methods.get(e.name)
         if sig is None:
-            if e.name in info.fields:
+            if isinstance(rt, StructT) and e.name in info.fields:
                 raise err(f"{e.name!r} is a field of {rt}, not a method", e)
             have = ", ".join(info.methods)
             hint = f" (has: {have})" if info.methods else ""
             raise err(f"{rt} has no method {e.name!r}{hint}", e)
-        self.check_args(e, f"{rt}.{e.name}", e.args, sig)
+        self.check_args(e, f"{rt}.{e.name}", e.args, sig, self.specs.get(f"{rt.name}.{e.name}"))
         if (rt.name, e.name) in self.mutating:
             self.mark_mutable(e.value)
         return sig.ret
 
     def ctor(self, e: ast.Call) -> Type:
-        """Type a struct constructor call; arguments are positional and cover every field."""
+        """Type a struct constructor call: arguments (positional, then named) cover every field without a default."""
         info = self.structs[e.func]
         types = list(info.fields.values())
-        self.check_args(e, e.func, e.args, FnT(tuple(types), StructT(e.func)))
+        self.check_args(e, e.func, e.args, FnT(tuple(types), StructT(e.func)), self.specs.get(e.func))
         e.ctor_fields = list(info.fields)
         return StructT(e.func)
 
     # ---- calls ------------------------------------------------------------------
 
-    def check_args(self, e: ast.Node, name: str, args: list[ast.Expr], sig: FnT) -> None:
+    def check_args(self, e: ast.Node, name: str, args: list[ast.Expr], sig: FnT, specs: list | None = None) -> None:
         """Check call arguments against a signature.
+
+        When the call uses named arguments or leaves out arguments that have defaults, the call is rewritten to one
+        positional argument per parameter (`e.args`), so later stages never see named arguments or missing ones.
 
         Args:
             e: The call, for error positions.
             name: The callee's name, for messages.
             args: The argument expressions.
             sig: The callee's type.
+            specs: The callee's parameters or fields with their names and defaults, when it accepts named arguments.
 
         Raises:
-            ZyloError: On a wrong number of arguments or a mismatched type.
+            ZyloError: On a wrong number of arguments, an unknown, repeated or missing argument, or a mismatched type.
         """
+        named = getattr(e, "named", [])
+        if specs is None and named:
+            raise err(f"{name} takes positional arguments only", named[0])
+        if specs is not None and (named or (len(args) < len(specs) and any(p.default is not None for p in specs))):
+            args = e.args = self.fill_args(e, name, args, named, specs)
         if len(args) != len(sig.params):
             raise err(f"{name} takes {len(sig.params)} argument(s), got {len(args)}", e)
         for i, (a, pt) in enumerate(zip(args, sig.params), start=1):
@@ -1259,16 +1392,56 @@ class Checker:
             if t != pt:
                 raise err(f"argument {i} of {name}: expected {pt}, got {t}", a)
 
+    def fill_args(self, e: ast.Node, name: str, args: list[ast.Expr], named: list[ast.NamedArg], specs: list) -> list[ast.Expr]:
+        """Place positional and named arguments in parameter order and fill the gaps with defaults.
+
+        Args:
+            e: The call, for error positions.
+            name: The callee's name, for messages.
+            args: The positional arguments.
+            named: The named arguments.
+            specs: The parameters or fields, with `name` and `default`.
+
+        Returns:
+            One expression per parameter; each default is a fresh copy.
+
+        Raises:
+            ZyloError: On too many arguments, an unknown or repeated name, or a missing required argument.
+        """
+        if len(args) > len(specs):
+            raise err(f"{name} takes {len(specs)} argument(s), got {len(args)}", e)
+        slots: list[ast.Expr | None] = [*args, *([None] * (len(specs) - len(args)))]
+        index = {p.name: i for i, p in enumerate(specs)}
+        for n in named:
+            i = index.get(n.name)
+            if i is None:
+                what = "field" if isinstance(specs[0], ast.Field) else "parameter"
+                raise err(f"{name} has no {what} {n.name!r} (has: {', '.join(index)})", n)
+            if slots[i] is not None:
+                raise err(f"argument {n.name!r} of {name} is given more than once", n)
+            slots[i] = n.value
+        missing = [p.name for p, v in zip(specs, slots) if v is None and p.default is None]
+        if missing:
+            raise err(f"{name} is missing {'argument' if len(missing) == 1 else 'arguments'} "
+                      f"{', '.join(repr(m) for m in missing)}", e)
+        for i, p in enumerate(specs):
+            if slots[i] is None:
+                slots[i] = copy.deepcopy(p.default)
+        e.named = []
+        return slots  # type: ignore[return-value]
+
     def call(self, e: ast.Call, expected: Type | None = None) -> Type:
         """Type a call: a struct constructor, a built-in, or a user function."""
         if e.func in self.structs:
             return self.ctor(e)
         if e.func in BUILTINS and not (e.func in SHADOWABLE and e.func in self.fns):
+            if e.named:
+                raise err(f"{e.func} takes positional arguments only", e.named[0])
             return self.builtin(e, expected)
         sig = self.fns.get(e.func)
         if sig is None:
             raise err(f"undefined function {e.func!r}", e)
-        self.check_args(e, e.func, e.args, sig)
+        self.check_args(e, e.func, e.args, sig, self.specs.get(e.func))
         return sig.ret
 
     def builtin(self, e: ast.Call, expected: Type | None = None) -> Type:

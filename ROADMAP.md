@@ -16,9 +16,10 @@ and is built vertically (lexer → parser → checker → codegen → tests).
 | **v0.7 Rust interop** | `extern fn` with Rust paths and templates, crates from `[rust-dependencies]` built with Cargo, and a trust rule for community packages | done |
 | **v0.8 Tooling** | `zylo fmt`, every error in one run, a language server (`zylo lsp`) and a VS Code extension with a generated grammar | done |
 | **v0.9 Enums** | `enum` with data per variant, exhaustive `match`, enums across modules and in editor symbols | done |
+| **v0.10 Language polish** | Methods on enums, `match` on `int` / `str` / `bool` / `Option` / `Result`, default values for parameters and struct fields, named arguments in calls and constructors | done |
 | **Community** | Documentation translations (the docs are English-only for now) and localized diagnostics | |
 
-Later: generics, closures, methods on enums, matching on values and `Option`/`Result`, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
+Later: generics, closures, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
 
 ## Open questions
 
@@ -26,7 +27,7 @@ Later: generics, closures, methods on enums, matching on values and `Option`/`Re
 - Formatter: wrapping of very long lines.
 
 - Narrowing beyond plain variables: `and` chains and struct fields (`self.age is some`).
-- Default values for struct fields and constructors with named arguments (`Point(x=1.0, y=2.0)`).
+- `match` guards, or-patterns (`1 | 2`) and nested patterns; non-constant default values.
 - Long-term memory model: implicit clones plus inferred borrows, or simplified ownership.
 - Custom error types and conversions for `?` between different error types.
 - Package trust: signing or an allow-list on top of the lock file checksums.
