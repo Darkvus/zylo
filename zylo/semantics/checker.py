@@ -38,6 +38,7 @@ from zylo.domain.types import (
     VarInfo,
     is_copy_type,
 )
+from zylo.semantics.derive import JSON_T, Deriver
 
 ARITH = {"+", "-", "*", "/", "%"}
 EQ = {"==", "!="}
@@ -183,6 +184,8 @@ class Checker:
         self.poisoned: set[str] = set()  # names whose declaration failed: later uses are not reported again
         # parameters (or struct fields) with their defaults, for calls: by function name, `Type.method` or struct name
         self.specs: dict[str, list] = {}
+        self.deriver = Deriver(self.structs, self.enums, lambda name: name in self.fns)  # typed JSON helpers
+        self.program: ast.Program | None = None  # the program being checked: generated functions are added to it
 
     # ---- entry point ---------------------------------------------------------------------
 
@@ -195,6 +198,7 @@ class Checker:
         Raises:
             ZyloError: Never: mistakes are collected in `errors` (see `check_all`).
         """
+        self.program = prog
         try:
             defs = [s for s in prog.body if isinstance(s, ast.StructDef)]
             enums = [s for s in prog.body if isinstance(s, ast.EnumDef)]
@@ -1701,6 +1705,43 @@ class Checker:
         self.check_args(e, e.func, e.args, sig, self.specs.get(e.func))
         return sig.ret
 
+    def typed_json(self, e: ast.Call) -> Type:
+        """Type `to_json`, `from_json`, `json_schema` or `json_schema_defs` by rewriting the call into a call of a generated function.
+
+        The functions are written for the type involved (see `semantics/derive.py`), declared, and added to the program, where
+        they are checked like any other function. The call is left as an ordinary call of one of them.
+        """
+        name, args = e.func, e.args
+        if not self.deriver.available:
+            raise err(f"{name} needs the module std.json; compile a file instead of a string", e)
+        if name == "to_json":
+            if len(args) != 1:
+                raise err(f"to_json takes 1 argument, got {len(args)}", e)
+            helper = self.deriver.to_json(self.expr(args[0]), e)
+        else:
+            want = 2 if name == "from_json" else 1
+            if len(args) != want:
+                raise err(f"{name} takes {want} argument(s): {'a type and a Json value' if want == 2 else 'a type'}", e)
+            if not isinstance(args[0], ast.TypeRef):
+                raise err(f"the first argument of {name} must be a type", args[0])
+            ty = self.resolve(args[0])
+            if name == "from_json":
+                t = self.expr(args[1], JSON_T)
+                if t != JSON_T:
+                    raise err(f"from_json expects a Json value, not {t}", args[1])
+                helper = self.deriver.from_json(ty, e)
+                root = ast.Str("$", line=e.line, col=e.col, file=e.file)
+                root.ty = STR
+                e.args = [args[1], root]
+            else:
+                helper = getattr(self.deriver, name)(ty, e)
+                e.args = []
+        for f in self.deriver.take():
+            self.declare_fn(f)
+            self.program.body.append(f)
+        e.func = helper
+        return self.fns[helper].ret
+
     def builtin(self, e: ast.Call, expected: Type | None = None) -> Type:
         """Type a call of a built-in function such as `print`, `len`, `sum` or `read_file`."""
         name, args = e.func, e.args
@@ -1710,6 +1751,8 @@ class Checker:
                 raise err(f"{name} takes {n} argument(s), got {len(args)}", e)
 
         match name:
+            case "to_json" | "from_json" | "json_schema" | "json_schema_defs":
+                return self.typed_json(e)
             case "print":  # any number of values, separated by spaces
                 for a in args:
                     self.printable(a)

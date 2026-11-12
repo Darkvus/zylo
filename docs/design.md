@@ -158,6 +158,32 @@ methods, typed variables, fields). Multi-statement bodies are a local `fn name(.
 a variable assigned a block-bodied lambda, so there is a single closure mechanism. A call whose callee is not a plain name is
 a `CallValue`; `obj.field(x)` is a method call node that the checker marks as a field call when the field has a function type.
 
+**Typed JSON is expanded by the checker into ordinary Zylo.** With no generics, `to_json(x)`, `from_json(T, j)`,
+`json_schema(T)` and `json_schema_defs(T)` are built-ins that the checker resolves per type (the parser reads the first
+argument of the last three as a type, so `list[int]`, `T?` and `mod.Struct` work and the linker mangles it like any type
+name). For each type it needs, the checker generates the source of a helper function (`_zj_to_*`, `_zj_from_*`,
+`_zj_def_*`), parses it, appends it to the program and rewrites the call into a plain call of that helper; the helper
+is then type-checked and compiled like user code. This reuses the type system, borrow inference and code generator, works
+across modules (the generator sees mangled names), terminates on recursive types (a helper's name is registered before
+its body is generated), and costs compile time only for the types actually converted. The runtime part (reading
+numbers with range checks, error paths, schema pieces) lives in `std.json` as private functions, so the generated code stays
+small. The rewrite is idempotent: the checker runs several times over the same tree, and after the first run the call
+is an ordinary call of an existing function.
+
+**Encodings chosen for OpenAPI.** Structs are objects by field name. Enums whose variants carry no data are strings;
+the others are objects tagged with `type` (`{"type": "Circle", "value": 2.0}`), because that is a discriminated union
+in JSON Schema (`oneOf` with a `const` per variant) and needs no knowledge of Zylo to read. `Result` is rejected: it is
+control flow, not data, and no encoding would be a natural wire format. Unknown fields are ignored when reading (the
+robustness principle; the schema leaves `additionalProperties` open to match); missing fields use the default or
+`none`, otherwise they are errors. `int` travels as a JSON number (a float), which is the only number `std.json` has.
+Named types become `$ref`s into `#/components/schemas`, because a recursive type cannot be inlined; the nested
+definitions are collected at compile time by `json_schema_defs`, so no runtime graph walk is needed.
+
+**Doc strings.** A string literal as the first line of a struct or enum body, or right after a field or variant,
+is its description. It is a plain expression statement position that was otherwise a syntax error, so no existing
+program changes meaning, the lexer needs no new token (comments stay invisible), and the formatter, which prints the
+tree, keeps them for free.
+
 ## Known limitations
 
 - Values are still cloned when stored (assigned to another variable, put in a struct or a list) or returned.

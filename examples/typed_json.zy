@@ -1,0 +1,48 @@
+# Typed JSON: write an order as JSON, read a request back with precise errors, and describe the types with JSON Schema
+import std.json as json
+
+enum Status:
+    "Where an order is in its life."
+    Open
+    Shipped(str)
+    Cancelled(str, int)
+
+struct Item:
+    sku: str
+    price: float
+    qty: int = 1
+
+struct Order:
+    "A customer order."
+    id: int
+    "Unique number."
+    status: Status = Status.Open
+    items: list[Item] = []
+    note: str? = none
+
+order = Order(7, Status.Shipped("DHL"), [Item("a-1", 9.5, 2), Item("b-2", 3.25, 1)], none)
+doc = to_json(order)
+print(json.stringify(doc))
+print(from_json(Order, doc) == ok(order))
+
+requests: list[str] = []
+requests.append("{\"id\": 1, \"items\": [{\"sku\": \"x\", \"price\": 2}]}")
+requests.append("{\"id\": 2, \"status\": {\"type\": \"Cancelled\", \"values\": [\"late\", 3]}, \"note\": \"hi\"}")
+requests.append("{\"id\": 3, \"items\": [{\"sku\": \"x\", \"price\": 1}, {\"sku\": \"y\", \"price\": \"free\"}]}")
+requests.append("{\"id\": 4.5}")
+requests.append("{\"status\": \"Open\"}")
+requests.append("{\"id\": 5, \"status\": {\"type\": \"Lost\"}}")
+for text in requests:
+    parsed = json.parse(text)
+    if parsed is err:
+        print("not JSON:", parsed)
+        continue
+    r = from_json(Order, parsed)
+    if r is ok:
+        print("ok", json.stringify(to_json(r)))
+    else:
+        print("error", r)
+
+print(json.stringify(json_schema(list[Item])))
+schemas = json_schema_defs(Order)
+print(json.stringify(schemas))

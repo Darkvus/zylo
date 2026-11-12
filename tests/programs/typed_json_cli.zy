@@ -1,0 +1,108 @@
+import std.json as json
+
+enum Role:
+    "What a user may do."
+    Admin
+    "Full access."
+    Guest
+
+enum Shape:
+    Circle(float)
+    Rect(float, float)
+    Label(str?)
+    Empty
+
+struct Address:
+    street: str
+    zip: int?
+
+struct User:
+    "A registered user."
+    name: str
+    "Display name."
+    age: int
+    email: str?
+    role: Role = Role.Guest
+    tags: list[str] = []
+    address: Address? = none
+    scores: dict[str, float] = {}
+    ids: dict[int, bool] = {}
+    pair: tuple[int, str] = (0, "none")
+    shapes: list[Shape] = []
+    seen: set[int] = {}
+    extra: json.Json = json.Json.Null
+
+struct Tree:
+    value: int
+    children: list[Tree] = []
+
+fn run(kind: str, doc: str) -> str:
+    parsed = json.parse(doc)
+    if parsed is err:
+        return "ERR bad document: " + parsed
+    j = parsed
+    if kind == "User":
+        r = from_json(User, j)
+        if r is err:
+            return "ERR " + r
+        return "OK " + json.stringify(to_json(r))
+    if kind == "Tree":
+        r = from_json(Tree, j)
+        if r is err:
+            return "ERR " + r
+        return "OK " + json.stringify(to_json(r))
+    if kind == "Shape":
+        r = from_json(Shape, j)
+        if r is err:
+            return "ERR " + r
+        return "OK " + json.stringify(to_json(r))
+    if kind == "list[int]":
+        r = from_json(list[int], j)
+        if r is err:
+            return "ERR " + r
+        return "OK " + json.stringify(to_json(r))
+    if kind == "dict[str, list[float]]":
+        r = from_json(dict[str, list[float]], j)
+        if r is err:
+            return "ERR " + r
+        return "OK " + json.stringify(to_json(r))
+    if kind == "tuple[int, bool?]":
+        r = from_json(tuple[int, bool?], j)
+        if r is err:
+            return "ERR " + r
+        return "OK " + json.stringify(to_json(r))
+    return "ERR unknown type " + kind
+
+fn schema(kind: str) -> str:
+    if kind == "User":
+        return json.stringify(json_schema(User))
+    if kind == "Tree":
+        return json.stringify(json_schema(Tree))
+    if kind == "Shape":
+        return json.stringify(json_schema(Shape))
+    if kind == "list[int]":
+        return json.stringify(json_schema(list[int]))
+    if kind == "dict[str, list[float]]":
+        return json.stringify(json_schema(dict[str, list[float]]))
+    if kind == "tuple[int, bool?]":
+        return json.stringify(json_schema(tuple[int, bool?]))
+    return "unknown"
+
+fn defs(kind: str) -> str:
+    if kind == "User":
+        return json.stringify(json_schema_defs(User))
+    if kind == "Tree":
+        return json.stringify(json_schema_defs(Tree))
+    return json.stringify(json_schema_defs(list[Shape]))
+
+# stdin: documents separated by a line holding `@@@@`; each is a type name, a line break and a JSON text.
+# `schema NAME` and `defs NAME` as the first argument print schemas instead.
+args = argv()
+if len(args) >= 2 and args[0] == "schema":
+    print(schema(args[1]))
+elif len(args) >= 2 and args[0] == "defs":
+    print(defs(args[1]))
+else:
+    for item in read_stdin().split("\n@@@@\n"):
+        parts = item.split("\n")
+        print(run(parts[0], parts[1]))

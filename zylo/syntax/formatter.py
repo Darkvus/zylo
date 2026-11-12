@@ -106,6 +106,8 @@ def _expr(e: ast.Expr, q: str) -> tuple[str, int]:
             return "none", ATOM
         case ast.Name(i):
             return i, ATOM
+        case ast.TypeRef():  # the type argument of `from_json(list[int], j)`
+            return type_text(e), ATOM
         case ast.BinOp(op, left, right):
             p = PREC[op]
             if op in ("and", "or") and isinstance(right, ast.UnaryOp) and right.op == "not":
@@ -308,9 +310,13 @@ class _Formatter:
                 self.struct(s, indent, first_in_block)
             case ast.EnumDef():
                 self.header(s, indent, f"enum {s.name}", first_in_block)
+                if s.doc is not None:
+                    self.line(s.doc_line, indent + 1, quote(s.doc), first_in_block=True)
                 for n, v in enumerate(s.variants):
                     shown = f"({', '.join(type_text(t) for t in v.fields)})" if v.fields else ""
-                    self.line(v.line, indent + 1, v.name + shown, first_in_block=n == 0)
+                    self.line(v.line, indent + 1, v.name + shown, first_in_block=n == 0 and s.doc is None)
+                    if v.doc is not None:
+                        self.line(v.doc_line, indent + 1, quote(v.doc))
                 for m in s.methods:
                     self.blank()
                     self.stmt(m, indent + 1, first_in_block=True)
@@ -369,9 +375,13 @@ class _Formatter:
     def struct(self, s: ast.StructDef, indent: int, first_in_block: bool) -> None:
         """Write a struct: its fields, then its methods separated by blank lines."""
         self.header(s, indent, f"struct {s.name}", first_in_block)
+        if s.doc is not None:
+            self.line(s.doc_line, indent + 1, quote(s.doc), first_in_block=True)
         for n, f in enumerate(s.fields):
             default = f" = {expr_text(f.default)}" if f.default is not None else ""
-            self.line(f.line, indent + 1, f"{f.name}: {type_text(f.type)}{default}", first_in_block=n == 0)
+            self.line(f.line, indent + 1, f"{f.name}: {type_text(f.type)}{default}", first_in_block=n == 0 and s.doc is None)
+            if f.doc is not None:
+                self.line(f.doc_line, indent + 1, quote(f.doc))
         for m in s.methods:
             self.blank()
             self.stmt(m, indent + 1, first_in_block=True)

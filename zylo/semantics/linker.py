@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from zylo.domain import ast
-from zylo.domain.builtins import BUILTINS, SHADOWABLE
+from zylo.domain.builtins import BUILTINS, SHADOWABLE, TYPE_ARG_BUILTINS
 from zylo.domain.errors import ZyloError
 from zylo.domain.types import PRIMS
 from zylo.packaging.manifest import package_layout
@@ -140,12 +140,23 @@ class Linker:
         """
         self.entry_dir = entry.resolve().parent
         main = self.load(entry, is_entry=True, stack=[])
+        self.load_json_if_used()
         body: list[ast.Stmt] = []
         for m in self.order:
             if m is not main:
                 body += [s for s in m.program.body if isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef))]
         body += [s for s in main.program.body if not isinstance(s, (ast.Import, ast.FromImport))]
         return ast.Program(body, line=1, col=1, file=str(entry))
+
+    def load_json_if_used(self) -> None:
+        """Load `std.json` when a program uses the typed JSON built-ins: the code generated for them needs its `Json`."""
+        if any(m.id == f"{STD}.json" for m in self.order):
+            return
+        names = TYPE_ARG_BUILTINS | {"to_json"}
+        if any(isinstance(n, ast.Call) and n.func in names for m in self.order for n in ast.walk(m.program)):
+            found = stdlib_module([STD, "json"])
+            if found is not None:
+                self.load(found, False, [])
 
     # ---- loading --------------------------------------------------------------------------------
 

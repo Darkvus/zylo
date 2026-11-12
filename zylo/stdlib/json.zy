@@ -396,3 +396,206 @@ fn as_dict(j: Json) -> dict[str, Json]?:
 
 fn is_null(j: Json) -> bool:
     return j == Json.Null
+
+# ---- Support for `to_json`, `from_json` and `json_schema` ----
+# The compiler writes the conversion functions for your own types (see docs/guide.md, "Typed JSON"); the parts that do
+# not depend on the type live here. They are private: only generated code calls them.
+
+# The JSON type name used in messages.
+fn _kind(j: Json) -> str:
+    match j:
+        Json.Null:
+            return "null"
+        Json.Bool(_):
+            return "boolean"
+        Json.Num(_):
+            return "number"
+        Json.Str(_):
+            return "string"
+        Json.Arr(_):
+            return "array"
+        Json.Obj(_):
+            return "object"
+
+fn _at(path: str, i: int) -> str:
+    return f"{path}[{i}]"
+
+fn _field(path: str, name: str) -> str:
+    return f"{path}.{name}"
+
+fn _key(path: str, k: str) -> str:
+    return path + "[" + _quote(k) + "]"
+
+fn _mismatch(path: str, want: str, j: Json) -> str:
+    return f"{path}: expected {want}, got {_kind(j)}"
+
+fn _read_int(j: Json, path: str) -> Result[int, str]:
+    match j:
+        Json.Num(x):
+            if x < -9223372036854776000.0 or x >= 9223372036854776000.0:
+                return err(f"{path}: expected int, got {_num(x)} (out of range)")
+            if float(floor(x)) != x:
+                return err(f"{path}: expected int, got {_num(x)} (not a whole number)")
+            return ok(floor(x))
+        _:
+            return err(_mismatch(path, "int", j))
+
+fn _read_float(j: Json, path: str) -> Result[float, str]:
+    match j:
+        Json.Num(x):
+            return ok(x)
+        _:
+            return err(_mismatch(path, "float", j))
+
+fn _read_bool(j: Json, path: str) -> Result[bool, str]:
+    match j:
+        Json.Bool(b):
+            return ok(b)
+        _:
+            return err(_mismatch(path, "bool", j))
+
+fn _read_str(j: Json, path: str) -> Result[str, str]:
+    match j:
+        Json.Str(s):
+            return ok(s)
+        _:
+            return err(_mismatch(path, "str", j))
+
+fn _read_arr(j: Json, path: str) -> Result[list[Json], str]:
+    match j:
+        Json.Arr(items):
+            return ok(items)
+        _:
+            return err(_mismatch(path, "array", j))
+
+fn _read_obj(j: Json, path: str) -> Result[dict[str, Json], str]:
+    match j:
+        Json.Obj(members):
+            return ok(members)
+        _:
+            return err(_mismatch(path, "object", j))
+
+# A member that must be there.
+fn _member(o: dict[str, Json], name: str, path: str) -> Result[Json, str]:
+    found = o.get(name)
+    if found is none:
+        return err(f"{_field(path, name)}: missing required field")
+    return ok(found)
+
+fn _read_len(items: list[Json], n: int, path: str) -> Result[bool, str]:
+    if len(items) != n:
+        return err(f"{path}: expected an array of {n} items, got {len(items)}")
+    return ok(true)
+
+fn _read_int_key(k: str, path: str) -> Result[int, str]:
+    n = parse_int(k)
+    if n is none:
+        return err(f"{_key(path, k)}: expected an integer key")
+    return ok(n)
+
+fn _bad_variant(path: str, got: str, names: str) -> str:
+    return f"{path}: unknown variant {_quote(got)}, expected one of {names}"
+
+fn _int_num(n: int) -> Json:
+    return Json.Num(float(n))
+
+# Schema pieces, in JSON Schema draft 2020-12 as OpenAPI 3.1 uses it.
+fn _schema_type(t: str) -> Json:
+    m: dict[str, Json] = {}
+    m["type"] = Json.Str(t)
+    return Json.Obj(m)
+
+fn _schema_any() -> Json:
+    m: dict[str, Json] = {}
+    return Json.Obj(m)
+
+fn _schema_nullable(t: str) -> Json:
+    m: dict[str, Json] = {}
+    m["type"] = Json.Arr([Json.Str(t), Json.Str("null")])
+    return Json.Obj(m)
+
+fn _schema_any_null(s: Json) -> Json:
+    m: dict[str, Json] = {}
+    m["anyOf"] = Json.Arr([s, _schema_type("null")])
+    return Json.Obj(m)
+
+fn _schema_ref(name: str) -> Json:
+    m: dict[str, Json] = {}
+    m["$ref"] = Json.Str("#/components/schemas/" + name)
+    return Json.Obj(m)
+
+fn _schema_with(s: Json, key: str, v: Json) -> Json:
+    match s:
+        Json.Obj(m):
+            m[key] = v
+            return Json.Obj(m)
+        _:
+            return s
+
+fn _schema_doc(s: Json, doc: str) -> Json:
+    if doc == "":
+        return s
+    return _schema_with(s, "description", Json.Str(doc))
+
+fn _schema_array(items: Json, unique: bool) -> Json:
+    m: dict[str, Json] = {}
+    m["type"] = Json.Str("array")
+    m["items"] = items
+    if unique:
+        m["uniqueItems"] = Json.Bool(true)
+    return Json.Obj(m)
+
+fn _schema_tuple(items: list[Json]) -> Json:
+    m: dict[str, Json] = {}
+    m["type"] = Json.Str("array")
+    m["prefixItems"] = Json.Arr(items)
+    m["minItems"] = _int_num(len(items))
+    m["maxItems"] = _int_num(len(items))
+    return Json.Obj(m)
+
+fn _schema_map(values: Json, int_keys: bool) -> Json:
+    m: dict[str, Json] = {}
+    m["type"] = Json.Str("object")
+    m["additionalProperties"] = values
+    if int_keys:
+        names: dict[str, Json] = {}
+        names["pattern"] = Json.Str("^-?[0-9]+$")
+        m["propertyNames"] = Json.Obj(names)
+    return Json.Obj(m)
+
+fn _schema_object(props: dict[str, Json], required: list[str]) -> Json:
+    m: dict[str, Json] = {}
+    m["type"] = Json.Str("object")
+    m["properties"] = Json.Obj(props)
+    if len(required) > 0:
+        names: list[Json] = []
+        for r in required:
+            names.append(Json.Str(r))
+        m["required"] = Json.Arr(names)
+    return Json.Obj(m)
+
+fn _schema_strings(names: list[str]) -> Json:
+    items: list[Json] = []
+    for n in names:
+        items.append(Json.Str(n))
+    m: dict[str, Json] = {}
+    m["type"] = Json.Str("string")
+    m["enum"] = Json.Arr(items)
+    return Json.Obj(m)
+
+# One variant of an enum that carries data: `{"type": tag, key: payload}` (`key` is empty for a variant without data).
+fn _schema_variant(tag: str, key: str, payload: Json, doc: str) -> Json:
+    props: dict[str, Json] = {}
+    tag_schema: dict[str, Json] = {}
+    tag_schema["const"] = Json.Str(tag)
+    props["type"] = Json.Obj(tag_schema)
+    required = ["type"]
+    if key != "":
+        props[key] = payload
+        required.append(key)
+    return _schema_doc(_schema_object(props, required), doc)
+
+fn _schema_one_of(variants: list[Json]) -> Json:
+    m: dict[str, Json] = {}
+    m["oneOf"] = Json.Arr(variants)
+    return Json.Obj(m)

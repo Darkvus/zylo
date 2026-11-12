@@ -431,6 +431,8 @@ class Field(Node):
     name: str
     type: TypeRef
     default: "Expr | None" = None
+    doc: str | None = None  # the string literal written right after the field
+    doc_line: int = 0
 
 
 @dataclass
@@ -442,11 +444,15 @@ class StructDef(Node):
         fields: Declared fields, in order.
         methods: Methods defined inside the struct.
         display: Original name to show to users when `name` was mangled.
+        doc: The description written as the first line of the body (a string literal), or None.
+        doc_line: Source line of that description.
     """
     name: str
     fields: list[Field]
     methods: list[FnDef]
     display: str | None = None  # original name when the linker has mangled `name`
+    doc: str | None = None
+    doc_line: int = 0
 
 
 @dataclass
@@ -455,6 +461,8 @@ class Variant(Node):
     name: str
     fields: list[TypeRef]
     tys: list = field(default_factory=list)  # resolved types, filled in by the checker
+    doc: str | None = None  # the string literal written right after the variant
+    doc_line: int = 0
 
 
 @dataclass
@@ -466,11 +474,15 @@ class EnumDef(Node):
         variants: The variants, in order.
         display: Original name to show to users when `name` was mangled.
         methods: Methods defined inside the enum; `self` is the enum value.
+        doc: The description written as the first line of the body (a string literal), or None.
+        doc_line: Source line of that description.
     """
     name: str
     variants: list[Variant]
     display: str | None = None
     methods: list[FnDef] = field(default_factory=list)
+    doc: str | None = None
+    doc_line: int = 0
 
 
 @dataclass
