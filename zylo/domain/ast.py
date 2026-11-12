@@ -525,9 +525,10 @@ class Import(Node):
 
 @dataclass
 class FromImport(Node):
-    """`from a.b import x, y as z`; names are (name, alias) pairs."""
+    """`from a.b import x, y as z`; names are (name, alias) pairs. `pub from ...` also re-exports the names."""
     module: str
     names: list[tuple[str, str | None]]
+    pub: bool = False
 
 
 Stmt = (ExprStmt | Assign | Unpack | If | While | For | Return | Break | Continue | FnDef | StructDef

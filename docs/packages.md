@@ -22,8 +22,34 @@ from geometry import area as get_area
   struct and `geometry.Point` is usable as a type (`p: geometry.Point`), but `geometry` alone or
   `geometry.x` is an error.
 - **Privacy:** names starting with an underscore (`_helper`) are private to their module.
+- **Re-exports:** `pub from a import x, y as z` imports names and also makes them part of the importing module's
+  public surface, so a package entry file can offer one import point (see below).
 - **Cycles** between modules are an error. Names defined in two places clash with an error.
 - A variable or parameter cannot reuse the name of an imported module.
+
+### Re-exports
+
+A package usually has several modules but wants callers to write one import. In the package entry file (`lib.zy`),
+`pub from` re-exports names:
+
+```
+# lib.zy of package `shop`
+pub from model import Item, Kind
+pub from pricing import total, discount as apply_discount
+```
+
+```
+from shop import Item, Kind, total, apply_discount     # instead of shop.model / shop.pricing
+```
+
+- It works for functions, structs and enums, and chains: `pub from` of a name that is itself re-exported is fine.
+- A re-exported type is the same type as the original: the linker names it after the module that defines it, so it
+  appears once in the generated Rust and values flow between `shop.model.Item` and `shop.Item` unchanged.
+- The name must exist and be public (`_private` names cannot be re-exported, nor re-exported under a `_` alias).
+- It clashes like any other name: a re-export that shares its name with a function, struct, enum or import of the
+  same module is an error. A plain `from a import x` (without `pub`) stays private to the file.
+- Re-export cycles are import cycles, so they are reported as `import cycle: a -> b -> a`.
+- `pub` only applies to `from ... import` and only in library modules, not in the entry file of a program.
 
 ### Resolution order
 
@@ -144,5 +170,5 @@ error and the second is ignored. See [rust-interop.md](rust-interop.md).
 ## 8. Out of scope (for now)
 
 A central registry and `zylo publish`, semantic-version ranges and a resolver, module-level
-constants, re-exports, wrapping Rust crates (see the Rust interop milestone), and per-package feature
+constants, wrapping Rust crates (see the Rust interop milestone), and per-package feature
 flags.

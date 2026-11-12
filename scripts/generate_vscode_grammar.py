@@ -16,7 +16,7 @@ OUTPUT = Path(__file__).parent.parent / "editors" / "vscode" / "syntaxes" / "zyl
 
 CONTROL = {"if", "elif", "else", "while", "for", "in", "return", "break", "continue", "import", "from", "as", "match"}
 WORD_OPERATORS = {"and", "or", "not", "is"}
-STORAGE = {"fn", "struct", "enum", "extern"}
+STORAGE = {"fn", "struct", "enum", "extern", "pub"}
 CONSTANTS = {"true", "false", "none"}
 TYPES = ["int", "float", "bool", "str", "list", "dict", "set", "tuple", "Result", "Cell"]
 ESCAPE = r"\\[nrt0\\\"']"

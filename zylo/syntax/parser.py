@@ -244,6 +244,8 @@ class Parser:
                     return self.parse_import()
                 case "from":
                     return self.parse_from_import()
+                case "pub":
+                    return self.parse_pub()
                 case "if":
                     return self.parse_if()
                 case "while":
@@ -447,6 +449,17 @@ class Parser:
         alias = self.expect("IDENT").value if self.match("KW", "as") else None
         self.expect("NEWLINE")
         return ast.Import(module, alias, line=kw.line, col=kw.col)
+
+    def parse_pub(self) -> ast.FromImport:
+        """Parse `pub from a.b import x [as y], ...`: an import that is also part of this module's public surface."""
+        kw = self.advance()
+        if not self.check("KW", "from"):
+            raise ZyloError("expected 'from' after 'pub' (only imports can be re-exported: `pub from a import x`)",
+                            self.cur.line, self.cur.col)
+        node = self.parse_from_import()
+        node.pub = True
+        node.line, node.col = kw.line, kw.col
+        return node
 
     def parse_from_import(self) -> ast.FromImport:
         """Parse `from a.b import x [as y], ...`."""

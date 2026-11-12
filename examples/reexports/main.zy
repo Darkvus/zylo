@@ -1,0 +1,7 @@
+# Re-exports: `shop/lib.zy` uses `pub from` so one line imports the whole surface.
+# Run it with `zylo run examples/reexports/main.zy`.
+from shop.lib import Item, Kind, total, apply_discount
+
+items = [Item("novel", 20, Kind.Book), Item("bread", 3, Kind.Food)]
+print(total(items))
+print(apply_discount(20, Kind.Book))

@@ -1,0 +1,8 @@
+enum Kind:
+    Book
+    Food
+
+struct Item:
+    name: str
+    price: int
+    kind: Kind

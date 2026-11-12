@@ -1,0 +1,3 @@
+# The package's single import point: everything callers need, re-exported from its modules.
+pub from model import Item, Kind
+pub from pricing import total, discount as apply_discount
