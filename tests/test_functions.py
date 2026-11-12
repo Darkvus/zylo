@@ -78,6 +78,12 @@ def test_local_fn_becomes_a_named_lambda():
     assert isinstance(assign, ast.Assign) and isinstance(assign.value, ast.Lambda) and assign.value.name == "g"
 
 
+def test_local_fn_rejects_default_values_and_function_values_reject_named_arguments():
+    with pytest.raises(ZyloError, match="local function cannot have default values"):
+        parse("fn f():\n    fn g(x: int = 1) -> int:\n        return x\n")
+    fails("fn f(g: fn(int) -> int) -> int:\n    return g(x=1)\n", "positional arguments only")
+
+
 def test_call_of_any_expression_parses():
     e = parse("hs[0](1)(2)\n").body[0].expr
     assert isinstance(e, ast.CallValue) and isinstance(e.callee, ast.CallValue)
@@ -376,3 +382,28 @@ def test_function_values_are_lent_like_other_read_only_parameters():
     p = checked("fn f(g: fn(int) -> int, h: fn(int) -> int) -> int:\n    h = g\n    return g(1) + h(2)\n")
     by_ref = {q.name: q.info.by_ref for q in p.body[0].params}
     assert by_ref == {"g": True, "h": False}
+
+
+def test_calling_an_expression_takes_positional_arguments_only():
+    with pytest.raises(ZyloError, match="positional arguments only"):
+        parse("hs[0](x=1)\n")
+
+
+@needs_rustc
+def test_enums_holding_functions_work_with_methods_and_match(tmp_path: Path):
+    src = '''\
+enum Action:
+    Run(fn(int) -> int)
+    Stop
+
+    fn apply(self, x: int) -> int:
+        match self:
+            Action.Run(f):
+                return f(x)
+            Action.Stop:
+                return x
+
+acts = [Action.Run(fn(x: int) => x + 1), Action.Stop]
+print(acts[0].apply(1), acts[1].apply(1))
+'''
+    assert run(src, tmp_path) == "2 1\n"

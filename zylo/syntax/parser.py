@@ -389,6 +389,10 @@ class Parser:
             An assignment of a block-bodied `Lambda` to `name`.
         """
         f = self.parse_fn()
+        for p in f.params:
+            if p.default is not None:
+                raise ZyloError(f"a local function cannot have default values ({p.name!r}); write them on a top-level `fn`",
+                                p.line, p.col)
         lam = ast.Lambda(f.params, f.ret, None, f.body, f.name, line=f.line, col=f.col)
         return ast.Assign(ast.Name(f.name, line=f.line, col=f.col), None, lam, line=f.line, col=f.col)
 
@@ -759,7 +763,10 @@ class Parser:
                 expr = ast.Try(expr, line=q.line, col=q.col)
             elif self.check("OP", "("):  # calling the value of an expression: `table[k](x)`, `make()(x)`
                 lp = self.cur
-                expr = ast.CallValue(expr, self.parse_args(), line=lp.line, col=lp.col)
+                args, named = self.parse_args()
+                if named:
+                    raise ZyloError("function values take positional arguments only", named[0].line, named[0].col)
+                expr = ast.CallValue(expr, args, line=lp.line, col=lp.col)
             elif self.check("OP", "."):
                 self.advance()
                 name = self.expect("IDENT")
