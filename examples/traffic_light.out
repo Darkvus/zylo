@@ -1,0 +1,6 @@
+Tick -> Green
+Tick -> Yellow
+Tick -> Red
+Emergency -> Red
+Repair(45) -> Green
+Repair(5) -> Yellow

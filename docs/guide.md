@@ -265,6 +265,40 @@ print(p)            # Point(x=4.0, y=5.0)
   itself directly; use a `list` of it.
 - Structs and methods are defined at the top level.
 
+## Enums and `match`
+
+An enum is a value that is exactly one of several **variants**, and each variant can carry its own data.
+
+```zylo
+enum Shape:
+    Circle(float)
+    Rect(float, float)
+    Empty
+
+fn area(s: Shape) -> float:
+    match s:
+        Shape.Circle(r):
+            return 3.0 * r * r
+        Shape.Rect(w, h):
+            return w * h
+        Shape.Empty:
+            return 0.0
+
+print(area(Shape.Rect(2.0, 3.5)))    # 7.0
+print(Shape.Circle(1.0))             # Circle(1.0)
+```
+
+- Build a variant with the enum's name: `Shape.Circle(2.0)`, or `Shape.Empty` when it carries nothing.
+- `match` takes one arm per variant, written `Enum.Variant(a, b):`; the names bind the variant's data, in order, and
+  live only inside the arm. Use `_` as a name to ignore one value.
+- A `match` must cover **every** variant, or end with a `_:` arm for the rest. Forgetting a variant is a compile
+  error, so adding a variant to an enum shows you everything that has to change.
+- A `_` arm that could never run (everything is already matched) and a variant matched twice are errors too.
+- Enums are values, like structs: they are copied when assigned or passed, compare with `==`, and can be stored in
+  lists, dicts' values, structs, `Option` and `Result`. An enum cannot contain itself directly; use a `list`.
+- Enums, like structs, are defined at the top level and can be imported: `sh.Shape.Circle(1.0)`.
+- `match` is for enums. Use `is some` / `is ok` for `Option` and `Result`.
+
 ## Option and Result
 
 Zylo has no exceptions. A value that may be missing is `T?`; an operation that may fail is
@@ -440,4 +474,4 @@ These stop the program with exit code **101**: integer overflow (compile with
 
 ## Known limitations
 
-No closures or generics, no list comprehensions. See the [roadmap](../ROADMAP.md).
+No closures or generics, no list comprehensions, no methods on enums. See the [roadmap](../ROADMAP.md).

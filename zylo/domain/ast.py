@@ -8,7 +8,7 @@ also leave annotations on nodes (resolved variables, whether a name is declared 
 
 import dataclasses
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from zylo.domain.types import Type, VarInfo
 
@@ -186,17 +186,32 @@ class FString(Node):
 
 @dataclass
 class Attr(Node):
-    """Acceso a un campo: `p.x`."""
+    """Field access `p.x`, or a variant without data `Shape.Empty`.
+
+    Attributes:
+        value: The expression whose field is read.
+        name: The field or variant name.
+        variant: `(enum, variant)` when the checker found a variant without data, otherwise None.
+    """
     value: "Expr"
     name: str
+    variant: tuple[str, str] | None = None
 
 
 @dataclass
 class MethodCall(Node):
-    """Method call: `p.move(1.0)`."""
+    """Method call `p.move(1.0)`, or a variant with data `Shape.Circle(2.0)`.
+
+    Attributes:
+        value: The receiver.
+        name: The method or variant name.
+        args: Argument expressions.
+        variant: `(enum, variant)` when the checker found a variant constructor, otherwise None.
+    """
     value: "Expr"
     name: str
     args: list["Expr"]
+    variant: tuple[str, str] | None = None
 
 
 @dataclass
@@ -377,6 +392,54 @@ class StructDef(Node):
 
 
 @dataclass
+class Variant(Node):
+    """One variant of an enum: a name and the types of its data (none for a plain variant)."""
+    name: str
+    fields: list[TypeRef]
+    tys: list = field(default_factory=list)  # resolved types, filled in by the checker
+
+
+@dataclass
+class EnumDef(Node):
+    """An enum definition: a value that is exactly one of several variants, each with its own data.
+
+    Attributes:
+        name: Enum name (mangled after linking).
+        variants: The variants, in order.
+        display: Original name to show to users when `name` was mangled.
+    """
+    name: str
+    variants: list[Variant]
+    display: str | None = None
+
+
+@dataclass
+class MatchArm(Node):
+    """One arm of a `match`: `Enum.Variant(a, b):` followed by a block, or `_:` for every other variant.
+
+    Attributes:
+        type: The enum as written (`Shape` or `mod.Shape`), or None for the `_` arm.
+        variant: The variant name, or `_`.
+        binds: Names bound to the variant's data, in order.
+        body: Statements of the arm.
+        vars: The variables for `binds` (set by the checker).
+    """
+    type: TypeRef | None
+    variant: str
+    binds: list[str]
+    body: list["Stmt"]
+    vars: list = field(default_factory=list)
+
+
+@dataclass
+class Match(Node):
+    """`match value:` with one arm per variant; it must cover every variant or end with `_`."""
+    value: "Expr"
+    arms: list[MatchArm]
+    enum: str | None = None  # the enum matched on, set by the checker
+
+
+@dataclass
 class Import(Node):
     """`import a.b` / `import a.b as c`."""
     module: str
@@ -391,7 +454,7 @@ class FromImport(Node):
 
 
 Stmt = (ExprStmt | Assign | Unpack | If | While | For | Return | Break | Continue | FnDef | StructDef
-        | Import | FromImport)
+        | EnumDef | Match | Import | FromImport)
 
 
 @dataclass
@@ -402,7 +465,7 @@ class Program(Node):
 
 # ---- generic traversal -----------------------------------------------------------------------
 
-_ANNOTATIONS = {"ty", "var", "vars", "info", "infos", "then_bind", "else_bind", "after_bind"}
+_ANNOTATIONS = {"tys", "variant", "enum", "ty", "var", "vars", "info", "infos", "then_bind", "else_bind", "after_bind"}
 
 
 def children(node: Node) -> Iterator[Node]:

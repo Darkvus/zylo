@@ -1,0 +1,32 @@
+enum Light:
+    Red
+    Yellow
+    Green
+
+enum Event:
+    Tick
+    Emergency
+    Repair(int)
+
+fn next(light: Light, event: Event) -> Light:
+    match event:
+        Event.Emergency:
+            return Light.Red
+        Event.Repair(minutes):
+            if minutes > 30:
+                return Light.Green
+            return Light.Yellow
+        Event.Tick:
+            match light:
+                Light.Red:
+                    return Light.Green
+                Light.Green:
+                    return Light.Yellow
+                Light.Yellow:
+                    return Light.Red
+
+light = Light.Red
+events = [Event.Tick, Event.Tick, Event.Tick, Event.Emergency, Event.Repair(45), Event.Repair(5)]
+for event in events:
+    light = next(light, event)
+    print(f"{event} -> {light}")

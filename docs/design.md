@@ -71,7 +71,7 @@ with no hidden control flow and no runtime cost. Three features make them pleasa
   with the same error type.
 
 **Generated names never collide.** Zylo identifiers that are Rust keywords or would clash with the
-prelude (`type`, `match`, `String`, a method called `clone`...) get a trailing `_` in the output.
+prelude (`type`, `impl`, `String`, a method called `clone`...) get a trailing `_` in the output.
 
 **Diagnostics.** Errors are `file:line:col: error: message` with the source line and a caret.
 A `rustc` failure on generated code is reported as a Zylo bug (`BackendError`), never as a mistake

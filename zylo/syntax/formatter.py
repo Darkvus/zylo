@@ -248,7 +248,7 @@ class _Formatter:
         """Write a list of statements."""
         previous_def = False
         for n, s in enumerate(body):
-            is_def = isinstance(s, (ast.FnDef, ast.StructDef))
+            is_def = isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef))
             if top and n and (is_def or previous_def):
                 self.blank()
             self.stmt(s, indent, first_in_block=n == 0 and not top)
@@ -289,6 +289,20 @@ class _Formatter:
                 self.block(s.body, indent + 1)
             case ast.StructDef():
                 self.struct(s, indent, first_in_block)
+            case ast.EnumDef():
+                self.header(s, indent, f"enum {s.name}", first_in_block)
+                for n, v in enumerate(s.variants):
+                    shown = f"({', '.join(type_text(t) for t in v.fields)})" if v.fields else ""
+                    self.line(v.line, indent + 1, v.name + shown, first_in_block=n == 0)
+            case ast.Match():
+                self.header(s, indent, f"match {expr_text(s.value)}", first_in_block)
+                for n, arm in enumerate(s.arms):
+                    if arm.type is None:
+                        head = "_"
+                    else:
+                        head = f"{type_text(arm.type)}.{arm.variant}" + (f"({', '.join(arm.binds)})" if arm.binds else "")
+                    self.header(arm, indent + 1, head, first_in_block=n == 0)
+                    self.block(arm.body, indent + 2)
             case ast.Import():
                 self.line(s.line, indent, f"import {s.module}" + (f" as {s.alias}" if s.alias else ""), first_in_block)
             case ast.FromImport():
