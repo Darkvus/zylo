@@ -20,6 +20,7 @@ from zylo.domain.types import (
     INT,
     STR,
     UNIT,
+    CellT,
     DictT,
     EnumT,
     FnT,
@@ -35,6 +36,42 @@ from zylo.domain.types import (
 
 PRELUDE = """#![allow(unused, unused_parens, while_true, unused_mut)]
 use std::collections::{BTreeMap, BTreeSet};
+
+struct __ZyCell<T>(std::rc::Rc<std::cell::RefCell<T>>);
+
+impl<T> __ZyCell<T> {
+    fn new(v: T) -> Self {
+        __ZyCell(std::rc::Rc::new(std::cell::RefCell::new(v)))
+    }
+    fn set(&self, v: T) {
+        *self.0.borrow_mut() = v;
+    }
+    fn get(&self) -> T where T: Clone {
+        T::clone(&self.0.borrow())
+    }
+    fn update(&self, f: &std::rc::Rc<dyn Fn(T) -> T>) where T: Clone {
+        let v = self.get();
+        self.set(f(v));
+    }
+}
+
+impl<T> Clone for __ZyCell<T> {
+    fn clone(&self) -> Self {
+        __ZyCell(std::rc::Rc::clone(&self.0))
+    }
+}
+
+impl<T: PartialEq> PartialEq for __ZyCell<T> {
+    fn eq(&self, other: &Self) -> bool {
+        *self.0.borrow() == *other.0.borrow()
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for __ZyCell<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Cell({:?})", self.0.borrow())
+    }
+}
 
 fn __zy_i(i: i64, n: usize) -> usize {
     if i < 0 {
@@ -225,6 +262,8 @@ def rust_type(t: Type) -> str:
         return f"Option<{rust_type(t.inner)}>"
     if isinstance(t, ResultT):
         return f"Result<{rust_type(t.ok)}, {rust_type(t.err)}>"
+    if isinstance(t, CellT):
+        return f"__ZyCell<{rust_type(t.inner)}>"
     if isinstance(t, FnT):
         ret = "" if t.ret == UNIT else f" -> {rust_type(t.ret)}"
         return f"std::rc::Rc<dyn Fn({', '.join(rust_type(x) for x in t.params)}){ret}>"
@@ -247,7 +286,7 @@ def holds_fn(t: Type, opaque: set[str]) -> bool:
         return t.name in opaque
     if isinstance(t, (ListT, SetT)):
         return holds_fn(t.elem, opaque)
-    if isinstance(t, OptionT):
+    if isinstance(t, (OptionT, CellT)):
         return holds_fn(t.inner, opaque)
     if isinstance(t, ResultT):
         return holds_fn(t.ok, opaque) or holds_fn(t.err, opaque)
@@ -750,7 +789,7 @@ def emit_ref(e: ast.Expr) -> str:
             return f"({emit_ref(v)}.{ident(name)})({', '.join(emit(a) for a in args)})"
         case ast.MethodCall(v, name, args) if isinstance(v.ty, (OptionT, ResultT)):
             return f"{emit(v)}.{name}({', '.join(emit(a) for a in args)})"
-        case ast.MethodCall(v, name, args) if v.ty == STR or isinstance(v.ty, (ListT, DictT, SetT)):
+        case ast.MethodCall(v, name, args) if v.ty == STR or isinstance(v.ty, (ListT, DictT, SetT, CellT)):
             return type_method(e)
         case ast.MethodCall(v, name, args):
             target = _METHODS.get((v.ty.name, name))
@@ -907,6 +946,12 @@ def type_method(e: ast.MethodCall) -> str:
             "chars": lambda: f"{a}.chars().map(|c| c.to_string()).collect::<Vec<String>>()",
             "repeat": lambda: f"{a}.repeat(({r[0]}) as usize)",
         }[n]()
+    if isinstance(t, CellT):
+        return {
+            "get": lambda: f"{a}.get()",
+            "set": lambda: f"{a}.set({emit(args[0])})",
+            "update": lambda: f"{a}.update(&{r[0]})",
+        }[n]()
     if isinstance(t, ListT) and n in HIGHER_ORDER:
         return higher_order(e)
     if isinstance(t, ListT):
@@ -994,9 +1039,11 @@ def call(e: ast.Call) -> str:
         case "print":
             if not args:
                 return 'println!()'
-            fmts = ["{:?}" if a.ty == FLOAT or isinstance(a.ty, (ListT, StructT, EnumT, OptionT, ResultT, TupleT, DictT, SetT)) else "{}"
+            fmts = ["{:?}" if a.ty == FLOAT or isinstance(a.ty, (ListT, StructT, EnumT, OptionT, ResultT, TupleT, DictT, SetT, CellT)) else "{}"
                     for a in args]
             return f'println!("{" ".join(fmts)}", {", ".join(emit_ref(a) for a in args)})'
+        case "cell":
+            return f"__ZyCell::new({emit(args[0])})"
         case "len":
             x = emit_ref(args[0])
             return f"({x}.chars().count() as i64)" if args[0].ty == STR else f"({x}.len() as i64)"
@@ -1023,7 +1070,7 @@ def call(e: ast.Call) -> str:
         case "eprint":
             if not args:
                 return 'eprintln!()'
-            fmts = ["{:?}" if a.ty == FLOAT or isinstance(a.ty, (ListT, StructT, EnumT, OptionT, ResultT, TupleT, DictT, SetT)) else "{}"
+            fmts = ["{:?}" if a.ty == FLOAT or isinstance(a.ty, (ListT, StructT, EnumT, OptionT, ResultT, TupleT, DictT, SetT, CellT)) else "{}"
                     for a in args]
             return f'eprintln!("{" ".join(fmts)}", {", ".join(emit_ref(a) for a in args)})'
         case "sum":

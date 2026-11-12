@@ -138,6 +138,22 @@ class SetT:
 
 
 @dataclass(frozen=True)
+class CellT:
+    """The type `Cell[T]`: a shared, mutable box holding one `T`.
+
+    Copies of a cell (a closure capturing it, a struct field, an argument) all share the same storage.
+
+    Attributes:
+        inner: The type of the value in the cell.
+    """
+    inner: "Type"
+
+    def __str__(self) -> str:
+        """Return the type as `Cell[T]`."""
+        return f"Cell[{self.inner}]"
+
+
+@dataclass(frozen=True)
 class FnT:
     """The type of a function.
 
@@ -160,7 +176,7 @@ BOOL = Prim("bool")
 STR = Prim("str")
 UNIT = Prim("unit")
 
-Type = Prim | ListT | FnT | StructT | EnumT | OptionT | ResultT | TupleT | DictT | SetT
+Type = Prim | ListT | FnT | StructT | EnumT | OptionT | ResultT | TupleT | DictT | SetT | CellT
 
 PRIMS = {"int": INT, "float": FLOAT, "bool": BOOL, "str": STR}
 

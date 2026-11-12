@@ -1,0 +1,44 @@
+struct Point:
+    x: int
+    y: int
+
+struct Shared:
+    name: str
+    total: Cell[float]
+    last: Cell[Point?]
+
+fn add(total: Cell[float], v: float):
+    total.set(total.get() + v)
+
+fn same(a: Shared, b: Shared) -> bool:
+    return a == b
+
+total: Cell[float] = cell(0.0)
+last: Cell[Point?] = cell(none)
+a = Shared("a", total, last)
+b = a
+add(a.total, 1.5)
+add(b.total, 2.0)
+print(a.total.get(), b.total.get(), same(a, b))
+print(a)
+
+last.set(some(Point(1, 2)))
+print(b.last.get())
+
+adders = [fn(v: float) => add(total, v), fn(v: float) => add(total, v * 10.0)]
+for f in adders:
+    f(1.0)
+print(total.get())
+
+fn make_push(words: Cell[list[str]]) -> fn(str):
+    fn push(w: str):
+        items = words.get()
+        items.append(w)
+        words.set(items)
+    return push
+
+words = cell(["x"])
+push = make_push(words)
+push("y")
+push("z")
+print(words.get(), len(words.get()))

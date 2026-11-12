@@ -25,6 +25,7 @@ from zylo.domain.types import (
     PRIMS,
     STR,
     UNIT,
+    CellT,
     DictT,
     EnumT,
     FnT,
@@ -254,6 +255,11 @@ class Checker:
         """
         if t.name == "list":
             return ListT(self.resolve(t.args[0]))
+        if t.name == "Cell":
+            inner = self.resolve(t.args[0])
+            if inner == UNIT:
+                raise err("a Cell cannot hold nothing", t)
+            return CellT(inner)
         if t.name == "?":
             return OptionT(self.resolve(t.args[0]))
         if t.name == "fn":
@@ -281,7 +287,7 @@ class Checker:
         """Record a struct's name, rejecting duplicates and reserved names."""
         if d.name in self.structs or d.name in self.enums:
             raise err(f"struct {d.name!r} is already defined" if d.name in self.structs else f"{d.name!r} is already an enum", d)
-        if d.name in BUILTINS or d.name in PRIMS or d.name in ("list", "unit", "Result"):
+        if d.name in BUILTINS or d.name in PRIMS or d.name in ("list", "unit", "Result", "Cell"):
             raise err(f"{d.name!r} is a reserved name", d)
         self.structs[d.name] = StructInfo(d.name, d)
 
@@ -335,7 +341,7 @@ class Checker:
         """Record an enum's name, rejecting duplicates and reserved names."""
         if d.name in self.structs or d.name in self.enums:
             raise err(f"enum {d.name!r} is already defined" if d.name in self.enums else f"{d.name!r} is already a struct", d)
-        if d.name in BUILTINS or d.name in PRIMS or d.name in ("list", "unit", "Result"):
+        if d.name in BUILTINS or d.name in PRIMS or d.name in ("list", "unit", "Result", "Cell"):
             raise err(f"{d.name!r} is a reserved name", d)
         self.enums[d.name] = EnumInfo(d.name, d)
 
@@ -912,7 +918,7 @@ class Checker:
     def captured_error(self, name: str, node: ast.Node) -> ZyloError:
         """The error for modifying a variable that a closure captured."""
         return err(f"cannot modify {name!r} inside a function that captured it: closures capture a copy of the variables "
-                   f"they use, so the change would be lost; copy it into a local first or return the new value", node)
+                   f"they use, so the change would be lost; share state with a `Cell` (`c = cell(0)`, then `c.set(...)`) or return the new value", node)
 
     def lookup_var(self, name: str, node: ast.Node) -> VarInfo | None:
         """Find a visible variable, turning it into a captured copy when it lives outside the closures being checked.
@@ -1234,7 +1240,7 @@ class Checker:
             return True
         if isinstance(t, (ListT, SetT)):
             return self.contains_fn(t.elem, seen)
-        if isinstance(t, OptionT):
+        if isinstance(t, (OptionT, CellT)):
             return self.contains_fn(t.inner, seen)
         if isinstance(t, ResultT):
             return self.contains_fn(t.ok, seen) or self.contains_fn(t.err, seen)
@@ -1432,6 +1438,19 @@ class Checker:
                 mutates()
                 return UNIT
             have = "get, keys, values, items, pop, clear"
+        elif isinstance(rt, CellT):
+            if n == "get":
+                arity(0)
+                return rt.inner
+            if n == "set":
+                arity(1)
+                arg(0, rt.inner)
+                return UNIT
+            if n == "update":
+                arity(1)
+                self.fn_arg(args[0], [rt.inner], rt.inner)
+                return UNIT
+            have = "get, set, update"
         else:  # SetT
             if n == "add":
                 arity(1)
@@ -1496,11 +1515,11 @@ class Checker:
         if enum:
             return self.variant_ctor(e, enum, e.name, e.args)
         rt = self.expr(e.value)
-        if e.named and (isinstance(rt, (OptionT, ResultT, ListT, DictT, SetT)) or rt == STR):
+        if e.named and (isinstance(rt, (OptionT, ResultT, ListT, DictT, SetT, CellT)) or rt == STR):
             raise err(f"{rt}.{e.name} takes positional arguments only", e.named[0])
         if isinstance(rt, (OptionT, ResultT)):
             return self.builtin_method(e, rt)
-        if rt == STR or isinstance(rt, (ListT, DictT, SetT)):
+        if rt == STR or isinstance(rt, (ListT, DictT, SetT, CellT)):
             return self.type_method(e, rt)
         info = self.enums[rt.name] if isinstance(rt, EnumT) else self.struct_of(rt, e, "methods")
         sig = info.methods.get(e.name)
@@ -1757,6 +1776,12 @@ class Checker:
                 for a in args:
                     self.printable(a)
                 return UNIT
+            case "cell":
+                arity(1)
+                t = self.expr(args[0], expected.inner if isinstance(expected, CellT) else None)
+                if t == UNIT:
+                    raise err("the expression produces no value", args[0])
+                return CellT(t)
             case "len":
                 arity(1)
                 t = self.expr(args[0])

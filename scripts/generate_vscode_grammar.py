@@ -18,7 +18,7 @@ CONTROL = {"if", "elif", "else", "while", "for", "in", "return", "break", "conti
 WORD_OPERATORS = {"and", "or", "not", "is"}
 STORAGE = {"fn", "struct", "enum", "extern"}
 CONSTANTS = {"true", "false", "none"}
-TYPES = ["int", "float", "bool", "str", "list", "dict", "set", "tuple", "Result"]
+TYPES = ["int", "float", "bool", "str", "list", "dict", "set", "tuple", "Result", "Cell"]
 ESCAPE = r"\\[nrt0\\\"']"
 
 
