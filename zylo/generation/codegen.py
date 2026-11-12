@@ -464,6 +464,11 @@ class Gen:
         elif s.declares:
             mut = "mut " if s.var.mutable else ""
             self.line(f"let {mut}{ident(s.target.id)}: {rust_type(s.var.ty)} = {emit(s.value)};")
+        elif (isinstance(s.value, ast.BinOp) and s.value.op == "+" and s.value.left.ty == STR
+              and isinstance(s.value.left, ast.Name) and s.value.left.id == s.target.id
+              and not any(isinstance(n, ast.Name) and n.id == s.target.id for n in ast.walk(s.value.right))):
+            # `s += x` appends in place: rebuilding the string each time would make building text quadratic
+            self.line(f"{ident(s.target.id)}.push_str(&{emit_ref(s.value.right)});")
         else:
             self.line(f"{ident(s.target.id)} = {emit(s.value)};")
 

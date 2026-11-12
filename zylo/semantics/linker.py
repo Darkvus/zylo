@@ -13,6 +13,7 @@ from zylo.domain.builtins import BUILTINS, SHADOWABLE
 from zylo.domain.errors import ZyloError
 from zylo.domain.types import PRIMS
 from zylo.packaging.manifest import package_layout
+from zylo.packaging.stdlib import STD, stdlib_dir, stdlib_module
 from zylo.syntax.parser import parse
 
 SEP = "·"  # `·`
@@ -177,6 +178,8 @@ class Linker:
     def module_id(self, path: Path) -> str:
         """Compute the dotted id of a module file, relative to the entry directory or to its package."""
         rp = path.resolve()
+        if stdlib_dir() in rp.parents:
+            return ".".join([STD, *rp.relative_to(stdlib_dir()).with_suffix("").parts])
         if self.packages_dir and self.packages_dir in rp.parents:
             pkg = rp.relative_to(self.packages_dir).parts[0]
             pkg_dir = self.packages_dir / pkg
@@ -206,6 +209,11 @@ class Linker:
             ZyloError: If no file matches.
         """
         parts = dotted.split(".")
+        if parts[0] == STD:  # the bundled library wins over local modules and packages: nothing can shadow `std`
+            found = stdlib_module(parts)
+            if found is None:
+                raise err(f"module {dotted!r} not found in the standard library (see docs/stdlib.md)", node, importer.path)
+            return found
         cand = importer.path.parent.joinpath(*parts).with_suffix(".zy")  # parts are identifiers: no `..`
         if cand.is_file():
             return cand

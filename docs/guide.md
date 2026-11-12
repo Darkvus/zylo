@@ -552,6 +552,22 @@ zylo run src/main.zy                     # finds .zylo-env on its own
 Everything about modules, environments, the lock file and the security model is in
 [packages.md](packages.md).
 
+## Standard library
+
+Zylo ships a library written in Zylo, imported with the reserved prefix `std`: `std.json` (parse and write JSON),
+`std.math`, `std.text` and `std.os`. Nothing has to be installed, and no local file or package can shadow `std`.
+
+```zylo
+import std.json as json
+from std.math import gcd
+
+doc = json.parse('{"id": 7, "tags": ["a", "b"]}').unwrap()
+print(json.as_int(json.get(doc, "id").unwrap()))     # Some(7)
+print(json.stringify(doc), gcd(12, 18))              # {"id":7,"tags":["a","b"]} 6
+```
+
+Every module, with its functions and design decisions, is described in [stdlib.md](stdlib.md).
+
 ## Calling Rust
 
 `extern fn` declares a Zylo function whose body is Rust: a path, or a template where `{0}`, `{1}`... are the

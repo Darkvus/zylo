@@ -55,7 +55,7 @@ jobs:
       - name: Build
         run: |
           python -m pip install pyinstaller .
-          pyinstaller --onefile --name zylo --paths . --specpath build packaging/zylo_entry.py
+          pyinstaller --onefile --name zylo --paths . --collect-data zylo --specpath build packaging/zylo_entry.py
       - name: Smoke test
         run: ./dist/zylo${{ matrix.suffix }} --version
       - name: Name the artifact

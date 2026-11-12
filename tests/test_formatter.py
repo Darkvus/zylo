@@ -36,7 +36,7 @@ def doc_blocks():
     return blocks
 
 
-CORPUS = [(str(p.relative_to(ROOT)), p.read_text()) for pattern in ("examples/**/*.zy", "tests/programs/*.zy", "benchmarks/*.zy")
+CORPUS = [(str(p.relative_to(ROOT)), p.read_text()) for pattern in ("examples/**/*.zy", "tests/programs/*.zy", "benchmarks/*.zy", "zylo/stdlib/*.zy")
           for p in sorted(ROOT.glob(pattern))] + doc_blocks()
 
 

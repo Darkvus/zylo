@@ -1,0 +1,86 @@
+import std.json as json
+
+fn show(r: Result[json.Json, str], mode: str) -> str:
+    if r is err:
+        return "ERR " + r
+    if mode == "pretty":
+        return json.pretty(r)
+    if mode == "compact":
+        return json.stringify(r)
+    # the default also checks that what was written reads back as the same value
+    text = json.stringify(r)
+    again = json.parse(text)
+    if again is err:
+        return "ERR round trip failed: " + again
+    if again != r:
+        return "ERR round trip changed the value"
+    return "OK " + text
+
+fn show_json(x: json.Json?) -> str:
+    if x is none:
+        return "none"
+    return "some " + json.stringify(x)
+
+fn show_str(x: str?) -> str:
+    if x is none:
+        return "none"
+    return "some " + x
+
+fn show_int(x: int?) -> str:
+    if x is none:
+        return "none"
+    return "some " + str(x)
+
+fn show_float(x: float?) -> str:
+    if x is none:
+        return "none"
+    return "some " + str(x)
+
+fn show_bool(x: bool?) -> str:
+    if x is none:
+        return "none"
+    return "some " + str(x)
+
+fn accessors() -> str:
+    doc = json.parse("{\"name\": \"Ada\", \"age\": 42, \"pi\": 4.5, \"on\": true, \"nil\": null, \"xs\": [10, 20, 30]}").unwrap()
+    xs = json.get(doc, "xs").unwrap()
+    name = json.get(doc, "name").unwrap()
+    age = json.get(doc, "age").unwrap()
+    pi = json.get(doc, "pi").unwrap()
+    nil = json.get(doc, "nil").unwrap()
+    lines: list[str] = []
+    lines.append("get: " + show_json(json.get(doc, "name")))
+    lines.append("get missing: " + show_json(json.get(doc, "nope")))
+    lines.append("get on array: " + show_json(json.get(xs, "name")))
+    lines.append("index: " + show_json(json.index(xs, 1)))
+    lines.append("index -1: " + show_json(json.index(xs, -1)))
+    lines.append("index 3: " + show_json(json.index(xs, 3)))
+    lines.append("index -4: " + show_json(json.index(xs, -4)))
+    lines.append("index on object: " + show_json(json.index(doc, 0)))
+    lines.append("as_str: " + show_str(json.as_str(name)))
+    lines.append("as_str of num: " + show_str(json.as_str(age)))
+    lines.append("as_int: " + show_int(json.as_int(age)))
+    lines.append("as_int 4.5: " + show_int(json.as_int(pi)))
+    lines.append("as_int of str: " + show_int(json.as_int(name)))
+    lines.append("as_float: " + show_float(json.as_float(pi)))
+    lines.append("as_bool: " + show_bool(json.as_bool(json.get(doc, "on").unwrap())))
+    lines.append("as_bool of null: " + show_bool(json.as_bool(nil)))
+    lines.append("is_null: " + str(json.is_null(nil)) + " " + str(json.is_null(age)))
+    lines.append("as_list: " + str(len(json.as_list(xs).unwrap())) + " " + str(json.as_list(doc) is none))
+    lines.append("as_dict: " + str(len(json.as_dict(doc).unwrap())) + " " + str(json.as_dict(xs) is none))
+    return "\n".join(lines)
+
+# Reads documents separated by a line holding "@@@@" and prints one result per document, separated the same way.
+# A document may start with "@pretty ", "@compact " or be exactly "@accessors".
+docs = read_stdin().split("\n@@@@\n")
+results: list[str] = []
+for d in docs:
+    if d == "@accessors":
+        results.append(accessors())
+    elif d.startswith("@pretty "):
+        results.append(show(json.parse(d[8:]), "pretty"))
+    elif d.startswith("@compact "):
+        results.append(show(json.parse(d[9:]), "compact"))
+    else:
+        results.append(show(json.parse(d), "default"))
+print("\n@@@@\n".join(results))

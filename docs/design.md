@@ -111,6 +111,13 @@ dependency is a git URL and a ref, and `zylo.lock` records the exact commit and 
 (see [packages.md](packages.md)). Environments are per project, so two projects never share versions.
 Installing never executes package code.
 
+**The standard library is Zylo, resolved before everything else.** `std.*` modules are `.zy` files in `zylo/stdlib/`,
+shipped as package data and bundled in the standalone binary, so they are written in the language they serve
+(`std.json` is a recursive-descent parser in Zylo) and need no crates: the `rustc` fast path stays. The linker looks in
+`std` first, so no local file or package can shadow it, and the library is trusted to use private `extern fn` helpers
+where Zylo cannot be fast enough (JSON works on a list of code points, because indexing a `str` by character is linear).
+`s += x` on a string appends in place, since rebuilding the string each time made building text quadratic.
+
 **Dicts and sets are ordered by key.** They map to `BTreeMap` / `BTreeSet`, so iteration and printing are
 deterministic (a hash map would print in a different order on every run) and keys only need to be `int`,
 `str`, `bool` or tuples of those. The price is that order is sorted, not insertion order as in Python.

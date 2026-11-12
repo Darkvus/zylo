@@ -29,6 +29,8 @@ from geometry import area as get_area
 
 For `import a.b.c` written in file `F`:
 
+0. **Standard library:** when `a` is `std`, the module comes from the library bundled with the compiler
+   (`import std.json`, see [stdlib.md](stdlib.md)) and nothing else is consulted, so no local file or package can shadow `std`.
 1. **Local:** `<dir of F>/a/b/c.zy`.
 2. **Package:** if `a` is an installed package in the active environment, `c` is looked up inside it:
    `import a` is the package entry file, `import a.b.c` is `<package src>/b/c.zy`.
