@@ -109,15 +109,19 @@ reasons are in [docs/design.md](docs/design.md).
 
 ## Performance
 
-The same programs in Zylo and in CPython (median of 5 runs):
+The same programs in Zylo, hand-written Rust and CPython (median of 7 runs; Rust and Zylo are built with the same
+`rustc -O` flags):
 
-| Program | Python | Zylo | Speedup |
-|---|---:|---:|---:|
-| fib(35), recursive | 1.015 s | 0.039 s | **26×** |
-| primes below 300 000 | 0.649 s | 0.018 s | **35×** |
-| bubble sort, 3 000 items | 0.355 s | 0.004 s | **82×** |
-| a list passed to a function 1 000 times | 0.100 s | 0.032 s | **3×** |
-| arithmetic loop, 20 M iterations | 1.284 s | 0.016 s | 79× (*) |
+| Program | Python | Rust | Zylo | Zylo vs Python | Zylo vs Rust |
+|---|---:|---:|---:|---:|---:|
+| fib(35), recursive | 0.929 s | 0.036 s | 0.035 s | **26×** faster | 0.98× |
+| primes below 300 000 | 0.600 s | 0.020 s | 0.018 s | **33×** faster | 0.94× |
+| bubble sort, 3 000 items | 0.325 s | 0.004 s | 0.004 s | **80×** faster | 1.11× |
+| a list passed to a function 1 000 times | 0.088 s | 0.007 s | 0.031 s | **3×** faster | 4.09× |
+| arithmetic loop, 20 M iterations | 1.258 s | 0.016 s | 0.016 s | 81× faster (*) | 1.00× |
+
+"Zylo vs Rust" is Zylo's time divided by Rust's, so 1.00× is the same speed. The one real gap is the string-list
+loop, which clones every string it visits.
 
 (*) LLVM optimizes this trivial loop very aggressively, so treat it as an upper bound.
 Method and the variant without overflow checks: [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
