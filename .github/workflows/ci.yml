@@ -62,7 +62,7 @@ jobs:
         run: |
           zylo --version
           zylo run examples/hello.zy
-      - name: Build a program that uses crates (std.http: tiny_http and ureq, built with Cargo)
+      - name: Build a program that uses crates (std.http, built with Cargo)
         run: zylo build examples/hello_server.zy -o hello_server.exe
 
   package:
