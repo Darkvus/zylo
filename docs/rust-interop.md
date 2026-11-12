@@ -51,6 +51,21 @@ afterwards. Without Rust dependencies Zylo keeps calling `rustc` directly, which
 Cargo use only what is already downloaded. Allowed dependency keys: `version`, `features`, `default-features`,
 `path`, `git`, `branch`, `tag`, `rev`, `package`.
 
+### Crates brought by the standard library
+
+A bundled module can need crates too: `import std.http` makes the project build with Cargo, using `tiny_http` and
+`ureq` from a sidecar `http.toml`, and appends the Rust support code in `http.rs` to the program. Nothing changes for
+programs that do not import such a module. If your `zylo.toml` lists one of those crates with a different requirement
+the build stops with `conflicting requirements for crate`; use the same requirement or none. See
+[stdlib.md](stdlib.md#modules-that-need-crates).
+
+## Callbacks into Zylo
+
+Passing a Zylo function value to an `extern fn` works: a parameter of type `fn(A) -> R` is an
+`std::rc::Rc<dyn Fn(A) -> R>` in the template, so Rust code can call it (`{0}(x)`, or from a helper that takes that
+type). Two rules follow from the representation: the `Rc` is not `Send`, so call it on the thread that received it,
+and a panic inside it is an ordinary Rust panic that you can `catch_unwind` (`std.http` does, to answer 500).
+
 ## Packages and trust
 
 A Zylo package from the community is plain Zylo code, and that is the point: it cannot run arbitrary Rust.
@@ -70,6 +85,5 @@ runs code. Path dependencies are only allowed in your own `zylo.toml`.
 
 ## Limits
 
-No Rust generics or traits are exposed to Zylo, `extern fn` cannot be a method, callbacks from Rust into Zylo are
-not supported, and Zylo structs are plain Rust structs named like the Zylo struct (derive `Clone`, `PartialEq`),
+No Rust generics or traits are exposed to Zylo, `extern fn` cannot be a method, and Zylo structs are plain Rust structs named like the Zylo struct (derive `Clone`, `PartialEq`),
 which you can name in templates but whose layout is not a stable interface.

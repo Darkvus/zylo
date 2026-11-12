@@ -62,6 +62,8 @@ jobs:
         run: |
           zylo --version
           zylo run examples/hello.zy
+      - name: Build a program that uses crates (std.http: tiny_http and ureq, built with Cargo)
+        run: zylo build examples/hello_server.zy -o hello_server.exe
 
   package:
     name: package (wheel and standalone binary)
@@ -84,6 +86,8 @@ jobs:
       - name: The standard library is inside the wheel and the standalone binary
         run: |
           python -m zipfile -l dist/*.whl | grep -q 'zylo/stdlib/json.zy'
+          python -m zipfile -l dist/*.whl | grep -q 'zylo/stdlib/http.rs'
+          python -m zipfile -l dist/*.whl | grep -q 'zylo/stdlib/http.toml'
           # run from another directory so that nothing can be found in the checkout
           mkdir /tmp/stdcheck && cp examples/json_report.zy /tmp/stdcheck/ && cd /tmp/stdcheck
           "$GITHUB_WORKSPACE/dist/zylo" run json_report.zy | diff - "$GITHUB_WORKSPACE/examples/json_report.out"

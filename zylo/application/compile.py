@@ -9,6 +9,7 @@ from zylo.infrastructure import cargo, rustc
 from zylo.packaging import env as envmod
 from zylo.packaging.manifest import MANIFEST, find_manifest, load_manifest
 from zylo.packaging.rust_deps import validate_rust_dep
+from zylo.packaging.stdlib import stdlib_support
 from zylo.semantics.checker import check, check_all
 from zylo.semantics.linker import Linker
 from zylo.syntax.parser import parse, parse_collect
@@ -52,11 +53,26 @@ def load_program(path: Path, env: str | Path | None = None) -> ast.Program:
 
 
 def compile_file(path: Path, env: str | Path | None = None):
-    """(Rust source, crates it needs, the project manifest or None)."""
+    """(Rust source, crates it needs, the project manifest or None).
+
+    A standard library module that needs Rust support code and crates (`std.http`) adds both here, so the program
+    is built with Cargo only when it imports such a module.
+    """
     manifest, active = project_context(path, env)
     trusted = manifest.trusted_packages if manifest else []
-    prog = Linker(active.packages_dir if active else None, trusted).link(path)
-    return generate(check(prog)), rust_crates(manifest, active), manifest
+    linker = Linker(active.packages_dir if active else None, trusted)
+    prog = linker.link(path)
+    rs = generate(check(prog))
+    crates = rust_crates(manifest, active)
+    support, std_crates = stdlib_support([m.id for m in linker.order])
+    if support:
+        rs += "\n" + support
+    for name, spec in std_crates.items():
+        if name in crates and crates[name] != spec:
+            raise PackageError(f"conflicting requirements for crate {name!r}: your zylo.toml asks for {crates[name]!r} "
+                               f"but the standard library needs {spec!r}")
+        crates[name] = spec
+    return rs, crates, manifest
 
 
 def transpile(path: Path, env: str | Path | None = None) -> str:
@@ -73,9 +89,9 @@ def transpile(path: Path, env: str | Path | None = None) -> str:
 
 
 def build_executable(rs: str, crates: dict[str, object], manifest, out: Path, checks: bool, offline: bool) -> None:
-    """`rustc` when there are no Rust dependencies (fast), otherwise a Cargo project next to zylo.toml."""
+    """`rustc` when there are no Rust dependencies (fast), otherwise a Cargo project next to zylo.toml (or in the user cache)."""
     if crates:
-        cargo.build(rs, crates, out, manifest.root, checks, offline)
+        cargo.build(rs, crates, out, manifest.root if manifest else cargo.cache_dir(crates), checks, offline)
     else:
         rustc.compile_rust(rs, out, checks)
 

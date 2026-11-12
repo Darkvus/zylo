@@ -1,0 +1,20 @@
+# A tiny web server: run it and open http://127.0.0.1:8080/?name=Ada
+# Needs Cargo (the first build downloads and compiles two small crates, later builds are cached).
+import std.http as http
+
+fn handle(req: http.Request) -> http.Response:
+    if req.method == "GET" and req.path == "/":
+        name = req.query.get("name").unwrap_or("world")
+        return http.text(200, f"Hello, {name}!")
+    if req.method == "POST" and req.path == "/echo":
+        return http.json_response(200, req.body)
+    if req.path == "/old":
+        return http.redirect("/")
+    return http.not_found()
+
+match http.serve("127.0.0.1", 8080, handle):
+    ok(_):
+        print("done")
+    err(e):
+        eprint(e)
+        exit(1)

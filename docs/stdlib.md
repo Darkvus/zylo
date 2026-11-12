@@ -21,7 +21,8 @@ name in directly. See [packages.md](packages.md) for the import rules in general
 - A standard library module is **trusted**: it may use `extern fn` (the small Rust helpers it needs) without the
   project listing it under `[rust] trusted-packages`. Your own code that imports it gets plain Zylo functions.
 - Modules are linked into your program like any other, so only what you use is compiled and `rustc` is still called
-  directly (no Cargo, no crates).
+  directly (no Cargo, no crates), with one exception: a module that needs Rust crates (today `std.http`) brings
+  them with it, see [Modules that need crates](#modules-that-need-crates).
 - The files are shipped as package data of the wheel and bundled into the standalone binary (`--collect-data zylo`).
   CI checks both: the wheel lists them and the binary runs a program that imports `std.json` from an empty directory.
 - A library module cannot hold constants yet, so constants are functions: `math.pi()`.
@@ -32,6 +33,7 @@ name in directly. See [packages.md](packages.md) for the import rules in general
 | [`std.math`](#stdmath) | Trigonometry, logarithms, `gcd`, `clamp`... |
 | [`std.text`](#stdtext) | Padding, stripping, character classes, `split_once`... |
 | [`std.os`](#stdos) | The working directory, the platform, directories, paths |
+| [`std.http`](#stdhttp) | A blocking HTTP/1.1 server and a simple client (needs Cargo) |
 
 ## std.json
 
@@ -140,6 +142,107 @@ What the built-in `argv`, `env`, file and directory functions do not cover.
 | `platform() -> str` | `"linux"`, `"macos"`, `"windows"`... |
 | `is_dir(path)`, `make_dirs(path)`, `remove_file(path)` | directories and files; the last two return a `Result[int, str]` like `write_file` |
 | `join_path(a, b)` | join with the system's separator |
+
+## std.http
+
+A blocking HTTP/1.1 server and a simple client. This is the first layer of a web framework: routing, JSON mapping and
+OpenAPI come later, in libraries written in Zylo on top of it. The module is Zylo plus a little Rust over two small
+crates (`tiny_http` for the server and `ureq` for the client), so a program that imports it is built with **Cargo**
+(the first build downloads and compiles the crates, about 10 s; later builds reuse them).
+
+```zylo
+struct Request:
+    method: str                    # "GET", "POST"... (upper case)
+    path: str                      # percent-decoded, without the query string
+    query: dict[str, str]          # ?a=1&b=x%20y, decoded; a repeated key keeps the last value
+    headers: dict[str, str]        # names in lower case; a repeated header keeps the last value
+    body: str
+    path_params: dict[str, str]    # empty now: a router fills it in
+
+struct Response:
+    status: int
+    headers: dict[str, str]
+    body: str
+```
+
+| Function | Meaning |
+|---|---|
+| `text(status, body) -> Response` | `text/plain; charset=utf-8` |
+| `json_response(status, body) -> Response` | `application/json`; `body` is JSON text you already built |
+| `redirect(location) -> Response` | a 302 with a `location` header |
+| `not_found() -> Response` | a 404 |
+| `header(headers, name) -> str?` | a header looked up by name, whatever its case |
+| `serve(host, port, handler) -> Result[int, str]` | answer requests forever |
+| `serve_n(host, port, handler, max_requests)` | answer that many requests, then return the count (tests, scripts) |
+| `serve_with(host, port, handler, max_requests, max_body)` | both limits; `max_requests` 0 means no limit |
+| `get(url)`, `delete(url)`, `post(url, body, headers)`, `put(url, body, headers)` | `Result[Response, str]` |
+| `send(method, url, body, headers)` | any method |
+
+```zylo
+import std.http as http
+
+fn handle(req: http.Request) -> http.Response:
+    if req.method == "GET" and req.path == "/":
+        return http.text(200, "Hello, " + req.query.get("name").unwrap_or("world") + "!")
+    if req.path == "/echo":
+        return http.json_response(200, req.body)
+    return http.not_found()
+
+match http.serve("127.0.0.1", 8080, handle):
+    ok(_):
+        print("stopped")
+    err(e):
+        eprint(e)       # e.g. cannot listen on 127.0.0.1:8080: Address already in use
+```
+
+```zylo
+import std.http as http
+
+headers: dict[str, str] = {}
+headers["content-type"] = "application/json"
+match http.post("http://127.0.0.1:8080/echo", '{"a": 1}', headers):
+    ok(r):
+        print(r.status, r.body)
+    err(e):
+        print("no response:", e)
+```
+
+Decisions and limits:
+
+- **One request at a time.** A handler is an ordinary Zylo function value (an `Rc` closure in the generated Rust),
+  which cannot be shared between threads, so the accept loop is single-threaded: the next request waits until the
+  handler returns. That is right for tests, tools and development; concurrency is a later language feature.
+- **A panic in a handler is a 500.** A runtime error in the handler (an index out of range, `unwrap` of `none`) is
+  caught, logged to stderr (`handler panicked: ...`) and answered with `500 Internal Server Error`; the server goes on.
+- **Large bodies.** A body over `max_body` bytes (default 1 MiB, `default_max_body()`) is answered with `413` without
+  calling the handler. The body is read as text (invalid UTF-8 becomes U+FFFD); `Content-Length` is always set from
+  the body you return, whatever header you set.
+- **HEAD and OPTIONS.** `HEAD` reaches the handler as `HEAD` (the body is dropped on the wire, so a `GET` handler
+  answers it). An `OPTIONS` request the handler answers with 404 becomes `204` with an `Allow` header; any other
+  answer of the handler is kept (so you can implement CORS yourself).
+- **Malformed requests** are dropped by the server (it answers 400 or closes the connection) and the handler is not
+  called; they do not count towards `max_requests`. Statuses are clamped to 100-599.
+- **Headers** are one value per name (a `dict`): `Set-Cookie` cannot be sent twice yet.
+- **Client.** Any HTTP status, including 404 and 500, is an `ok` response; `err` means no response arrived (refused,
+  bad URL, a 30 s timeout). Redirects are **not** followed (`redirect` and `location` are yours to handle), and only
+  `http://` URLs work: the crate is built without TLS so that the build stays fast and needs no C toolchain.
+  `https://` is a later feature.
+- **Port 0** lets the system pick, but the server does not report which; pick a free port yourself in tests.
+- The server prints `listening on http://HOST:PORT` to stderr when it starts.
+
+## Modules that need crates
+
+A standard library module `std.x` may ship two sidecar files next to `x.zy`: `x.rs`, Rust support code that its
+private `extern fn` templates call (`zylo_http::serve(...)`), and `x.toml`, a `[rust-dependencies]` table in the
+format of [rust-interop.md](rust-interop.md). When a program links the module, the compiler appends `x.rs` to the
+generated Rust and adds the crates to the build. Programs that do not import it are unchanged and keep calling `rustc`
+directly. Both files are trusted like the module. A crate your own `zylo.toml` asks for with a different requirement
+than the module's is an error (`conflicting requirements for crate`); asking for the same one is fine.
+
+Without a `zylo.toml`, Cargo builds in the user cache (`$ZYLO_CACHE_DIR`, `$XDG_CACHE_HOME/zylo`, `%LOCALAPPDATA%\zylo`
+or `~/.cache/zylo`), one directory per set of crates, so every program that imports `std.http` shares the compiled
+crates. With a `zylo.toml` the build directory is `.zylo-build/` next to it, as for any crate user.
+`zylo build --offline` works once the crates have been downloaded.
 
 ## Writing a standard library module
 
