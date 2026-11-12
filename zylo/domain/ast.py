@@ -243,10 +243,12 @@ class Attr(Node):
         value: The expression whose field is read.
         name: The field or variant name.
         variant: `(enum, variant)` when the checker found a variant without data, otherwise None.
+        unwrap: `"unwrap"` / `"unwrap_err"` when an `is` check narrowed this field path to the inner value.
     """
     value: "Expr"
     name: str
     variant: tuple[str, str] | None = None
+    unwrap: str | None = None
 
 
 @dataclass
@@ -543,7 +545,7 @@ class Program(Node):
 
 # ---- generic traversal -----------------------------------------------------------------------
 
-_ANNOTATIONS = {"tys", "variant", "enum", "ty", "var", "vars", "info", "infos", "then_bind", "else_bind", "after_bind", "captures"}
+_ANNOTATIONS = {"tys", "variant", "enum", "ty", "var", "vars", "info", "infos", "unwrap", "then_bind", "else_bind", "after_bind", "captures"}
 
 
 def children(node: Node) -> Iterator[Node]:

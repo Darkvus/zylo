@@ -22,6 +22,7 @@ and is built vertically (lexer → parser → checker → codegen → tests).
 | **v0.14 Typed JSON** | `to_json` / `from_json` / `json_schema` / `json_schema_defs` for structs, enums and collections, with JSON-path errors, OpenAPI-ready schemas and doc strings on types and fields | done |
 | **v0.15 Shared state** | `Cell[T]`: a shared mutable box (`cell(v)`, `get`, `set`, `update`) compiled to `Rc<RefCell<T>>`, so closures, handlers and structs can share a counter or a list | done |
 | **v0.16 Re-exports** | `pub from a import x` makes names importable from a package root: one import point, chains, a single type identity, clear errors for unknown names, conflicts and cycles | done |
+| **v0.17 Ergonomics** | Narrowing on field paths (`if p.name is some:` uses `p.name` as the plain value), multi-line list / dict / tuple literals with trailing commas, `std.json` `get_*` / `as_array` / `as_object` / `at` accessors | done |
 | **Community** | Documentation translations (the docs are English-only for now) and localized diagnostics | |
 
 Later: generics, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
@@ -31,7 +32,7 @@ Later: generics, concurrency, a central package registry with `zylo publish`, se
 - Language server: hover, go to definition, rename and signature help.
 - Formatter: wrapping of very long lines.
 
-- Narrowing beyond plain variables: `and` chains and struct fields (`self.age is some`).
+- Narrowing beyond plain variables and field paths: `and` chains, indexed elements and closures.
 - `match` guards, or-patterns (`1 | 2`) and nested patterns; non-constant default values.
 - Long-term memory model: implicit clones plus inferred borrows, or simplified ownership.
 - Custom error types and conversions for `?` between different error types.

@@ -1,0 +1,13 @@
+name=Ada len=3 no name
+-1 42
+ok 42 err bad
+t -
+5 50 5
+3 2 ("x", 7)
+30 1
+name=multi len=5
+Some("Ada") Some(36) Some(3.5) Some(true)
+None None None
+2 1
+Some("b")
+true true

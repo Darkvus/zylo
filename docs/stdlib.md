@@ -74,7 +74,9 @@ enum Json:
 | `get(j, key) -> Json?` | A member of an object (`none` for a missing key or a non-object). |
 | `index(j, i) -> Json?` | An element of an array; a negative `i` counts from the end. |
 | `as_str`, `as_float`, `as_int`, `as_bool` | The payload as a `str?`, `float?`, `int?` or `bool?`. `as_int` needs a whole number that fits an `int`. |
-| `as_list`, `as_dict`, `is_null` | The elements, the members, or a null test. |
+| `as_list`, `as_dict`, `is_null` | The elements, the members, or a null test. `as_array` and `as_object` are aliases. |
+| `at(j, i) -> Json?` | An alias of `index`. |
+| `get_str`, `get_int`, `get_float`, `get_bool`, `get_array`, `get_object` | `get` and the matching `as_*` in one step: `get_str(doc, "name") -> str?`. `none` when `j` is not an object, the key is missing or the member has another type. |
 
 ```zylo
 import std.json as json
@@ -87,6 +89,7 @@ if doc is err:
 name = json.get(doc, "name")
 if name is some:
     print(json.as_str(name).unwrap_or("?"))
+print(json.get_str(doc, "name").unwrap_or("?"), json.get_int(doc, "age"))
 langs = json.as_list(json.get(doc, "langs").unwrap()).unwrap()
 print(len(langs), json.stringify(langs[1]))
 print(json.as_int(json.get(doc, "age").unwrap()))

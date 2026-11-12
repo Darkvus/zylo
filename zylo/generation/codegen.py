@@ -773,6 +773,8 @@ def emit_ref(e: ast.Expr) -> str:
             return f"{base}[__zy_i({emit_ref(i)}, {base}.len())]" if is_place(v) else f"{base}[({emit_ref(i)}) as usize]"
         case ast.Attr() if e.variant:
             return f"{tname(e.variant[0])}::{e.variant[1]}"
+        case ast.Attr(v, name) if e.unwrap:
+            return f"{emit_ref(v)}.{ident(name)}.clone().{e.unwrap}()"
         case ast.Attr(v, name):
             return f"{emit_ref(v)}.{ident(name)}"
         case ast.NoneLit():
