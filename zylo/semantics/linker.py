@@ -117,7 +117,7 @@ class Linker:
         body: list[ast.Stmt] = []
         for m in self.order:
             if m is not main:
-                body += [s for s in m.program.body if isinstance(s, (ast.FnDef, ast.StructDef))]
+                body += [s for s in m.program.body if isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef))]
         body += [s for s in main.program.body if not isinstance(s, (ast.Import, ast.FromImport))]
         return ast.Program(body, line=1, col=1, file=str(entry))
 
@@ -142,8 +142,8 @@ class Linker:
         if not is_entry:
             self.register_id(mod, path)
             for s in prog.body:
-                if not isinstance(s, (ast.Import, ast.FromImport, ast.FnDef, ast.StructDef)):
-                    raise err("library modules can only contain imports, functions and structs", s, path)
+                if not isinstance(s, (ast.Import, ast.FromImport, ast.FnDef, ast.StructDef, ast.EnumDef)):
+                    raise err("library modules can only contain imports, functions, structs and enums", s, path)
         self.check_trust(mod)
         self.collect_defs(mod)
         for s in prog.body:
@@ -225,9 +225,9 @@ class Linker:
     def collect_defs(self, mod: Module) -> None:
         """Record a module's top-level functions and structs, rejecting duplicates and reserved names."""
         for s in mod.program.body:
-            if not isinstance(s, (ast.FnDef, ast.StructDef)):
+            if not isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef)):
                 continue
-            kind = "fn" if isinstance(s, ast.FnDef) else "struct"
+            kind = "fn" if isinstance(s, ast.FnDef) else "struct" if isinstance(s, ast.StructDef) else "enum"
             if s.name in mod.defs:
                 raise err(f"{s.name!r} is already defined in this module", s, mod.path)
             if not mod.is_entry and (s.name in BUILTINS - SHADOWABLE or s.name in RESERVED_TYPES):
@@ -255,14 +255,15 @@ class Linker:
             self.bind_name(mod, local, s)
             mod.froms[local] = (dep, name)
 
-    def export(self, dep: Module, name: str, node: ast.Node, importer: Module, kind: str | None = None) -> str:
+    def export(self, dep: Module, name: str, node: ast.Node, importer: Module, kind: str | tuple[str, ...] | None = None) -> str:
         """Mangled name of `dep.name`, checking that it exists, is public and is the right kind."""
         found = dep.defs.get(name)
+        kinds = (kind,) if isinstance(kind, str) else kind
         if found is None:
-            what = {"struct": "struct", "fn": "function"}.get(kind or "", "function or struct")
+            what = "struct or enum" if kinds == ("struct", "enum") else {"struct": "struct", "enum": "enum", "fn": "function"}.get(kind or "", "function, struct or enum")
             raise err(f"module {dep.display!r} has no {what} {name!r}", node, importer.path)
-        if kind and found != kind:
-            raise err(f"{name!r} in module {dep.display!r} is a {found}, not a {kind}", node, importer.path)
+        if kinds and found not in kinds:
+            raise err(f"{name!r} in module {dep.display!r} is a {found}, not a {' or '.join(kinds)}", node, importer.path)
         if name.startswith("_"):
             raise err(f"{name!r} is private to module {dep.display!r}", node, importer.path)
         return dep.mangled(name)
@@ -286,8 +287,8 @@ class Linker:
             if isinstance(s, (ast.Import, ast.FromImport)):
                 continue
             self.rw(s, mod)
-            if isinstance(s, (ast.FnDef, ast.StructDef)):
-                if isinstance(s, ast.StructDef) and not mod.is_entry:
+            if isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef)):
+                if isinstance(s, (ast.StructDef, ast.EnumDef)) and not mod.is_entry:
                     s.display = s.name
                 s.name = mod.mangled(s.name)
 
@@ -310,9 +311,19 @@ class Linker:
             args = [self.rw(a, mod) for a in node.args]
             return ast.Call(target, args, line=node.line, col=node.col, file=node.file)
         if isinstance(node, ast.Attr) and isinstance(node.value, ast.Name) and node.value.id in mod.aliases:
+            dep = mod.aliases[node.value.id]
+            if dep.defs.get(node.name) == "enum":  # `module.Enum` in `module.Enum.Variant`
+                return ast.Name(self.export(dep, node.name, node, mod, kind="enum"), line=node.line, col=node.col, file=node.file)
             raise err(f"module {node.value.id!r} has no values; call a function: {node.value.id}.name(...)", node, mod.path)
         if isinstance(node, ast.Name) and node.id in mod.aliases:
             raise err(f"{node.id!r} is a module, not a value", node, mod.path)
+        if isinstance(node, ast.Name):  # an enum of this module or imported by name, used as `Enum.Variant`
+            if mod.defs.get(node.id) == "enum":
+                node.id = mod.mangled(node.id)
+            elif node.id in mod.froms and mod.froms[node.id][0].defs.get(mod.froms[node.id][1]) == "enum":
+                dep, orig = mod.froms[node.id]
+                node.id = self.export(dep, orig, node, mod, kind="enum")
+            return node
         for f in dataclasses.fields(node):
             if f.name in ast._ANNOTATIONS:
                 continue
@@ -338,9 +349,9 @@ class Linker:
             dep = mod.aliases.get(head)
             if dep is None:
                 raise err(f"unknown module {head!r} in type {t.name!r}", t, mod.path)
-            t.name = self.export(dep, name, t, mod, kind="struct")
-        elif mod.defs.get(t.name) == "struct":
+            t.name = self.export(dep, name, t, mod, kind=("struct", "enum"))
+        elif mod.defs.get(t.name) in ("struct", "enum"):
             t.name = mod.mangled(t.name)
         elif t.name in mod.froms:
             dep, orig = mod.froms[t.name]
-            t.name = self.export(dep, orig, t, mod, kind="struct")
+            t.name = self.export(dep, orig, t, mod, kind=("struct", "enum"))

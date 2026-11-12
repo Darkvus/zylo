@@ -231,6 +231,10 @@ class Parser:
                     return self.parse_fn(extern=True)
                 case "struct":
                     return self.parse_struct()
+                case "enum":
+                    return self.parse_enum()
+                case "match":
+                    return self.parse_match()
                 case "import":
                     return self.parse_import()
                 case "from":
@@ -440,6 +444,80 @@ class Parser:
                 raise ZyloError("a struct body can only contain fields (`name: type`) and methods (`fn`)", tok.line, tok.col)
         self.expect("DEDENT")
         return ast.StructDef(name.value, fields, methods, line=name.line, col=name.col)
+
+    def parse_enum(self) -> ast.EnumDef:
+        """Parse an enum: one variant per line, `Name` or `Name(type, ...)`.
+
+        Raises:
+            ZyloError: If the body is missing, empty, or contains anything but variants.
+        """
+        self.advance()
+        name = self.expect("IDENT")
+        self.expect("OP", ":")
+        self.expect("NEWLINE")
+        if not self.check("INDENT"):
+            raise ZyloError("expected an indented block", self.cur.line, self.cur.col)
+        self.advance()
+        variants: list[ast.Variant] = []
+        while not self.check("DEDENT"):
+            tok = self.cur
+            if tok.kind == "EOF":
+                raise ZyloError("unclosed block", tok.line, tok.col)
+            if tok.kind != "IDENT":
+                raise ZyloError("an enum body can only contain variants (`Name` or `Name(type, ...)`)", tok.line, tok.col)
+            self.advance()
+            fields: list[ast.TypeRef] = []
+            if self.match("OP", "("):
+                fields.append(self.parse_type())
+                while self.match("OP", ","):
+                    fields.append(self.parse_type())
+                self.expect("OP", ")")
+            self.expect("NEWLINE")
+            variants.append(ast.Variant(tok.value, fields, line=tok.line, col=tok.col))
+        self.expect("DEDENT")
+        return ast.EnumDef(name.value, variants, line=name.line, col=name.col)
+
+    def parse_match(self) -> ast.Match:
+        """Parse `match value:` and its arms.
+
+        Raises:
+            ZyloError: If the body is missing, empty, or an arm is malformed.
+        """
+        kw = self.advance()
+        value = self.parse_expr()
+        self.expect("OP", ":")
+        self.expect("NEWLINE")
+        if not self.check("INDENT"):
+            raise ZyloError("expected an indented block", self.cur.line, self.cur.col)
+        self.advance()
+        arms: list[ast.MatchArm] = []
+        while not self.check("DEDENT"):
+            if self.check("EOF"):
+                raise ZyloError("unclosed block", self.cur.line, self.cur.col)
+            arms.append(self.parse_arm())
+        self.expect("DEDENT")
+        if not arms:
+            raise ZyloError("a `match` needs at least one arm", kw.line, kw.col)
+        return ast.Match(value, arms, line=kw.line, col=kw.col)
+
+    def parse_arm(self) -> ast.MatchArm:
+        """Parse one arm: `_:`, `Enum.Variant:` or `Enum.Variant(a, b):`, then its block."""
+        first = self.expect("IDENT")
+        if first.value == "_":
+            return ast.MatchArm(None, "_", [], self.parse_block(), line=first.line, col=first.col)
+        parts = [first.value]
+        while self.match("OP", "."):
+            parts.append(self.expect("IDENT").value)
+        if len(parts) < 2:
+            raise ZyloError(f"write the enum before the variant: `Enum.{first.value}`", first.line, first.col)
+        binds: list[str] = []
+        if self.match("OP", "("):
+            binds.append(self.expect("IDENT").value)
+            while self.match("OP", ","):
+                binds.append(self.expect("IDENT").value)
+            self.expect("OP", ")")
+        typ = ast.TypeRef(".".join(parts[:-1]), [], line=first.line, col=first.col)
+        return ast.MatchArm(typ, parts[-1], binds, self.parse_block(), line=first.line, col=first.col)
 
     def parse_param(self) -> ast.Param:
         """Parse one `name: type` parameter.

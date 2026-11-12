@@ -2,6 +2,6 @@ fn main() -> int:
     return 5
 
 type = 1
-match = 2
-loop = type + match
+impl = 2
+loop = type + impl
 print(loop + main())

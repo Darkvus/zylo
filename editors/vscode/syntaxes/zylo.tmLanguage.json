@@ -249,7 +249,7 @@
       "patterns": [
         {
           "name": "keyword.control.zylo",
-          "match": "\\b(as|break|continue|elif|else|for|from|if|import|in|return|while)\\b"
+          "match": "\\b(as|break|continue|elif|else|for|from|if|import|in|match|return|while)\\b"
         },
         {
           "name": "keyword.operator.word.zylo",
@@ -257,7 +257,7 @@
         },
         {
           "name": "storage.type.zylo",
-          "match": "\\b(extern|fn|struct)\\b"
+          "match": "\\b(enum|extern|fn|struct)\\b"
         }
       ]
     },

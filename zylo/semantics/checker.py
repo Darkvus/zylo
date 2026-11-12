@@ -25,6 +25,7 @@ from zylo.domain.types import (
     STR,
     UNIT,
     DictT,
+    EnumT,
     FnT,
     ListT,
     OptionT,
@@ -118,6 +119,20 @@ class StructInfo:
     methods: dict[str, FnT] = field(default_factory=dict)
 
 
+@dataclass
+class EnumInfo:
+    """What the checker knows about one enum.
+
+    Attributes:
+        name: The enum's name.
+        defn: Its definition node.
+        variants: The types of each variant's data, by variant name, in declaration order.
+    """
+    name: str
+    defn: ast.EnumDef
+    variants: dict[str, list[Type]] = field(default_factory=dict)
+
+
 class Checker:
     """Type checker for one program.
 
@@ -139,6 +154,7 @@ class Checker:
         """
         self.fns: dict[str, FnT] = {}
         self.structs: dict[str, StructInfo] = {}
+        self.enums: dict[str, EnumInfo] = {}
         self.mutating: set[tuple[str, str]] = set(mutating or ())  # (struct, method) pairs that modify self
         self.scopes = Scopes()
         self.ret: Type | None = None  # return type of the current function (None = top level)
@@ -160,11 +176,16 @@ class Checker:
         """
         try:
             defs = [s for s in prog.body if isinstance(s, ast.StructDef)]
+            enums = [s for s in prog.body if isinstance(s, ast.EnumDef)]
             for d in defs:
                 self.register_struct(d)
+            for en in enums:
+                self.register_enum(en)
             for d in defs:
                 self.resolve_struct(d)
-            self.check_cycles(defs)
+            for en in enums:
+                self.resolve_enum(en)
+            self.check_cycles(defs, enums)
             for s in prog.body:  # function signatures, so they can be used before their definition
                 if isinstance(s, ast.FnDef):
                     self.declare_fn(s)
@@ -179,6 +200,8 @@ class Checker:
                     self.check_extern(s)
                 elif isinstance(s, ast.FnDef):
                     self.check_fn(s)
+                elif isinstance(s, ast.EnumDef):
+                    pass  # checked with the declarations
                 elif isinstance(s, ast.StructDef):
                     for m in s.methods:
                         try:
@@ -221,14 +244,16 @@ class Checker:
             return PRIMS[t.name]
         if t.name in self.structs:
             return StructT(t.name)
+        if t.name in self.enums:
+            return EnumT(t.name)
         raise err(f"unknown type {t.name!r}", t)
 
     # ---- structs ----------------------------------------------------------------------
 
     def register_struct(self, d: ast.StructDef) -> None:
         """Record a struct's name, rejecting duplicates and reserved names."""
-        if d.name in self.structs:
-            raise err(f"struct {d.name!r} is already defined", d)
+        if d.name in self.structs or d.name in self.enums:
+            raise err(f"struct {d.name!r} is already defined" if d.name in self.structs else f"{d.name!r} is already an enum", d)
         if d.name in BUILTINS or d.name in PRIMS or d.name in ("list", "unit", "Result"):
             raise err(f"{d.name!r} is a reserved name", d)
         self.structs[d.name] = StructInfo(d.name, d)
@@ -243,22 +268,130 @@ class Checker:
                 raise err(f"duplicate field {f.name!r} in {d.name!r}", f)
             f.ty = info.fields[f.name] = self.resolve(f.type)
 
-    def check_cycles(self, defs: list[ast.StructDef]) -> None:
-        """Reject structs that contain themselves directly or through other structs (lists are fine)."""
+    def check_cycles(self, defs: list[ast.StructDef], enums: list[ast.EnumDef]) -> None:
+        """Reject structs and enums that contain themselves directly or through others (lists are fine)."""
+        def inside(t: Type) -> list[str]:  # the structs and enums stored by value in `t`
+            if isinstance(t, (StructT, EnumT)):
+                return [t.name]
+            if isinstance(t, OptionT):
+                return inside(t.inner)
+            if isinstance(t, ResultT):
+                return inside(t.ok) + inside(t.err)
+            if isinstance(t, TupleT):
+                return [n for x in t.elems for n in inside(x)]
+            return []
+
+        def parts(name: str) -> list[str]:
+            if name in self.structs:
+                return [n for t in self.structs[name].fields.values() for n in inside(t)]
+            return [n for ts in self.enums[name].variants.values() for t in ts for n in inside(t)]
+
         def reaches(start: str, cur: str, seen: set[str]) -> bool:
-            for t in self.structs[cur].fields.values():
-                if isinstance(t, StructT):
-                    if t.name == start:
+            for n in parts(cur):
+                if n == start:
+                    return True
+                if n not in seen:
+                    seen.add(n)
+                    if reaches(start, n, seen):
                         return True
-                    if t.name not in seen:
-                        seen.add(t.name)
-                        if reaches(start, t.name, seen):
-                            return True
             return False
 
-        for d in defs:
+        for d in [*defs, *enums]:
             if reaches(d.name, d.name, set()):
-                raise err(f"struct {d.name!r} contains itself (directly or indirectly); use a list", d)
+                kind = "struct" if isinstance(d, ast.StructDef) else "enum"
+                raise err(f"{kind} {d.name!r} contains itself (directly or indirectly); use a list", d)
+
+    # ---- enums -----------------------------------------------------------------------
+
+    def register_enum(self, d: ast.EnumDef) -> None:
+        """Record an enum's name, rejecting duplicates and reserved names."""
+        if d.name in self.structs or d.name in self.enums:
+            raise err(f"enum {d.name!r} is already defined" if d.name in self.enums else f"{d.name!r} is already a struct", d)
+        if d.name in BUILTINS or d.name in PRIMS or d.name in ("list", "unit", "Result"):
+            raise err(f"{d.name!r} is a reserved name", d)
+        self.enums[d.name] = EnumInfo(d.name, d)
+
+    def resolve_enum(self, d: ast.EnumDef) -> None:
+        """Resolve the data types of an enum's variants, rejecting empty enums and duplicate variants."""
+        info = self.enums[d.name]
+        if not d.variants:
+            raise err(f"enum {d.name!r} needs at least one variant", d)
+        for v in d.variants:
+            if v.name in info.variants:
+                raise err(f"duplicate variant {v.name!r} in {d.name!r}", v)
+            v.tys = info.variants[v.name] = [self.resolve(t) for t in v.fields]
+
+    def variant_of(self, e: ast.Expr) -> EnumInfo | None:
+        """The enum a `Name` refers to when it is used as `Enum.Variant`, or None when it is a variable or not an enum."""
+        if isinstance(e, ast.Name) and e.id in self.enums and self.scopes.lookup(e.id) is None:
+            return self.enums[e.id]
+        return None
+
+    def variant_ctor(self, e: ast.Attr | ast.MethodCall, info: EnumInfo, name: str, args: list[ast.Expr] | None) -> Type:
+        """Type `Enum.Variant` (no data) or `Enum.Variant(args)`."""
+        tys = info.variants.get(name)
+        if tys is None:
+            raise err(f"enum {info.name!r} has no variant {name!r} (has: {', '.join(info.variants)})", e)
+        if args is None and tys:
+            raise err(f"variant {info.name}.{name} carries data; write {info.name}.{name}({', '.join(str(t) for t in tys)})", e)
+        if args is not None and not tys:
+            raise err(f"variant {info.name}.{name} carries no data; write {info.name}.{name} without parentheses", e)
+        if args is not None:
+            self.check_args(e, f"{info.name}.{name}", args, FnT(tuple(tys), EnumT(info.name)))
+        e.variant = (info.name, name)
+        return EnumT(info.name)
+
+    def match_stmt(self, s: ast.Match) -> None:
+        """Check a `match`: every arm names a variant of the same enum, binds its data, and together they cover the enum."""
+        t = self.expr(s.value)
+        if not isinstance(t, EnumT):
+            hint = " (use `is some` / `is ok` for Option and Result)" if isinstance(t, (OptionT, ResultT)) else ""
+            raise err(f"`match` needs an enum value, not {t}{hint}", s.value)
+        info = self.enums[t.name]
+        s.enum = t.name
+        seen: set[str] = set()
+        wildcard = False
+        for arm in s.arms:
+            try:
+                if wildcard:
+                    raise err("this arm can never run: `_` already covers every variant", arm)
+                if arm.type is None:
+                    wildcard = True
+                    arm.vars = []
+                else:
+                    self.check_arm(arm, t, info, seen)
+                    seen.add(arm.variant)
+            except ZyloError as ex:
+                self.errors.append(ex)
+        missing = [v for v in info.variants if v not in seen]
+        if wildcard and not missing:
+            raise err("the `_` arm can never run: every variant is already matched", s.arms[-1])
+        if missing and not wildcard:
+            raise err(f"`match` on {t} does not cover {', '.join(f'{t}.{v}' for v in missing)}; add arms or a final `_` arm", s)
+
+    def check_arm(self, arm: ast.MatchArm, t: EnumT, info: EnumInfo, seen: set[str]) -> None:
+        """Check one `Enum.Variant(a, b):` arm and its body."""
+        named = self.resolve(arm.type)
+        if named != t:
+            raise err(f"this `match` is on {t}, not {named}", arm)
+        tys = info.variants.get(arm.variant)
+        if tys is None:
+            raise err(f"enum {t} has no variant {arm.variant!r} (has: {', '.join(info.variants)})", arm)
+        if arm.variant in seen:
+            raise err(f"variant {t}.{arm.variant} is matched twice", arm)
+        if len(arm.binds) != len(tys):
+            want = f"{len(tys)} name(s)" if tys else "no names"
+            raise err(f"{t}.{arm.variant} carries {len(tys)} value(s): write {want} in the pattern", arm)
+        names = [b for b in arm.binds if b != "_"]
+        if len(set(names)) != len(names):
+            raise err("a pattern cannot bind the same name twice", arm)
+        self.scopes.push()
+        try:
+            arm.vars = [None if b == "_" else self.scopes.declare(b, ty) for b, ty in zip(arm.binds, tys)]
+            for st in arm.body:
+                self.stmt(st)
+        finally:
+            self.scopes.pop()
 
     def declare_methods(self, d: ast.StructDef) -> None:
         """Record the signatures of a struct's methods, rejecting duplicates and clashes with fields."""
@@ -453,6 +586,10 @@ class Checker:
                 raise err("functions can only be defined at the top level", s)
             case ast.StructDef():
                 raise err("structs can only be defined at the top level", s)
+            case ast.EnumDef():
+                raise err("enums can only be defined at the top level", s)
+            case ast.Match():
+                self.match_stmt(s)
             case ast.Import() | ast.FromImport():
                 raise err("imports can only appear at the top level", s)
 
@@ -659,6 +796,8 @@ class Checker:
                 if info is None:
                     if id in self.structs:
                         raise err(f"{id!r} is a struct; build it with parentheses: {id}(...)", e)
+                    if id in self.enums:
+                        raise err(f"{id!r} is an enum; name one of its variants: {id}.Variant", e)
                     if id in self.fns or id in BUILTINS:
                         raise err(f"{id!r} is a function; call it with parentheses", e)
                     if id in self.poisoned:
@@ -845,7 +984,10 @@ class Checker:
         return self.structs[t.name]
 
     def attr(self, e: ast.Attr, v: ast.Expr, name: str) -> Type:
-        """Type a field access `value.name`."""
+        """Type a field access `value.name`, or a variant without data `Enum.Variant`."""
+        enum = self.variant_of(v)
+        if enum:
+            return self.variant_ctor(e, enum, name, None)
         t = self.expr(v)
         info = self.struct_of(t, e, "fields")
         ft = info.fields.get(name)
@@ -1066,7 +1208,10 @@ class Checker:
         raise err(f"{rt} has no method {e.name!r} (available: unwrap, unwrap_or)", e)
 
     def method_call(self, e: ast.MethodCall) -> Type:
-        """Type a method call on a struct, a string, a list, a dict, a set, an Option or a Result."""
+        """Type a method call on a struct, a string, a list, a dict, a set, an Option or a Result, or `Enum.Variant(...)`."""
+        enum = self.variant_of(e.value)
+        if enum:
+            return self.variant_ctor(e, enum, e.name, e.args)
         rt = self.expr(e.value)
         if isinstance(rt, (OptionT, ResultT)):
             return self.builtin_method(e, rt)
@@ -1311,6 +1456,8 @@ def always_returns(body: list[ast.Stmt]) -> bool:
         return True
     if isinstance(last, ast.If):
         return always_returns(last.then) and always_returns(last.else_)
+    if isinstance(last, ast.Match):
+        return all(always_returns(a.body) for a in last.arms)
     return False
 
 
@@ -1325,6 +1472,8 @@ def exits(body: list[ast.Stmt]) -> bool:
         return True
     if isinstance(last, ast.If):
         return exits(last.then) and exits(last.else_)
+    if isinstance(last, ast.Match):
+        return all(exits(a.body) for a in last.arms)
     return False
 
 

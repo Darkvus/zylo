@@ -21,6 +21,7 @@ from zylo.domain.types import (
     STR,
     UNIT,
     DictT,
+    EnumT,
     ListT,
     OptionT,
     ResultT,
@@ -211,7 +212,7 @@ def rust_type(t: Type) -> str:
         return "()"
     if isinstance(t, ListT):
         return f"Vec<{rust_type(t.elem)}>"
-    if isinstance(t, StructT):
+    if isinstance(t, (StructT, EnumT)):
         return tname(t.name)
     if isinstance(t, DictT):
         return f"BTreeMap<{rust_type(t.key)}, {rust_type(t.val)}>"
@@ -291,7 +292,11 @@ class Gen:
         self.out.append(PRELUDE)
         structs = [s for s in prog.body if isinstance(s, ast.StructDef)]
         fns = [s for s in prog.body if isinstance(s, ast.FnDef) and not isinstance(s, ast.ExternFn)]
-        rest = [s for s in prog.body if not isinstance(s, (ast.FnDef, ast.StructDef))]
+        enums = [s for s in prog.body if isinstance(s, ast.EnumDef)]
+        rest = [s for s in prog.body if not isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef))]
+        for ed in enums:
+            self.enum(ed)
+            self.out.append("")
         for sd in structs:
             self.struct(sd)
             self.out.append("")
@@ -302,6 +307,33 @@ class Gen:
         self.block(rest)
         self.line("}")
         return "\n".join(self.out) + "\n"
+
+    def enum(self, ed: ast.EnumDef) -> None:
+        """Emit an enum with its variants; `Debug` prints a value like `Circle(2.0)`."""
+        self.line("#[derive(Clone, PartialEq, Debug)]")
+        self.line(f"enum {tname(ed.name)} {{")
+        for v in ed.variants:
+            data = f"({', '.join(rust_type(t) for t in v.tys)})" if v.tys else ""
+            self.line(f"    {v.name}{data},")
+        self.line("}")
+
+    def match(self, s: ast.Match) -> None:
+        """Emit a `match` as a Rust `match` on an owned copy of the value, binding each variant's data by value."""
+        self.line(f"match {emit(s.value)} {{")
+        self.depth += 1
+        for arm in s.arms:
+            if arm.type is None:
+                head = "_"
+            elif not arm.binds:
+                head = f"{tname(s.enum)}::{arm.variant}"
+            else:
+                binds = ", ".join("_" if v is None else f"{'mut ' if v.mutable else ''}{ident(v.name)}" for v in arm.vars)
+                head = f"{tname(s.enum)}::{arm.variant}({binds})"
+            self.line(f"{head} => {{")
+            self.block(arm.body)
+            self.line("}")
+        self.depth -= 1
+        self.line("}")
 
     def struct(self, sd: ast.StructDef) -> None:
         """Emit a struct, its `Debug` implementation and its methods."""
@@ -371,6 +403,8 @@ class Gen:
                 self.line("}")
             case ast.For():
                 self.for_(s)
+            case ast.Match():
+                self.match(s)
             case ast.Return(value):
                 self.line("return;" if value is None else f"return {emit(value)};")
             case ast.Break():
@@ -509,7 +543,7 @@ class Gen:
 def emit(e: ast.Expr) -> str:
     """Expression as an owned value (clones non-Copy values read from a variable)."""
     code = emit_ref(e)
-    if isinstance(e, (ast.Name, ast.Index, ast.Attr)) and not is_copy(e.ty):
+    if isinstance(e, (ast.Name, ast.Index, ast.Attr)) and not is_copy(e.ty) and not getattr(e, "variant", None):
         return f"{code}.clone()"
     return code
 
@@ -588,6 +622,8 @@ def emit_ref(e: ast.Expr) -> str:
         case ast.Index(v, i):
             base = emit_ref(v)
             return f"{base}[__zy_i({emit_ref(i)}, {base}.len())]" if is_place(v) else f"{base}[({emit_ref(i)}) as usize]"
+        case ast.Attr() if e.variant:
+            return f"{tname(e.variant[0])}::{e.variant[1]}"
         case ast.Attr(v, name):
             return f"{emit_ref(v)}.{ident(name)}"
         case ast.NoneLit():
@@ -598,6 +634,8 @@ def emit_ref(e: ast.Expr) -> str:
             return f"{emit_ref(v)}.is_{kind}()"
         case ast.Try(v):
             return f"({emit(v)}?)"
+        case ast.MethodCall() if e.variant:
+            return f"{tname(e.variant[0])}::{e.variant[1]}({', '.join(emit(a) for a in e.args)})"
         case ast.MethodCall(v, name, args) if isinstance(v.ty, (OptionT, ResultT)):
             return f"{emit(v)}.{name}({', '.join(emit(a) for a in args)})"
         case ast.MethodCall(v, name, args) if v.ty == STR or isinstance(v.ty, (ListT, DictT, SetT)):
@@ -779,7 +817,7 @@ def call(e: ast.Call) -> str:
         case "print":
             if not args:
                 return 'println!()'
-            fmts = ["{:?}" if a.ty == FLOAT or isinstance(a.ty, (ListT, StructT, OptionT, ResultT, TupleT, DictT, SetT)) else "{}"
+            fmts = ["{:?}" if a.ty == FLOAT or isinstance(a.ty, (ListT, StructT, EnumT, OptionT, ResultT, TupleT, DictT, SetT)) else "{}"
                     for a in args]
             return f'println!("{" ".join(fmts)}", {", ".join(emit_ref(a) for a in args)})'
         case "len":
@@ -808,7 +846,7 @@ def call(e: ast.Call) -> str:
         case "eprint":
             if not args:
                 return 'eprintln!()'
-            fmts = ["{:?}" if a.ty == FLOAT or isinstance(a.ty, (ListT, StructT, OptionT, ResultT, TupleT, DictT, SetT)) else "{}"
+            fmts = ["{:?}" if a.ty == FLOAT or isinstance(a.ty, (ListT, StructT, EnumT, OptionT, ResultT, TupleT, DictT, SetT)) else "{}"
                     for a in args]
             return f'eprintln!("{" ".join(fmts)}", {", ".join(emit_ref(a) for a in args)})'
         case "sum":

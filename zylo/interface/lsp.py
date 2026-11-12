@@ -21,8 +21,8 @@ from zylo.application.format import format_text
 from zylo.domain.errors import ZyloError
 
 ERROR = 1  # DiagnosticSeverity
-SYMBOL_KINDS = {"function": 12, "struct": 23, "method": 6, "field": 8, "variable": 13}
-COMPLETION_KINDS = {"keyword": 14, "function": 3, "struct": 22, "variable": 6}
+SYMBOL_KINDS = {"function": 12, "struct": 23, "enum": 10, "method": 6, "field": 8, "variant": 22, "variable": 13}
+COMPLETION_KINDS = {"keyword": 14, "function": 3, "struct": 22, "enum": 13, "variable": 6}
 
 
 def uri_to_path(uri: str) -> Path:

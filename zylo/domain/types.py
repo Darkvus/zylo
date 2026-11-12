@@ -50,6 +50,20 @@ class StructT:
 
 
 @dataclass(frozen=True)
+class EnumT:
+    """The type of a user-defined enum.
+
+    Attributes:
+        name: The enum's name (mangled `module·Name` when it comes from another module).
+    """
+    name: str
+
+    def __str__(self) -> str:
+        """Return the enum's name."""
+        return self.name
+
+
+@dataclass(frozen=True)
 class OptionT:
     """The type `T?`: either a `T` or nothing.
 
@@ -145,7 +159,7 @@ BOOL = Prim("bool")
 STR = Prim("str")
 UNIT = Prim("unit")
 
-Type = Prim | ListT | FnT | StructT | OptionT | ResultT | TupleT | DictT | SetT
+Type = Prim | ListT | FnT | StructT | EnumT | OptionT | ResultT | TupleT | DictT | SetT
 
 PRIMS = {"int": INT, "float": FLOAT, "bool": BOOL, "str": STR}
 

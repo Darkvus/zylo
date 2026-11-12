@@ -156,9 +156,9 @@ def test_module_not_found(tmp_path):
 
 def test_name_not_found_in_module(tmp_path):
     fails(tmp_path, {"geometry.zy": GEOMETRY, "main.zy": "import geometry\nx = geometry.volume(1.0)\n"},
-          "module 'geometry' has no function or struct 'volume'")
+          "module 'geometry' has no function, struct or enum 'volume'")
     fails(tmp_path, {"geometry.zy": GEOMETRY, "main.zy": "from geometry import volume\n"},
-          "module 'geometry' has no function or struct 'volume'")
+          "module 'geometry' has no function, struct or enum 'volume'")
 
 
 def test_private_names_are_not_importable(tmp_path):

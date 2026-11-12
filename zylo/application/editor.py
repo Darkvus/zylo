@@ -18,7 +18,7 @@ class Symbol:
 
     Attributes:
         name: Its name.
-        kind: "function", "struct", "method", "field" or "variable".
+        kind: "function", "struct", "enum", "method", "field", "variant" or "variable".
         line: 1-based line where it starts.
         col: 1-based column of its name.
         end_line: 1-based last line it occupies.
@@ -41,7 +41,7 @@ class Completion:
 
     Attributes:
         label: The text to insert.
-        kind: "keyword", "function", "struct" or "variable".
+        kind: "keyword", "function", "struct", "enum" or "variable".
         detail: A short description.
     """
 
@@ -68,7 +68,7 @@ def _name_col(line_text: str, name: str, fallback: int) -> int:
 
 
 def document_symbols(source: str) -> list[Symbol]:
-    """List the functions, structs and top-level variables of a document.
+    """List the functions, structs, enums and top-level variables of a document.
 
     The document may have syntax errors: whatever parsed is listed.
 
@@ -81,7 +81,7 @@ def document_symbols(source: str) -> list[Symbol]:
     program, _ = parse_collect(source)
     lines = source.splitlines()
     total = max(len(lines), 1)
-    items = [s for s in program.body if isinstance(s, (ast.FnDef, ast.StructDef)) or
+    items = [s for s in program.body if isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef)) or
              (isinstance(s, ast.Assign) and isinstance(s.target, ast.Name))]
     starts = [s.line for s in items]
 
@@ -104,6 +104,11 @@ def document_symbols(source: str) -> list[Symbol]:
                 nxt = s.methods[j + 1].line - 1 if j + 1 < len(s.methods) else sym.end_line
                 sym.children.append(Symbol(m.name, "method", m.line, _name_col(at(m.line), m.name, m.col), max(nxt, m.line),
                                            _signature(m)))
+        elif isinstance(s, ast.EnumDef):
+            sym = Symbol(s.name, "enum", s.line, _name_col(at(s.line), s.name, s.col), end_of(i))
+            sym.children += [Symbol(v.name, "variant", v.line, _name_col(at(v.line), v.name, v.col), v.line,
+                                    f"({', '.join(_type_text(t) for t in v.fields)})" if v.fields else "")
+                             for v in s.variants]
         elif isinstance(s, ast.FnDef):
             kind_line = at(s.line)
             sym = Symbol(s.name, "function", s.line, _name_col(kind_line, s.name, s.col), end_of(i), _signature(s))
@@ -126,7 +131,7 @@ def completions(source: str) -> list[Completion]:
     items += [Completion(b, "function", "built-in") for b in sorted(BUILTINS)]
     seen = {c.label for c in items}
     for sym in document_symbols(source):
-        if sym.name not in seen and sym.kind in ("function", "struct", "variable"):
+        if sym.name not in seen and sym.kind in ("function", "struct", "enum", "variable"):
             items.append(Completion(sym.name, sym.kind, sym.detail))
             seen.add(sym.name)
     return items

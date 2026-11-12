@@ -15,9 +15,10 @@ and is built vertically (lexer → parser → checker → codegen → tests).
 | **Standard library** | A minimal bundled library (`math`, `os`, text helpers) | |
 | **v0.7 Rust interop** | `extern fn` with Rust paths and templates, crates from `[rust-dependencies]` built with Cargo, and a trust rule for community packages | done |
 | **v0.8 Tooling** | `zylo fmt`, every error in one run, a language server (`zylo lsp`) and a VS Code extension with a generated grammar | done |
+| **v0.9 Enums** | `enum` with data per variant, exhaustive `match`, enums across modules and in editor symbols | done |
 | **Community** | Documentation translations (the docs are English-only for now) and localized diagnostics | |
 
-Later: generics, closures, enums with data, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
+Later: generics, closures, methods on enums, matching on values and `Option`/`Result`, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
 
 ## Open questions
 
