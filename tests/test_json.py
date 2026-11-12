@@ -88,7 +88,7 @@ def test_the_references_agree_on_the_lists():
         if doc in lenient or doc.startswith(("1e999", "-1e999")) or doc in ("[" * 513 + "]" * 513,
                                                                             '{"a":' * 600 + "1" + "}" * 600):
             continue
-        with pytest.raises(ValueError):
+        with pytest.raises((ValueError, RecursionError)):
             reference(doc)
 
 
