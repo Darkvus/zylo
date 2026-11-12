@@ -12,7 +12,7 @@ and is built vertically (lexer → parser → checker → codegen → tests).
 | **v0.6 Memory and performance** | Infer borrows: read-only parameters are lent instead of cloned, and loops over read-only lists do not copy them | done |
 | **Installers and releases** | `install.sh` for Linux/macOS, a Windows installer, standalone binaries and a wheel built by CI on every merge to `main` | done |
 | **v0.3.0 Modules and packages** | `import`, virtual environments (`zylo venv`), git packages with a lock file (`zylo add/install/update/remove/list`), see [docs/packages.md](docs/packages.md) | done |
-| **v0.11 Standard library** | `std.*` modules bundled with the compiler: `std.json` (parse, stringify, pretty, accessors), `std.math`, `std.text`, `std.os`; see [docs/stdlib.md](docs/stdlib.md) | done |
+| **v0.12 Standard library** | `std.*` modules bundled with the compiler: `std.json` (parse, stringify, pretty, accessors), `std.math`, `std.text`, `std.os`; see [docs/stdlib.md](docs/stdlib.md) | done |
 | **v0.7 Rust interop** | `extern fn` with Rust paths and templates, crates from `[rust-dependencies]` built with Cargo, and a trust rule for community packages | done |
 | **v0.8 Tooling** | `zylo fmt`, every error in one run, a language server (`zylo lsp`) and a VS Code extension with a generated grammar | done |
 | **v0.9 Enums** | `enum` with data per variant, exhaustive `match`, enums across modules and in editor symbols | done |
