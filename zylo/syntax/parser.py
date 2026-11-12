@@ -7,6 +7,7 @@ precedence climbing. It knows the grammar only: whether names and types exist is
 import dataclasses
 
 from zylo.domain import ast
+from zylo.domain.builtins import TYPE_ARG_BUILTINS
 from zylo.domain.errors import ZyloError
 from zylo.syntax.lexer import Token, tokenize, unescape
 
@@ -477,11 +478,20 @@ class Parser:
         self.advance()
         fields: list[ast.Field] = []
         methods: list[ast.FnDef] = []
+        doc: tuple[str, int] | None = None
         while not self.check("DEDENT"):
             tok = self.cur
             if tok.kind == "EOF":
                 raise ZyloError("unclosed block", tok.line, tok.col)
-            if self.check("KW", "fn"):
+            if tok.kind == "STR":
+                target = fields[-1] if fields and not methods else None
+                if target is not None and target.doc is None:
+                    target.doc, target.doc_line = self.parse_doc()
+                elif not fields and not methods and doc is None:
+                    doc = self.parse_doc()
+                else:
+                    raise ZyloError("a description goes first in the struct, or right after a field", tok.line, tok.col)
+            elif self.check("KW", "fn"):
                 methods.append(self.parse_fn(in_struct=True))
             elif tok.kind == "IDENT" and self.peek().kind == "OP" and self.peek().value == ":":
                 self.advance()
@@ -493,7 +503,20 @@ class Parser:
             else:
                 raise ZyloError("a struct body can only contain fields (`name: type`) and methods (`fn`)", tok.line, tok.col)
         self.expect("DEDENT")
-        return ast.StructDef(name.value, fields, methods, line=name.line, col=name.col)
+        d = ast.StructDef(name.value, fields, methods, line=name.line, col=name.col)
+        if doc:
+            d.doc, d.doc_line = doc
+        return d
+
+    def parse_doc(self) -> tuple[str, int]:
+        """Parse a description: a string literal alone on its line, in a struct or enum body.
+
+        Returns:
+            The text and its line.
+        """
+        tok = self.advance()
+        self.expect("NEWLINE")
+        return tok.value, tok.line
 
     def parse_enum(self) -> ast.EnumDef:
         """Parse an enum: one variant per line, `Name` or `Name(type, ...)`, and methods (`fn`).
@@ -510,10 +533,20 @@ class Parser:
         self.advance()
         variants: list[ast.Variant] = []
         methods: list[ast.FnDef] = []
+        doc: tuple[str, int] | None = None
         while not self.check("DEDENT"):
             tok = self.cur
             if tok.kind == "EOF":
                 raise ZyloError("unclosed block", tok.line, tok.col)
+            if tok.kind == "STR":
+                target = variants[-1] if variants and not methods else None
+                if target is not None and target.doc is None:
+                    target.doc, target.doc_line = self.parse_doc()
+                elif not variants and not methods and doc is None:
+                    doc = self.parse_doc()
+                else:
+                    raise ZyloError("a description goes first in the enum, or right after a variant", tok.line, tok.col)
+                continue
             if self.check("KW", "fn"):
                 methods.append(self.parse_fn(in_struct=True))
                 continue
@@ -529,7 +562,10 @@ class Parser:
             self.expect("NEWLINE")
             variants.append(ast.Variant(tok.value, fields, line=tok.line, col=tok.col))
         self.expect("DEDENT")
-        return ast.EnumDef(name.value, variants, methods=methods, line=name.line, col=name.col)
+        d = ast.EnumDef(name.value, variants, methods=methods, line=name.line, col=name.col)
+        if doc:
+            d.doc, d.doc_line = doc
+        return d
 
     def parse_match(self) -> ast.Match:
         """Parse `match value:` and its arms.
@@ -976,8 +1012,21 @@ class Parser:
 
     def parse_call(self, name: Token) -> ast.Call:
         """Parse the arguments of a call to the function named by `name`."""
+        if name.value in TYPE_ARG_BUILTINS:  # `from_json(list[int], j)`: the first argument is a type
+            return self.parse_type_call(name)
         args, named = self.parse_args()
         return ast.Call(name.value, args, named=named, line=name.line, col=name.col)
+
+    def parse_type_call(self, name: Token) -> ast.Call:
+        """Parse the arguments of `from_json`, `json_schema` or `json_schema_defs`: a type, then ordinary arguments."""
+        self.expect("OP", "(")
+        args: list[ast.Expr] = [self.parse_type()]  # type: ignore[list-item]
+        while self.match("OP", ","):
+            if self.check("OP", ")"):
+                break
+            args.append(self.parse_expr())
+        self.expect("OP", ")")
+        return ast.Call(name.value, args, line=name.line, col=name.col)
 
 
 def parse_collect(src: str, file: str | None = None) -> tuple[ast.Program, list[ZyloError]]:

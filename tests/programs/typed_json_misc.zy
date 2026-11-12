@@ -1,0 +1,30 @@
+import std.json as json
+
+struct Req:
+    type: str
+    match_: int = 2
+
+    fn text(self) -> str:
+        return json.stringify(to_json(self))
+
+enum Ev:
+    A(Req)
+    B(list[Req], int?)
+
+    fn dump(self) -> str:
+        return json.stringify(to_json(self))
+
+r = Req("x")
+print(r.text())
+e = Ev.B([r, r], some(4))
+print(e.dump())
+xs = [r, r].map(fn(q: Req) => to_json(q))
+print(len(xs))
+print(from_json(Ev, to_json(e)) == ok(e))
+print(json.stringify(to_json(some(3))), json.stringify(to_json(none_int())))
+
+fn none_int() -> int?:
+    return none
+
+print(from_json(int?, json.Json.Null), from_json(str, json.Json.Num(1.0)))
+print(json.stringify(json_schema(Ev)))

@@ -640,6 +640,86 @@ value or the default.
 
 `print` shows these values as `Some(3)`, `None`, `Ok(18)` and `Err("message")`.
 
+## Typed JSON
+
+`to_json`, `from_json`, `json_schema` and `json_schema_defs` convert between your own types and the `Json` value of
+[`std.json`](stdlib.md#stdjson). Zylo has no generics, so they are compiler-known built-ins: the type is worked out at
+compile time and the compiler writes the conversion code for it (ordinary Zylo functions, one per type). `std.json` is
+loaded for you when a program uses them.
+
+```zylo
+import std.json as json
+
+enum Role:
+    Admin
+    Guest
+
+struct User:
+    "A registered user."
+    name: str
+    "Display name."
+    age: int
+    nickname: str?
+    role: Role = Role.Guest
+    tags: list[str] = []
+
+u = User("Ana", 31, none, Role.Admin, ["a", "b"])
+j = to_json(u)
+print(json.stringify(j))
+# {"age":31,"name":"Ana","nickname":null,"role":"Admin","tags":["a","b"]}
+
+back = from_json(User, j)                     # Result[User, str]
+print(back == ok(u))                          # true
+
+bad = json.parse('{"name": "Bo", "age": "x"}').unwrap()
+print(from_json(User, bad))                   # Err("$.age: expected int, got string")
+print(from_json(list[int], json.parse("[1, 2.5]").unwrap()))   # Err("$[1]: expected int, got 2.5 (not a whole number)")
+print(json.pretty(json_schema(User)))         # the JSON Schema of User
+```
+
+- `to_json(value) -> Json` works on `int`, `float`, `bool`, `str`, `list[T]`, `set[T]`, `tuple[...]`, `dict[str, T]` and
+  `dict[int, T]`, `T?`, structs and enums built from those, and on `Json` itself (kept as is). A `Result` or a function
+  type anywhere inside is a compile error that names the field.
+- `from_json(Type, j) -> Result[Type, str]` takes the type as its first argument, written like any type
+  (`from_json(list[User], j)`, `from_json(dict[str, int], j)`, `from_json(shapes.Point, j)`).
+- `json_schema(Type) -> Json` is the JSON Schema (draft 2020-12, as used by OpenAPI 3.1) of a type.
+  `json_schema_defs(Type) -> Json` is an object with the schema of every struct and enum that the type is, or
+  contains, keyed by name. A struct or enum nested in another schema is a `{"$ref": "#/components/schemas/Name"}`,
+  so `{"components": {"schemas": json_schema_defs(T)}}` is what an OpenAPI document needs.
+
+### How values are encoded
+
+| Zylo | JSON |
+|---|---|
+| `int`, `float` | number (an `int` is written as a float: integers beyond 2^53 lose precision) |
+| `bool`, `str` | boolean, string |
+| `list[T]`, `set[T]` | array (a set is written in sorted order) |
+| `tuple[A, B]` | array of exactly that many items |
+| `dict[str, T]` | object; `dict[int, T]` uses the decimal text of the key (`{"1": ...}`) |
+| `T?` | `null` for `none`, otherwise the value |
+| struct | object with one member per field, by field name; a `none` field is written as `null` |
+| enum with no data in any variant | the variant name as a string: `"Admin"` |
+| enum with data | object tagged by `type`: `{"type": "Circle", "value": 2.0}`; several values are `"values": [..]`; a variant without data is `{"type": "Empty"}` |
+
+The tagged form is what OpenAPI generators and most JSON libraries call a discriminated union, it is easy to
+describe with `oneOf`, and it reads back unambiguously.
+
+### Reading JSON back
+
+- Errors say where: `$.items[2].price: expected float, got string`. `$` is the root, `.name` a field,
+  `[2]` an array position and `["key"]` a dict key.
+- A missing field is an error (`$.name: missing required field`) unless the field has a default (the default is used)
+  or is an `Option` (`none`). `null` is accepted for an `Option` field only.
+- Unknown fields in an object are **ignored**: clients may send more than you read.
+- An `int` is read from a whole number that fits 64 bits (`3` and `3.0` are fine, `3.5` and `1e30` are errors).
+- A set with repeated items is read as the set of them.
+
+### Documenting types
+
+A string literal as the first line of a struct or enum is its description, and a string literal right after a field
+(or an enum variant) describes that field. They become `description` in the schema and nothing else; the formatter
+keeps them.
+
 ## Modules and packages
 
 A program can be split over several files, and use libraries written by others.
@@ -735,10 +815,11 @@ trust rules are in [rust-interop.md](rust-interop.md).
 | `read_file(p)`, `write_file(p, t)`, `append_file(p, t)`, `list_dir(p)`, `file_exists(p)` | files |
 | `env(name)`, `eprint(...)`, `time()`, `sleep(s)` | environment, standard error, clock |
 | `exit(code)` | stop the program with an exit code |
+| `to_json(x)`, `from_json(T, j)`, `json_schema(T)`, `json_schema_defs(T)` | typed JSON, see above |
 | `range(n)`, `range(a, b)` | only in a `for` |
 
 A program may define its own function with the name of any built-in above except the core ones
-(`print`, `len`, `int`, `float`, `str`, `append`, `range`, `exit`, `some`, `ok`, `err`).
+(`print`, `len`, `int`, `float`, `str`, `append`, `range`, `exit`, `some`, `ok`, `err`) and the typed JSON built-ins.
 
 ## Runtime errors
 

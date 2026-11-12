@@ -134,7 +134,7 @@ def _lex_line(line: str, i: int, lineno: int, out: list[Token]) -> None:
             i = j + 1
         elif c.isalpha() or c == "_":
             j = i
-            while j < n and (line[j].isalnum() or line[j] == "_"):
+            while j < n and (line[j].isalnum() or line[j] in "_\u00b7"):  # `·` joins the linker's `module·name`
                 j += 1
             word = line[i:j]
             out.append(Token("KW" if word in KEYWORDS else "IDENT", word, lineno, col))

@@ -28,7 +28,7 @@ the ones listed below. `tests/test_architecture.py` enforces it on every change.
 |---|---|---|
 | `domain` | nothing | The **ubiquitous language**: `ast` (syntax nodes), `types`, `builtins` (the catalog of built-in functions) and `errors`. Pure: no input or output. |
 | `syntax` | domain | The lexer, the parser (with error recovery) and the formatter: text ⇄ syntax tree. |
-| `semantics` | domain, syntax, packaging | The type `checker` and the module `linker`: what a program means. |
+| `semantics` | domain, syntax, packaging | The type `checker`, the module `linker` and `derive` (the typed JSON functions the checker generates per type): what a program means. |
 | `generation` | domain | The code generator: typed program → Rust source. |
 | `packaging` | domain | `manifest` (zylo.toml), `lock`, virtual `env`ironments, the `installer`, and `rust_deps` validation. |
 | `stdlib` (data) | nothing | Not a layer: the `.zy` modules shipped with the compiler (`import std.json`), found by `packaging/stdlib.py`. |
@@ -72,7 +72,8 @@ adapter's `fetch`. That keeps the installer testable without git and independent
 ## Where to put things
 
 - **A new built-in function**: add its name to `domain/builtins.py`, its typing rule in `semantics/checker.py` and its
-  Rust in `generation/codegen.py`.
+  Rust in `generation/codegen.py`. (`to_json`, `from_json`, `json_schema` and `json_schema_defs` are the exception: the checker
+  rewrites them into calls of Zylo functions it generates, see `semantics/derive.py`.)
 - **A new kind of syntax**: a node in `domain/ast.py`, parsing in `syntax/parser.py`, then the checker and the generator.
 - **A new command**: a use case in `application/`, then its arguments and output in `interface/cli.py`.
 - **A new external tool**: an adapter in `infrastructure/`, called by the application layer.

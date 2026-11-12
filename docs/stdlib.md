@@ -100,7 +100,10 @@ Decisions and limits:
 - **Speed.** The text is turned into code points once, so parsing is linear: about 0.1 s to parse, write and parse again
   an 0.8 MB document, and 0.04 s for a 1 MB string. (`s += x` appends in place, which keeps building long
   text linear.)
-- Mapping your own structs to and from `Json` is not here yet; use the accessors.
+- **Your own types.** The built-ins `to_json`, `from_json`, `json_schema` and `json_schema_defs` convert structs, enums
+  and collections to and from `Json` and describe them with JSON Schema; they are explained in the
+  [guide](guide.md#typed-json). They need no import of their own: using one loads this module. Their generated code
+  calls a few private functions of this module (names starting with `_`) for error messages and schema pieces.
 
 ## std.math
 

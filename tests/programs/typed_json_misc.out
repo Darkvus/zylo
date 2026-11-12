@@ -1,0 +1,7 @@
+{"match_":2,"type":"x"}
+{"type":"B","values":[[{"match_":2,"type":"x"},{"match_":2,"type":"x"}],4]}
+2
+true
+3 null
+Ok(None) Err("$: expected str, got number")
+{"oneOf":[{"properties":{"type":{"const":"A"},"value":{"$ref":"#/components/schemas/Req"}},"required":["type","value"],"type":"object"},{"properties":{"type":{"const":"B"},"values":{"maxItems":2,"minItems":2,"prefixItems":[{"items":{"$ref":"#/components/schemas/Req"},"type":"array"},{"type":["integer","null"]}],"type":"array"}},"required":["type","values"],"type":"object"}]}

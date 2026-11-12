@@ -1,0 +1,10 @@
+{"id":7,"items":[{"price":9.5,"qty":2,"sku":"a-1"},{"price":3.25,"qty":1,"sku":"b-2"}],"note":null,"status":{"type":"Shipped","value":"DHL"}}
+true
+ok {"id":1,"items":[{"price":2,"qty":1,"sku":"x"}],"note":null,"status":{"type":"Open"}}
+ok {"id":2,"items":[],"note":"hi","status":{"type":"Cancelled","values":["late",3]}}
+error $.items[1].price: expected float, got string
+error $.id: expected int, got 4.5 (not a whole number)
+error $.id: missing required field
+error $.status.type: unknown variant "Lost", expected one of "Open", "Shipped", "Cancelled"
+{"items":{"$ref":"#/components/schemas/Item"},"type":"array"}
+{"Item":{"properties":{"price":{"type":"number"},"qty":{"default":1,"type":"integer"},"sku":{"type":"string"}},"required":["sku","price"],"type":"object"},"Order":{"description":"A customer order.","properties":{"id":{"description":"Unique number.","type":"integer"},"items":{"default":[],"items":{"$ref":"#/components/schemas/Item"},"type":"array"},"note":{"default":null,"type":["string","null"]},"status":{"$ref":"#/components/schemas/Status","default":{"type":"Open"}}},"required":["id"],"type":"object"},"Status":{"description":"Where an order is in its life.","oneOf":[{"properties":{"type":{"const":"Open"}},"required":["type"],"type":"object"},{"properties":{"type":{"const":"Shipped"},"value":{"type":"string"}},"required":["type","value"],"type":"object"},{"properties":{"type":{"const":"Cancelled"},"values":{"maxItems":2,"minItems":2,"prefixItems":[{"type":"string"},{"type":"integer"}],"type":"array"}},"required":["type","values"],"type":"object"}]}}
