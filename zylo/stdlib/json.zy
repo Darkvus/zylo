@@ -1,0 +1,398 @@
+# std.json: parse and write JSON (RFC 8259). See docs/stdlib.md.
+
+# Helpers written in Rust, kept private: text as Unicode code points (so positions are O(1)), one code point back to
+# text, and a number written the shortest way that reads back as the same float.
+extern fn _codes(s: str) -> list[int] = "{0}.chars().map(|c| c as i64).collect::<Vec<i64>>()"
+
+extern fn _chr(c: int) -> str = "char::from_u32({0} as u32).map(|c| c.to_string()).unwrap_or_default()"
+
+extern fn _num(x: float) -> str = "if {0}.is_finite() { format!(\"{}\", {0}) } else { String::from(\"null\") }"
+
+enum Json:
+    Null
+    Bool(bool)
+    Num(float)
+    Str(str)
+    Arr(list[Json])
+    Obj(dict[str, Json])
+
+# Deepest nesting of arrays and objects that parse accepts; it keeps a hostile document from exhausting the stack.
+fn _max_depth() -> int:
+    return 512
+
+struct _Parser:
+    cs: list[int]
+    pos: int
+    depth: int
+
+    # The code point at the cursor, or -1 at the end of the input.
+    fn peek(self) -> int:
+        if self.pos < len(self.cs):
+            return self.cs[self.pos]
+        return -1
+
+    fn fail(self, msg: str) -> str:
+        line = 1
+        col = 1
+        i = 0
+        while i < self.pos and i < len(self.cs):
+            if self.cs[i] == 10:
+                line += 1
+                col = 1
+            else:
+                col += 1
+            i += 1
+        return f"{msg} at line {line}, column {col}"
+
+    fn found(self) -> str:
+        c = self.peek()
+        if c < 0:
+            return "end of input"
+        if c < 32:
+            return f"control character U+{c:04X}"
+        return "'" + _chr(c) + "'"
+
+    fn skip_ws(self):
+        while self.pos < len(self.cs):
+            c = self.cs[self.pos]
+            if c == 32 or c == 10 or c == 13 or c == 9:
+                self.pos += 1
+            else:
+                return
+
+    fn literal(self, word: str, value: Json) -> Result[Json, str]:
+        for ch in _codes(word):
+            if self.peek() != ch:
+                return err(self.fail(f"invalid literal, expected '{word}'"))
+            self.pos += 1
+        return ok(value)
+
+    fn digits(self) -> int:
+        n = 0
+        while self.peek() >= 48 and self.peek() <= 57:
+            self.pos += 1
+            n += 1
+        return n
+
+    fn number(self) -> Result[Json, str]:
+        start = self.pos
+        if self.peek() == 45:
+            self.pos += 1
+        if self.peek() == 48:
+            self.pos += 1
+        elif self.peek() >= 49 and self.peek() <= 57:
+            self.digits()
+        else:
+            return err(self.fail(f"expected a digit but found {self.found()}"))
+        if self.peek() == 46:
+            self.pos += 1
+            if self.digits() == 0:
+                return err(self.fail(f"expected a digit after '.' but found {self.found()}"))
+        if self.peek() == 101 or self.peek() == 69:
+            self.pos += 1
+            if self.peek() == 43 or self.peek() == 45:
+                self.pos += 1
+            if self.digits() == 0:
+                return err(self.fail(f"expected a digit in the exponent but found {self.found()}"))
+        text = ""
+        for i in range(start, self.pos):
+            text += _chr(self.cs[i])
+        x = parse_float(text)
+        if x is none:
+            return err(self.fail("invalid number"))
+        if x * 0.0 != 0.0:
+            return err(self.fail("number out of range"))
+        return ok(Json.Num(x))
+
+    # Four hex digits after `\u`: the value, or -1 when they are not there.
+    fn hex4(self) -> int:
+        n = 0
+        for _ in range(4):
+            c = self.peek()
+            d = -1
+            if c >= 48 and c <= 57:
+                d = c - 48
+            elif c >= 97 and c <= 102:
+                d = c - 87
+            elif c >= 65 and c <= 70:
+                d = c - 55
+            if d < 0:
+                return -1
+            n = n * 16 + d
+            self.pos += 1
+        return n
+
+    fn string(self) -> Result[str, str]:
+        self.pos += 1
+        out = ""
+        while true:
+            c = self.peek()
+            if c < 0:
+                return err(self.fail("unterminated string, expected '\"' but found end of input"))
+            if c == 34:
+                self.pos += 1
+                return ok(out)
+            if c < 32:
+                return err(self.fail(f"unescaped control character U+{c:04X} in string"))
+            if c != 92:
+                out += _chr(c)
+                self.pos += 1
+                continue
+            self.pos += 1
+            e = self.peek()
+            if e == 110:
+                out += "\n"
+            elif e == 116:
+                out += "\t"
+            elif e == 114:
+                out += "\r"
+            elif e == 98:
+                out += _chr(8)
+            elif e == 102:
+                out += _chr(12)
+            elif e == 34 or e == 92 or e == 47:
+                out += _chr(e)
+            elif e == 117:
+                self.pos += 1
+                u = self.hex4()
+                if u < 0:
+                    return err(self.fail("invalid \\u escape, expected four hex digits"))
+                if u >= 55296 and u <= 56319:
+                    # a high surrogate must be followed by \uDC00-\uDFFF; together they are one code point
+                    if self.peek() != 92 or self.pos + 1 >= len(self.cs) or self.cs[self.pos + 1] != 117:
+                        return err(self.fail("unpaired surrogate in \\u escape"))
+                    self.pos += 2
+                    lo = self.hex4()
+                    if lo < 56320 or lo > 57343:
+                        return err(self.fail("unpaired surrogate in \\u escape"))
+                    u = 65536 + (u - 55296) * 1024 + (lo - 56320)
+                elif u >= 56320 and u <= 57343:
+                    return err(self.fail("unpaired surrogate in \\u escape"))
+                out += _chr(u)
+                continue
+            else:
+                return err(self.fail(f"invalid escape {self.found()}"))
+            self.pos += 1
+        return err("unreachable")
+
+    fn array(self) -> Result[Json, str]:
+        self.pos += 1
+        items: list[Json] = []
+        self.skip_ws()
+        if self.peek() == 93:
+            self.pos += 1
+            return ok(Json.Arr(items))
+        while true:
+            items.append(self.value()?)
+            self.skip_ws()
+            c = self.peek()
+            self.pos += 1
+            if c == 93:
+                return ok(Json.Arr(items))
+            if c != 44:
+                self.pos -= 1
+                return err(self.fail(f"expected ',' or ']' but found {self.found()}"))
+        return err("unreachable")
+
+    fn object(self) -> Result[Json, str]:
+        self.pos += 1
+        members: dict[str, Json] = {}
+        self.skip_ws()
+        if self.peek() == 125:
+            self.pos += 1
+            return ok(Json.Obj(members))
+        while true:
+            self.skip_ws()
+            if self.peek() != 34:
+                return err(self.fail(f"expected a string key but found {self.found()}"))
+            key = self.string()?
+            self.skip_ws()
+            if self.peek() != 58:
+                return err(self.fail(f"expected ':' but found {self.found()}"))
+            self.pos += 1
+            members[key] = self.value()?
+            self.skip_ws()
+            c = self.peek()
+            self.pos += 1
+            if c == 125:
+                return ok(Json.Obj(members))
+            if c != 44:
+                self.pos -= 1
+                return err(self.fail(f"expected ',' or '}}' but found {self.found()}"))
+        return err("unreachable")
+
+    fn value(self) -> Result[Json, str]:
+        self.skip_ws()
+        c = self.peek()
+        if c == 123 or c == 91:
+            if self.depth >= _max_depth():
+                return err(self.fail(f"nesting is deeper than {_max_depth()} levels"))
+            self.depth += 1
+            r = Json.Null
+            if c == 123:
+                r = self.object()?
+            else:
+                r = self.array()?
+            self.depth -= 1
+            return ok(r)
+        if c == 34:
+            return ok(Json.Str(self.string()?))
+        if c == 116:
+            return self.literal("true", Json.Bool(true))
+        if c == 102:
+            return self.literal("false", Json.Bool(false))
+        if c == 110:
+            return self.literal("null", Json.Null)
+        if c == 45 or c >= 48 and c <= 57:
+            return self.number()
+        return err(self.fail(f"expected a JSON value but found {self.found()}"))
+
+# Parse a JSON document. The error says what was wrong and where (line and column, counted in characters).
+fn parse(text: str) -> Result[Json, str]:
+    p = _Parser(_codes(text), 0, 0)
+    v = p.value()?
+    p.skip_ws()
+    if p.pos < len(p.cs):
+        return err(p.fail(f"unexpected {p.found()} after the JSON value"))
+    return ok(v)
+
+fn _quote(s: str) -> str:
+    out = "\""
+    for c in _codes(s):
+        if c == 34:
+            out += "\\\""
+        elif c == 92:
+            out += "\\\\"
+        elif c == 10:
+            out += "\\n"
+        elif c == 13:
+            out += "\\r"
+        elif c == 9:
+            out += "\\t"
+        elif c == 8:
+            out += "\\b"
+        elif c == 12:
+            out += "\\f"
+        elif c < 32 or c == 127:
+            out += f"\\u{c:04x}"
+        else:
+            out += _chr(c)
+    return out + "\""
+
+# Compact JSON: no spaces. Object keys come out sorted (a `dict` is ordered by key). NaN and infinity become `null`.
+fn stringify(j: Json) -> str:
+    match j:
+        Json.Null:
+            return "null"
+        Json.Bool(b):
+            if b:
+                return "true"
+            return "false"
+        Json.Num(x):
+            return _num(x)
+        Json.Str(s):
+            return _quote(s)
+        Json.Arr(items):
+            parts: list[str] = []
+            for item in items:
+                parts.append(stringify(item))
+            return "[" + ",".join(parts) + "]"
+        Json.Obj(members):
+            parts: list[str] = []
+            for k, v in members.items():
+                parts.append(_quote(k) + ":" + stringify(v))
+            return "{" + ",".join(parts) + "}"
+
+fn _pretty(j: Json, level: int) -> str:
+    match j:
+        Json.Arr(items):
+            if len(items) == 0:
+                return "[]"
+            pad = "  ".repeat(level + 1)
+            parts: list[str] = []
+            for item in items:
+                parts.append(pad + _pretty(item, level + 1))
+            return "[\n" + ",\n".join(parts) + "\n" + "  ".repeat(level) + "]"
+        Json.Obj(members):
+            if len(members) == 0:
+                return "{}"
+            pad = "  ".repeat(level + 1)
+            parts: list[str] = []
+            for k, v in members.items():
+                parts.append(pad + _quote(k) + ": " + _pretty(v, level + 1))
+            return "{\n" + ",\n".join(parts) + "\n" + "  ".repeat(level) + "}"
+        _:
+            return stringify(j)
+
+# Indented JSON, two spaces per level, one element or member per line.
+fn pretty(j: Json) -> str:
+    return _pretty(j, 0)
+
+# The member `key` of an object, or `none` when `j` is not an object or has no such member.
+fn get(j: Json, key: str) -> Json?:
+    match j:
+        Json.Obj(members):
+            return members.get(key)
+        _:
+            return none
+
+# Element `i` of an array (a negative `i` counts from the end), or `none` when out of range or not an array.
+fn index(j: Json, i: int) -> Json?:
+    match j:
+        Json.Arr(items):
+            n = i
+            if n < 0:
+                n += len(items)
+            if n < 0 or n >= len(items):
+                return none
+            return some(items[n])
+        _:
+            return none
+
+fn as_str(j: Json) -> str?:
+    match j:
+        Json.Str(s):
+            return some(s)
+        _:
+            return none
+
+fn as_float(j: Json) -> float?:
+    match j:
+        Json.Num(x):
+            return some(x)
+        _:
+            return none
+
+# A number with no fractional part that fits in an `int`.
+fn as_int(j: Json) -> int?:
+    match j:
+        Json.Num(x):
+            if abs(x) < 9000000000000000000.0 and float(floor(x)) == x:
+                return some(floor(x))
+            return none
+        _:
+            return none
+
+fn as_bool(j: Json) -> bool?:
+    match j:
+        Json.Bool(b):
+            return some(b)
+        _:
+            return none
+
+fn as_list(j: Json) -> list[Json]?:
+    match j:
+        Json.Arr(items):
+            return some(items)
+        _:
+            return none
+
+fn as_dict(j: Json) -> dict[str, Json]?:
+    match j:
+        Json.Obj(members):
+            return some(members)
+        _:
+            return none
+
+fn is_null(j: Json) -> bool:
+    return j == Json.Null

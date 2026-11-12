@@ -1,0 +1,14 @@
+3.141593 2.718282
+0.000 1.000 0.785398 1.000 3.000 5.0
+-2.0 2.0 180.0 3.141593
+1.0 0.0 5 -1 0 1
+6 5 12 0
+[007] [ab...] [**ab***]
+[long] [  x]
+[hi  ] [  hi]
+Hello world olléh 
+bar foo foobar
+true false false true true true
+Some(("key", "a=b")) None
+fallback a/b true
+true true

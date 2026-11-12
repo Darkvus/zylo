@@ -56,7 +56,7 @@ def test_every_module_belongs_to_a_layer():
     top_level = {p.name for p in ROOT.glob("*.py")}
     assert top_level == {"__init__.py", "__main__.py"}
     packages = {p.name for p in ROOT.iterdir() if p.is_dir() and p.name != "__pycache__"}
-    assert packages == set(ALLOWED)
+    assert packages == set(ALLOWED) | {"stdlib"}  # `stdlib` holds the bundled `.zy` modules: data, not a layer
 
 
 @pytest.mark.parametrize("layer", sorted(ALLOWED))

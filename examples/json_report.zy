@@ -1,0 +1,47 @@
+# Read a JSON document, summarise it, change it and write it back out with std.json.
+import std.json as json
+
+fn document() -> str:
+    text = "{\"team\": \"Platform\", \"members\": ["
+    text += "{\"name\": \"Ada\", \"age\": 36, \"langs\": [\"rust\", \"zylo\"]}, "
+    text += "{\"name\": \"Linus\", \"age\": 54, \"langs\": [\"c\"]}, "
+    text += "{\"name\": \"Grace\", \"age\": 85, \"langs\": [\"cobol\", \"c\", \"zylo\"]}], "
+    text += "\"active\": true, \"budget\": 12.5e3, \"notes\": null}"
+    return text
+
+fn member_name(m: json.Json) -> str:
+    name = json.get(m, "name")
+    if name is none:
+        return "?"
+    return json.as_str(name).unwrap_or("?")
+
+fn main():
+    parsed = json.parse(document())
+    if parsed is err:
+        print("invalid:", parsed)
+        return
+    members = json.as_list(json.get(parsed, "members").unwrap()).unwrap()
+    total_age = 0
+    zylo_users: list[str] = []
+    for m in members:
+        total_age += json.as_int(json.get(m, "age").unwrap()).unwrap()
+        for lang in json.as_list(json.get(m, "langs").unwrap()).unwrap():
+            if json.as_str(lang).unwrap() == "zylo":
+                zylo_users.append(member_name(m))
+    print("members:", len(members), "average age:", total_age / len(members))
+    print("zylo users:", ",".join(zylo_users))
+    print("budget:", json.as_float(json.get(parsed, "budget").unwrap()).unwrap())
+    print(json.stringify(members[0]))
+
+    # build a document from scratch
+    obj: dict[str, json.Json] = {}
+    obj["id"] = json.Json.Num(7.0)
+    obj["tags"] = json.Json.Arr([json.Json.Str("a\"b"), json.Json.Str("tab\t"), json.Json.Null])
+    obj["ok"] = json.Json.Bool(false)
+    print(json.pretty(json.Json.Obj(obj)))
+
+    # errors say where
+    print(json.parse("{\"a\": [1, 2,, 3]}"))
+    print(json.parse("{\"a\": tru}"))
+
+main()

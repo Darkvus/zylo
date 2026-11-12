@@ -55,6 +55,7 @@ Cargo use only what is already downloaded. Allowed dependency keys: `version`, `
 
 A Zylo package from the community is plain Zylo code, and that is the point: it cannot run arbitrary Rust.
 
+- The bundled standard library (`std.*`) is the exception: it is trusted and uses `extern fn` internally.
 - A package that contains an `extern fn` is **rejected** unless your project trusts it.
 - Crates declared by a package's own `zylo.toml` are **ignored** unless your project trusts it.
 

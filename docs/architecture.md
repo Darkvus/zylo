@@ -31,6 +31,7 @@ the ones listed below. `tests/test_architecture.py` enforces it on every change.
 | `semantics` | domain, syntax, packaging | The type `checker` and the module `linker`: what a program means. |
 | `generation` | domain | The code generator: typed program → Rust source. |
 | `packaging` | domain | `manifest` (zylo.toml), `lock`, virtual `env`ironments, the `installer`, and `rust_deps` validation. |
+| `stdlib` (data) | nothing | Not a layer: the `.zy` modules shipped with the compiler (`import std.json`), found by `packaging/stdlib.py`. |
 | `infrastructure` | domain, packaging | Adapters to external programs: `git`, `rustc`, `cargo`. |
 | `application` | everything below | The use cases: `compile` (a program, end to end, and `diagnose_source` for every error), `format`, `editor` (symbols and completion) and `package_commands`. |
 | `interface` | domain, application | The `cli`, the terminal `diagnostics` and the `lsp` server. |

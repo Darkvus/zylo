@@ -1,0 +1,56 @@
+# std.text: text helpers that the `str` methods do not cover. Positions and lengths count characters.
+
+# Rust: the first character of `fill`, or a space when it is empty.
+extern fn _fill(fill: str) -> str = "{0}.chars().next().unwrap_or(' ').to_string()"
+
+# `s` padded on the left with `fill` (its first character) up to `width` characters.
+fn pad_left(s: str, width: int, fill: str) -> str:
+    n = width - len(s)
+    if n <= 0:
+        return s
+    return _fill(fill).repeat(n) + s
+
+# `s` padded on the right with `fill` up to `width` characters.
+fn pad_right(s: str, width: int, fill: str) -> str:
+    n = width - len(s)
+    if n <= 0:
+        return s
+    return s + _fill(fill).repeat(n)
+
+# `s` centred in `width` characters (the extra character, if any, goes on the right).
+fn center(s: str, width: int, fill: str) -> str:
+    n = width - len(s)
+    if n <= 0:
+        return s
+    left = n / 2
+    return _fill(fill).repeat(left) + s + _fill(fill).repeat(n - left)
+
+extern fn lstrip(s: str) -> str = "{0}.trim_start().to_string()"
+
+extern fn rstrip(s: str) -> str = "{0}.trim_end().to_string()"
+
+# The first character in upper case and the rest in lower case.
+extern fn capitalize(s: str) -> str = "{ let s = {0}; let mut c = s.chars(); match c.next() { Some(f) => f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase(), None => String::new() } }"
+
+extern fn reverse(s: str) -> str = "{0}.chars().rev().collect::<String>()"
+
+# `s` without `prefix` when it starts with it, otherwise `s` unchanged.
+extern fn remove_prefix(s: str, prefix: str) -> str = "{0}.strip_prefix({1}.as_str()).unwrap_or({0}.as_str()).to_string()"
+
+extern fn remove_suffix(s: str, suffix: str) -> str = "{0}.strip_suffix({1}.as_str()).unwrap_or({0}.as_str()).to_string()"
+
+# Whether `s` is non-empty and every character is a digit / a letter / a letter or digit / whitespace.
+extern fn is_digit(s: str) -> bool = "{ let s = {0}; !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()) }"
+
+extern fn is_alpha(s: str) -> bool = "{ let s = {0}; !s.is_empty() && s.chars().all(|c| c.is_alphabetic()) }"
+
+extern fn is_alnum(s: str) -> bool = "{ let s = {0}; !s.is_empty() && s.chars().all(|c| c.is_alphanumeric()) }"
+
+extern fn is_space(s: str) -> bool = "{ let s = {0}; !s.is_empty() && s.chars().all(|c| c.is_whitespace()) }"
+
+# Split at the first `sep`: `("key", "value")` for "key=value" with "=", or `none` when `sep` is not there.
+fn split_once(s: str, sep: str) -> tuple[str, str]?:
+    i = s.find(sep)
+    if i is none:
+        return none
+    return some((s[:i], s[i + len(sep):]))
