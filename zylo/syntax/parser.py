@@ -672,7 +672,7 @@ class Parser:
             self.expect("OP", "[")
             args.append(self.parse_type())
             self.expect("OP", "]")
-        elif name == "set":
+        elif name in ("set", "Cell"):
             self.expect("OP", "[")
             args.append(self.parse_type())
             self.expect("OP", "]")

@@ -1,0 +1,5 @@
+3.5 3.5 true
+Shared(name="a", total=Cell(3.5), last=Cell(None))
+Some(Point(x=1, y=2))
+14.5
+["x", "y", "z"] 3

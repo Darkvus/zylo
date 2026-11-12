@@ -23,6 +23,7 @@ from zylo.domain.types import (
     INT,
     STR,
     UNIT,
+    CellT,
     DictT,
     EnumT,
     FnT,
@@ -135,6 +136,8 @@ class Deriver:
             raise fail(f"is a {ty}: it is control flow, not data; `match` on it and convert the value")
         if ty == UNIT:
             raise fail("has no value")
+        if isinstance(ty, CellT):
+            raise fail(f"is a {ty}: shared mutable state, not data; keep the value in the struct and the Cell outside it")
         if isinstance(ty, DictT):
             if ty.key not in (STR, INT):
                 raise fail(f"is a {ty}, but JSON object keys must be str or int")

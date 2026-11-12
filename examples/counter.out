@@ -1,0 +1,6 @@
+1 2 3
+hits: 3
+after records: 5 ["ana", "luis"]
+Cell(5) true
+Cell(["ana", "luis"])
+false true

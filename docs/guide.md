@@ -30,6 +30,7 @@ greet("zylo")
 | `tuple[A, B, ...]` | fixed group of 2+ values | `(A, B, ...)` |
 | `dict[K, V]` | key → value map, sorted by key | `BTreeMap<K, V>` |
 | `set[T]` | set of distinct values, sorted | `BTreeSet<T>` |
+| `Cell[T]` | a shared, mutable box holding one `T` (see [Shared state](#shared-state-with-cell)) | `Rc<RefCell<T>>` |
 | `Name` | a struct you define | `struct` |
 | `T?` | optional value (`T` or nothing) | `Option<T>` |
 | `Result[T, E]` | a `T` or an error `E` | `Result<T, E>` |
@@ -203,9 +204,45 @@ print(add_n(1))                  # 11: it kept the n of 10
 
 So a change made after the function was created is not seen inside, and a function can never change the variables it
 captured. The checker rejects an assignment (`n = 1`, `xs[0] = 1`, `xs.append(1)`...) to a captured variable inside the
-function, because it would silently change a copy; build and return a new value instead. Parameters and variables
+function, because it would silently change a copy; build and return a new value instead, or share the state through a
+[`Cell`](#shared-state-with-cell). Parameters and variables
 declared inside the function are its own and can be changed freely. `self` cannot be captured: copy what you need into a
 local first (`size = self.size`).
+
+### Shared state with `Cell`
+
+Because closures capture copies, two of them cannot share a counter or a list. A `Cell[T]` is a box that can be
+shared: `cell(value)` creates one, and **copies of a cell share the same storage**, so a closure that captures it, a
+struct that holds it and a function that receives it all see the same value.
+
+```zylo
+fn make_counter(count: Cell[int]) -> fn() -> int:
+    fn next() -> int:
+        count.update(fn(n: int) => n + 1)
+        return count.get()
+    return next
+
+hits = cell(0)
+a = make_counter(hits)
+b = make_counter(hits)
+print(a(), b(), a(), hits.get())     # 1 2 3 3
+
+names: Cell[list[str]] = cell([])    # an empty literal needs the annotation
+names.set(["ana"])
+```
+
+| Expression | Meaning |
+|---|---|
+| `cell(v)` | a new cell holding `v` (any type that has a value) |
+| `c.get() -> T` | a **copy** of the current value (changing that copy, for example appending to a list, does not change the cell) |
+| `c.set(v)` | replace the value; `v` must be a `T` |
+| `c.update(fn(T) -> T)` | replace the value with the function's result |
+
+`Cell[T]` is an ordinary type: it works as a variable annotation, a function parameter or result and a struct field,
+and structs holding cells still compare and print. Assigning a cell (`b = a`) or passing it does not copy the box, only
+the handle. Two cells are equal when their values are equal (identity does not matter), and a cell prints as
+`Cell(value)`. A cell is not JSON data: `to_json` rejects a struct that holds one. Cells are single-threaded (they are
+`Rc<RefCell<T>>`); the server in `std.http` runs handlers on one thread, so handlers can share a cell.
 
 ### Calling function values
 
@@ -815,6 +852,7 @@ trust rules are in [rust-interop.md](rust-interop.md).
 | `read_file(p)`, `write_file(p, t)`, `append_file(p, t)`, `list_dir(p)`, `file_exists(p)` | files |
 | `env(name)`, `eprint(...)`, `time()`, `sleep(s)` | environment, standard error, clock |
 | `exit(code)` | stop the program with an exit code |
+| `cell(v)` | a shared mutable `Cell[T]`, see above |
 | `to_json(x)`, `from_json(T, j)`, `json_schema(T)`, `json_schema_defs(T)` | typed JSON, see above |
 | `range(n)`, `range(a, b)` | only in a `for` |
 

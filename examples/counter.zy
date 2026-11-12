@@ -1,0 +1,35 @@
+# Two closures share one counter through a Cell: closures capture copies, but a copy of a Cell shares its storage.
+
+struct Stats:
+    hits: Cell[int]
+    log: Cell[list[str]]
+
+fn make_counter(count: Cell[int]) -> fn() -> int:
+    fn next() -> int:
+        count.update(fn(n: int) => n + 1)
+        return count.get()
+    return next
+
+fn record(stats: Stats, who: str) -> int:
+    stats.hits.set(stats.hits.get() + 1)
+    entries = stats.log.get()
+    entries.append(who)
+    stats.log.set(entries)
+    return len(entries)
+
+hits = cell(0)
+stats = Stats(hits, cell([]))
+first = make_counter(hits)
+second = make_counter(hits)
+
+print(first(), second(), first())
+print("hits:", hits.get())
+
+record(stats, "ana")
+record(stats, "luis")
+print("after records:", hits.get(), stats.log.get())
+print(hits, stats.hits == hits)
+print(f"{stats.log}")
+
+other = cell(0)
+print(other == hits, other == cell(0))

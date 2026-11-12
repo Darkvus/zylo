@@ -17,7 +17,7 @@ from zylo.packaging.stdlib import STD, stdlib_dir, stdlib_module
 from zylo.syntax.parser import parse
 
 SEP = "·"  # `·`
-RESERVED_TYPES = set(PRIMS) | {"list", "unit", "Result"}
+RESERVED_TYPES = set(PRIMS) | {"list", "unit", "Result", "Cell"}
 
 
 @dataclass

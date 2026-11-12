@@ -279,11 +279,11 @@
     },
     "types": {
       "name": "support.type.zylo",
-      "match": "\\b(Result|bool|dict|float|int|list|set|str|tuple)\\b"
+      "match": "\\b(Cell|Result|bool|dict|float|int|list|set|str|tuple)\\b"
     },
     "builtins": {
       "name": "support.function.builtin.zylo",
-      "match": "\\b(abs|append|append_file|argv|ceil|enumerate|env|eprint|err|exit|file_exists|float|floor|from_json|input|int|json_schema|json_schema_defs|len|list_dir|max|min|ok|parse_float|parse_int|pow|print|range|read_file|read_line|read_stdin|reversed|round|sleep|some|sorted|sqrt|str|sum|time|to_json|write_file|zip)\\b(?=\\s*\\()"
+      "match": "\\b(abs|append|append_file|argv|ceil|cell|enumerate|env|eprint|err|exit|file_exists|float|floor|from_json|input|int|json_schema|json_schema_defs|len|list_dir|max|min|ok|parse_float|parse_int|pow|print|range|read_file|read_line|read_stdin|reversed|round|sleep|some|sorted|sqrt|str|sum|time|to_json|write_file|zip)\\b(?=\\s*\\()"
     },
     "self": {
       "name": "variable.language.self.zylo",

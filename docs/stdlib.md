@@ -35,6 +35,23 @@ name in directly. See [packages.md](packages.md) for the import rules in general
 | [`std.os`](#stdos) | The working directory, the platform, directories, paths |
 | [`std.http`](#stdhttp) | A blocking HTTP/1.1 server and a simple client (needs Cargo) |
 
+## Shared state: `Cell`
+
+Handlers and closures capture copies of the variables around them, so by itself two handlers cannot share a counter or a
+list. The built-in `Cell[T]` (not a module: no import needed) is a shared mutable box compiled to `Rc<RefCell<T>>`, and
+it is what a `std.http` server uses to keep state between requests:
+
+```zylo
+hits = cell(0)
+count = fn() => hits.update(fn(n: int) => n + 1)
+count()
+count()
+print(hits.get())    # 2
+```
+
+`cell(v)` creates it, `get()` returns a copy of the value, `set(v)` replaces it and `update(f)` replaces it with
+`f(value)`. See the [guide](guide.md#shared-state-with-cell).
+
 ## std.json
 
 JSON as a value you can inspect and build, following [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259).

@@ -20,6 +20,7 @@ and is built vertically (lexer → parser → checker → codegen → tests).
 | **v0.11 Functions as values** | `fn(A) -> R` types, top-level functions as values, anonymous functions (`fn(x: int) => x * 2`) and local `fn`s that capture copies, calls of any function value, and `map` / `filter` / `fold` / `reduce` / `sort_by` / `any` / `all` / `find` on lists | done |
 | **v0.13 HTTP** | `std.http`: a blocking HTTP/1.1 server (`serve`, `serve_n`, panics become 500, body limit, HEAD / OPTIONS) and a client (`get`, `post`...), built on `tiny_http` and `ureq`; stdlib modules can bring Rust crates; see [docs/stdlib.md](docs/stdlib.md) | done |
 | **v0.14 Typed JSON** | `to_json` / `from_json` / `json_schema` / `json_schema_defs` for structs, enums and collections, with JSON-path errors, OpenAPI-ready schemas and doc strings on types and fields | done |
+| **v0.15 Shared state** | `Cell[T]`: a shared mutable box (`cell(v)`, `get`, `set`, `update`) compiled to `Rc<RefCell<T>>`, so closures, handlers and structs can share a counter or a list | done |
 | **Community** | Documentation translations (the docs are English-only for now) and localized diagnostics | |
 
 Later: generics, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
