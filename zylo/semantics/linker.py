@@ -31,6 +31,7 @@ class Module:
         defs: Top-level names it defines, mapped to "fn" or "struct".
         aliases: Names bound by `import a.b [as c]`.
         froms: Names bound by `from a import x [as y]`.
+        pubs: The names in `froms` that `pub from` re-exports as part of this module's public surface.
     """
     id: str  # "" for the entry module
     path: Path
@@ -38,6 +39,7 @@ class Module:
     defs: dict[str, str] = field(default_factory=dict)  # top-level name -> "fn" | "struct"
     aliases: dict[str, "Module"] = field(default_factory=dict)  # `import a.b` -> {"b": module}
     froms: dict[str, tuple["Module", str]] = field(default_factory=dict)  # local name -> (module, original)
+    pubs: set[str] = field(default_factory=set)  # names re-exported with `pub from`
 
     @property
     def is_entry(self) -> bool:
@@ -293,15 +295,45 @@ class Linker:
     def bind_from(self, mod: Module, s: ast.FromImport, stack: list[Path]) -> None:
         """Load the module of a `from ... import` and bind each imported name, which must exist and be public."""
         dep = self.load(self.resolve_path(s.module, mod, s), False, stack)
+        if s.pub and mod.is_entry:
+            raise err("`pub from` re-exports names of a library module; the entry file has nothing to export", s, mod.path)
         for name, alias in s.names:
             self.export(dep, name, s, mod)  # must exist and be public
             local = alias or name
             self.bind_name(mod, local, s)
             mod.froms[local] = (dep, name)
+            if s.pub:
+                if local.startswith("_"):
+                    raise err(f"cannot re-export {local!r}: names starting with `_` are private", s, mod.path)
+                mod.pubs.add(local)
+
+    def find(self, dep: Module, name: str) -> tuple[Module, str, str] | None:
+        """Follow re-exports to where a public name is really defined.
+
+        Args:
+            dep: The module whose public surface is asked.
+            name: A name as `dep` exposes it.
+
+        Returns:
+            The defining module, the name there and its kind ("fn", "struct" or "enum"), or None if `dep` has no such name.
+            The linked name always comes from the defining module, so a re-exported type keeps one identity.
+        """
+        if name in dep.defs:
+            return dep, name, dep.defs[name]
+        if name in dep.pubs:
+            src, orig = dep.froms[name]
+            return self.find(src, orig)
+        return None
+
+    def kind_of(self, dep: Module, name: str) -> str | None:
+        """The kind ("fn", "struct" or "enum") of a public name of `dep`, re-exports included."""
+        hit = self.find(dep, name)
+        return hit[2] if hit else None
 
     def export(self, dep: Module, name: str, node: ast.Node, importer: Module, kind: str | tuple[str, ...] | None = None) -> str:
         """Mangled name of `dep.name`, checking that it exists, is public and is the right kind."""
-        found = dep.defs.get(name)
+        hit = self.find(dep, name)
+        found = hit[2] if hit else None
         kinds = (kind,) if isinstance(kind, str) else kind
         if found is None:
             what = "struct or enum" if kinds == ("struct", "enum") else {"struct": "struct", "enum": "enum", "fn": "function"}.get(kind or "", "function, struct or enum")
@@ -310,7 +342,8 @@ class Linker:
             raise err(f"{name!r} in module {dep.display!r} is a {found}, not a {' or '.join(kinds)}", node, importer.path)
         if name.startswith("_"):
             raise err(f"{name!r} is private to module {dep.display!r}", node, importer.path)
-        return dep.mangled(name)
+        assert hit is not None
+        return hit[0].mangled(hit[1])
 
     # ---- rewriting ---------------------------------------------------------------------------------
 
@@ -358,9 +391,9 @@ class Linker:
             return ast.Call(target, args, named=named, line=node.line, col=node.col, file=node.file)
         if isinstance(node, ast.Attr) and isinstance(node.value, ast.Name) and node.value.id in mod.aliases:
             dep = mod.aliases[node.value.id]
-            if dep.defs.get(node.name) == "enum":  # `module.Enum` in `module.Enum.Variant`
+            if self.kind_of(dep, node.name) == "enum":  # `module.Enum` in `module.Enum.Variant`
                 return ast.Name(self.export(dep, node.name, node, mod, kind="enum"), line=node.line, col=node.col, file=node.file)
-            if dep.defs.get(node.name) == "fn":  # `module.function` used as a value
+            if self.kind_of(dep, node.name) == "fn":  # `module.function` used as a value
                 return ast.Name(self.export(dep, node.name, node, mod, kind="fn"), line=node.line, col=node.col, file=node.file)
             raise err(f"module {node.value.id!r} has no values; call a function: {node.value.id}.name(...)", node, mod.path)
         if isinstance(node, ast.Name) and node.id in mod.aliases:
@@ -368,13 +401,13 @@ class Linker:
         if isinstance(node, ast.Name):  # an enum of this module or imported by name, used as `Enum.Variant`
             if mod.defs.get(node.id) == "enum":
                 node.id = mod.mangled(node.id)
-            elif node.id in mod.froms and mod.froms[node.id][0].defs.get(mod.froms[node.id][1]) == "enum":
+            elif node.id in mod.froms and self.kind_of(*mod.froms[node.id]) == "enum":
                 dep, orig = mod.froms[node.id]
                 node.id = self.export(dep, orig, node, mod, kind="enum")
             elif node.id not in self.locals:  # a function of this module, or imported by name, used as a value
                 if mod.defs.get(node.id) == "fn":
                     node.id = mod.mangled(node.id)
-                elif node.id in mod.froms and mod.froms[node.id][0].defs.get(mod.froms[node.id][1]) == "fn":
+                elif node.id in mod.froms and self.kind_of(*mod.froms[node.id]) == "fn":
                     dep, orig = mod.froms[node.id]
                     node.id = self.export(dep, orig, node, mod, kind="fn")
             return node

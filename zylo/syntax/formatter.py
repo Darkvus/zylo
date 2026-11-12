@@ -330,7 +330,7 @@ class _Formatter:
                 self.line(s.line, indent, f"import {s.module}" + (f" as {s.alias}" if s.alias else ""), first_in_block)
             case ast.FromImport():
                 names = ", ".join(n + (f" as {a}" if a else "") for n, a in s.names)
-                self.line(s.line, indent, f"from {s.module} import {names}", first_in_block)
+                self.line(s.line, indent, f"{'pub ' if s.pub else ''}from {s.module} import {names}", first_in_block)
             case _:
                 raise ValueError(f"cannot format {type(s).__name__}")
 

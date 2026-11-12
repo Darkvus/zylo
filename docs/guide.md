@@ -773,6 +773,8 @@ fn area(r: Rect) -> int:
 
 - `import shapes` gives you `shapes.area(...)`, `shapes.Rect(...)` and the type `shapes.Rect`.
   `from shapes import area, Rect` brings the names in directly; `as` renames either form.
+- `pub from shapes import Rect, area` inside a module re-exports those names, so a package's entry file can offer
+  one import point (`from mylib import Rect, area`); see [packages.md](packages.md#re-exports).
 - A library module may only contain imports, functions and structs. Names starting with `_` are private.
 - `import a.b` loads `a/b.zy`, relative to the file that imports it; if there is no such file, it
   looks for an installed package named `a`.

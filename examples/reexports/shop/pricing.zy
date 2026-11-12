@@ -1,0 +1,14 @@
+from model import Item, Kind
+
+fn total(items: list[Item]) -> int:
+    t = 0
+    for it in items:
+        t += it.price
+    return t
+
+fn discount(price: int, kind: Kind) -> int:
+    match kind:
+        Kind.Book:
+            return price - price / 10
+        Kind.Food:
+            return price
