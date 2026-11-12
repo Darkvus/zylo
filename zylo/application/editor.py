@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from zylo.domain import ast
 from zylo.domain.builtins import BUILTINS
+from zylo.syntax.formatter import expr_text
 from zylo.syntax.lexer import KEYWORDS
 from zylo.syntax.parser import parse_collect
 
@@ -57,7 +58,10 @@ def _type_text(t: ast.TypeRef) -> str:
 
 
 def _signature(f: ast.FnDef) -> str:
-    params = (["self"] if f.has_self else []) + [f"{p.name}: {_type_text(p.type)}" for p in f.params]
+    params = (["self"] if f.has_self else []) + [
+        f"{p.name}: {_type_text(p.type)}" + (f" = {expr_text(p.default)}" if p.default is not None else "")
+        for p in f.params
+    ]
     return f"fn {f.name}({', '.join(params)})" + (f" -> {_type_text(f.ret)}" if f.ret else "")
 
 
@@ -98,7 +102,8 @@ def document_symbols(source: str) -> list[Symbol]:
     for i, s in enumerate(items):
         if isinstance(s, ast.StructDef):
             sym = Symbol(s.name, "struct", s.line, _name_col(at(s.line), s.name, s.col), end_of(i))
-            sym.children += [Symbol(f.name, "field", f.line, _name_col(at(f.line), f.name, f.col), f.line, _type_text(f.type))
+            sym.children += [Symbol(f.name, "field", f.line, _name_col(at(f.line), f.name, f.col), f.line,
+                                    _type_text(f.type) + (f" = {expr_text(f.default)}" if f.default is not None else ""))
                              for f in s.fields]
             for j, m in enumerate(s.methods):
                 nxt = s.methods[j + 1].line - 1 if j + 1 < len(s.methods) else sym.end_line
@@ -109,6 +114,10 @@ def document_symbols(source: str) -> list[Symbol]:
             sym.children += [Symbol(v.name, "variant", v.line, _name_col(at(v.line), v.name, v.col), v.line,
                                     f"({', '.join(_type_text(t) for t in v.fields)})" if v.fields else "")
                              for v in s.variants]
+            for j, m in enumerate(s.methods):
+                nxt = s.methods[j + 1].line - 1 if j + 1 < len(s.methods) else sym.end_line
+                sym.children.append(Symbol(m.name, "method", m.line, _name_col(at(m.line), m.name, m.col), max(nxt, m.line),
+                                           _signature(m)))
         elif isinstance(s, ast.FnDef):
             kind_line = at(s.line)
             sym = Symbol(s.name, "function", s.line, _name_col(kind_line, s.name, s.col), end_of(i), _signature(s))

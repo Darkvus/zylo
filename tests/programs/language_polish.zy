@@ -1,0 +1,134 @@
+enum Level:
+    Low
+    Mid(int)
+    High(str, int)
+
+    fn score(self) -> int:
+        match self:
+            Level.Low:
+                return 0
+            Level.Mid(n):
+                return n
+            Level.High(_, n):
+                return n * 10
+
+    fn label(self, prefix: str = "L") -> str:
+        match self:
+            Level.Low:
+                return f"{prefix}-low"
+            Level.Mid(n):
+                return f"{prefix}-mid{n}"
+            Level.High(name, _):
+                return f"{prefix}-{name}"
+
+    fn bumped(self, by: int = 1) -> Level:
+        match self:
+            Level.Mid(n):
+                return Level.Mid(n + by)
+            _:
+                return self
+
+struct Config:
+    name: str
+    port: int = 8080
+    ratio: float = 0.5
+    tags: list[str] = []
+    limit: int? = none
+    pair: tuple[int, str] = (1, "x")
+    verbose: bool = false
+
+fn add(a: int, b: int = 2, c: int = 3) -> int:
+    return a * 100 + b * 10 + c
+
+fn grow(xs: list[int] = [], v: int = 7) -> list[int]:
+    xs.append(v)
+    return xs
+
+fn name_of(n: int) -> str:
+    match n:
+        0:
+            return "zero"
+        1:
+            return "one"
+        -1:
+            return "minus one"
+        _:
+            return "many"
+
+fn command(s: str) -> int:
+    match s:
+        "start":
+            return 1
+        "stop":
+            return 2
+        _:
+            return 0
+
+fn show(x: int?) -> str:
+    match x:
+        some(v):
+            return f"got {v}"
+        none:
+            return "nothing"
+
+fn half(r: Result[int, str]) -> int:
+    match r:
+        ok(v):
+            return v / 2
+        err(e):
+            print("error:", e)
+            return -1
+
+fn yes_no(b: bool) -> str:
+    match b:
+        true:
+            return "yes"
+        false:
+            return "no"
+
+fn first_or(xs: list[int], d: int) -> int:
+    if len(xs) == 0:
+        return d
+    return xs[0]
+
+print(Level.Low.score(), Level.Mid(4).score(), Level.High("hi", 3).score())
+print(Level.Mid(2).label(), Level.High("top", 1).label(prefix="Z"), Level.Low.label("Q"))
+print(Level.Mid(5).bumped(), Level.Mid(5).bumped(by=10), Level.Low.bumped())
+levels = [Level.Low, Level.Mid(2), Level.High("a", 9)]
+total = 0
+for lv in levels:
+    total += lv.score()
+print(total)
+
+c = Config("svc")
+print(c)
+d = Config("db", ratio=0.25, port=5432)
+print(d.port, d.ratio, d.tags, d.limit, d.pair, d.verbose)
+e = Config(name="e", limit=some(3), tags=["a", "b"])
+print(e.limit, e.tags)
+c.tags.append("changed")
+print(c.tags, Config("fresh").tags)
+
+print(add(1), add(1, 5), add(1, c=9), add(c=1, a=2, b=3), add(4, 5, 6))
+print(grow(), grow(), grow([1], 2), grow(v=3))
+
+names: list[str] = []
+for n in [0, 1, -1, 5]:
+    names.append(name_of(n))
+print(",".join(names))
+print(command("start"), command("stop"), command("x"))
+print(show(some(3)), show(none))
+print(half(ok(10)), half(err("bad")))
+print(yes_no(true), yes_no(1 > 2))
+
+maybe: int? = some(5)
+match maybe:
+    some(v):
+        v += 1
+        print("mutated copy", v)
+    none:
+        print("none")
+print(maybe)
+if maybe is some:
+    print("narrowed", maybe + 1)
+print(first_or([], 9), first_or([4], 9))

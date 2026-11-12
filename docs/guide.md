@@ -107,6 +107,30 @@ print(gcd(48, 18))
 Arguments are passed **by value**: a function that changes a list or struct parameter changes its
 own copy, never the caller's.
 
+### Default and named arguments
+
+A parameter can have a default value, written `name: type = value`. Callers may leave it out, and may
+pass any argument **by name**.
+
+```zylo
+fn greet(name: str, greeting: str = "Hello", times: int = 1) -> str:
+    return f"{greeting}, {name}!".repeat(times)
+
+print(greet("Ana"))                       # Hello, Ana!
+print(greet("Ana", "Hi"))                 # Hi, Ana!
+print(greet("Ana", times=2))              # Hello, Ana!Hello, Ana!
+print(greet(times=3, name="Bo", greeting="Yo"))
+```
+
+- Parameters with a default must come **after** the ones without.
+- In a call, positional arguments come first, then named ones (`name=value`). Every parameter is given at most
+  once, and every parameter without a default must be given.
+- A default must be a compile-time constant: a number, string, `true` / `false`, `none`, an empty list `[]` or dict
+  `{}`, an enum variant (`Color.Red`, `Shape.Circle(1.0)`), or a tuple of those. There is no shared mutable default as in Python: every call gets a fresh value.
+- Arguments are evaluated in **parameter order**, not in the order written, so `f(b=g(), a=h())` calls `h` first.
+- Methods work the same way (`p.move(dy=1.0)`). Built-in functions and variant constructors take positional
+  arguments only.
+
 ## Lists
 
 ```zylo
@@ -257,13 +281,34 @@ p.move(1.0, 1.0)
 print(p)            # Point(x=4.0, y=5.0)
 ```
 
-- The constructor is positional and takes every field in order.
+- The constructor takes the fields in order, positionally or by name (see below).
 - Structs are **values**: `q = p` copies. Passing one to a function copies it too.
 - Methods take `self` first. The compiler infers whether a method modifies `self` (also when it
   does so by calling another method that does), so there is no `mutating` keyword.
 - Fields can be structs or lists, and `==` compares structs field by field. A struct cannot contain
   itself directly; use a `list` of it.
 - Structs and methods are defined at the top level.
+
+### Field defaults and named constructor arguments
+
+A field may have a default value (a compile-time constant, like a parameter default). The constructor then lets
+you skip it, and any field can be passed by name.
+
+```zylo
+struct Config:
+    host: str = "localhost"
+    port: int = 8080
+    tags: list[str] = []
+    debug: bool = false
+
+a = Config()
+b = Config(port=9000, debug=true)
+c = Config("example.com", 80)
+print(a)    # Config(host="localhost", port=8080, tags=[], debug=false)
+print(b.port, c.host)
+```
+
+Fields with defaults must come after the ones without, exactly like parameters.
 
 ## Enums and `match`
 
@@ -297,7 +342,99 @@ print(Shape.Circle(1.0))             # Circle(1.0)
 - Enums are values, like structs: they are copied when assigned or passed, compare with `==`, and can be stored in
   lists, dicts' values, structs, `Option` and `Result`. An enum cannot contain itself directly; use a `list`.
 - Enums, like structs, are defined at the top level and can be imported: `sh.Shape.Circle(1.0)`.
-- `match` is for enums. Use `is some` / `is ok` for `Option` and `Result`.
+- `match` also works on `int`, `str`, `bool`, `Option` and `Result` (see below).
+
+### Methods on enums
+
+An enum can have methods, written like struct methods after the variants. `self` is the enum value, and the usual
+body is a `match self:`.
+
+```zylo
+enum Shape:
+    Circle(float)
+    Rect(float, float)
+    Empty
+
+    fn area(self) -> float:
+        match self:
+            Shape.Circle(r):
+                return 3.0 * r * r
+            Shape.Rect(w, h):
+                return w * h
+            Shape.Empty:
+                return 0.0
+
+    fn scaled(self, k: float = 2.0) -> Shape:
+        match self:
+            Shape.Circle(r):
+                return Shape.Circle(r * k)
+            Shape.Rect(w, h):
+                return Shape.Rect(w * k, h * k)
+            _:
+                return self
+
+print(Shape.Rect(2.0, 3.0).scaled().area())    # 24.0
+```
+
+Enum values are immutable, so a method cannot change `self`; it returns a new value instead.
+
+### Matching on values, `Option` and `Result`
+
+`match` also takes an `int`, `str` or `bool` and matches literals, and takes an `Option` or `Result` and matches
+`some(x)` / `none` and `ok(v)` / `err(e)`, binding the inner value.
+
+```zylo
+fn describe(n: int) -> str:
+    match n:
+        0:
+            return "zero"
+        1:
+            return "one"
+        -1:
+            return "minus one"
+        _:
+            return "many"
+
+fn command(s: str) -> int:
+    match s:
+        "start":
+            return 1
+        "stop":
+            return 2
+        _:
+            return 0
+
+fn show(x: int?) -> str:
+    match x:
+        some(v):
+            return f"got {v}"
+        none:
+            return "nothing"
+
+fn unwrap_or_zero(r: Result[int, str]) -> int:
+    match r:
+        ok(v):
+            return v
+        err(_):
+            return 0
+
+fn yes_no(b: bool) -> str:
+    match b:
+        true:
+            return "yes"
+        false:
+            return "no"
+
+print(describe(1), command("stop"), show(some(3)), unwrap_or_zero(err("x")), yes_no(true))
+```
+
+- Literal arms are integers (optionally negative), strings and `true` / `false`. Floats are not matched (equality on
+  floats is a trap); use `if`.
+- A `match` on an `int` or `str` must end with a `_:` arm. A `match` on a `bool` is complete with both `true` and
+  `false`; `Option` needs `some` and `none`, `Result` needs `ok` and `err`; otherwise add `_:`.
+- As with enums, an arm that can never run (a repeated literal, a `_` after everything is covered) is an error.
+- `some(x)`, `ok(v)` and `err(e)` bind exactly one name (`_` ignores it). The bound names live inside the arm.
+- `is some` / `is ok` narrowing is unchanged and still the lighter way to test a single case.
 
 ## Option and Result
 
@@ -474,4 +611,4 @@ These stop the program with exit code **101**: integer overflow (compile with
 
 ## Known limitations
 
-No closures or generics, no list comprehensions, no methods on enums. See the [roadmap](../ROADMAP.md).
+No closures or generics, no list comprehensions. See the [roadmap](../ROADMAP.md).

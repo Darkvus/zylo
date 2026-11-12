@@ -347,7 +347,7 @@ class Parser:
         """Parse a function, a method or an `extern fn`.
 
         Args:
-            in_struct: True inside a struct body, where a leading `self` parameter is allowed.
+            in_struct: True inside a struct or enum body, where a leading `self` parameter is allowed.
             extern: True when the `extern` keyword was already consumed: the body is a Rust string after `=`.
 
         Returns:
@@ -438,15 +438,16 @@ class Parser:
                 self.advance()
                 self.advance()
                 typ = self.parse_type()
+                default = self.parse_expr() if self.match("OP", "=") else None
                 self.expect("NEWLINE")
-                fields.append(ast.Field(tok.value, typ, line=tok.line, col=tok.col))
+                fields.append(ast.Field(tok.value, typ, default, line=tok.line, col=tok.col))
             else:
                 raise ZyloError("a struct body can only contain fields (`name: type`) and methods (`fn`)", tok.line, tok.col)
         self.expect("DEDENT")
         return ast.StructDef(name.value, fields, methods, line=name.line, col=name.col)
 
     def parse_enum(self) -> ast.EnumDef:
-        """Parse an enum: one variant per line, `Name` or `Name(type, ...)`.
+        """Parse an enum: one variant per line, `Name` or `Name(type, ...)`, and methods (`fn`).
 
         Raises:
             ZyloError: If the body is missing, empty, or contains anything but variants.
@@ -459,12 +460,16 @@ class Parser:
             raise ZyloError("expected an indented block", self.cur.line, self.cur.col)
         self.advance()
         variants: list[ast.Variant] = []
+        methods: list[ast.FnDef] = []
         while not self.check("DEDENT"):
             tok = self.cur
             if tok.kind == "EOF":
                 raise ZyloError("unclosed block", tok.line, tok.col)
+            if self.check("KW", "fn"):
+                methods.append(self.parse_fn(in_struct=True))
+                continue
             if tok.kind != "IDENT":
-                raise ZyloError("an enum body can only contain variants (`Name` or `Name(type, ...)`)", tok.line, tok.col)
+                raise ZyloError("an enum body can only contain variants (`Name` or `Name(type, ...)`) and methods (`fn`)", tok.line, tok.col)
             self.advance()
             fields: list[ast.TypeRef] = []
             if self.match("OP", "("):
@@ -475,7 +480,7 @@ class Parser:
             self.expect("NEWLINE")
             variants.append(ast.Variant(tok.value, fields, line=tok.line, col=tok.col))
         self.expect("DEDENT")
-        return ast.EnumDef(name.value, variants, line=name.line, col=name.col)
+        return ast.EnumDef(name.value, variants, methods=methods, line=name.line, col=name.col)
 
     def parse_match(self) -> ast.Match:
         """Parse `match value:` and its arms.
@@ -501,14 +506,32 @@ class Parser:
         return ast.Match(value, arms, line=kw.line, col=kw.col)
 
     def parse_arm(self) -> ast.MatchArm:
-        """Parse one arm: `_:`, `Enum.Variant:` or `Enum.Variant(a, b):`, then its block."""
-        first = self.expect("IDENT")
+        """Parse one arm and its block.
+
+        The pattern is `_`, `Enum.Variant`, `Enum.Variant(a, b)`, a literal (`1`, `-1`, `"a"`, `true`), `none`, or
+        `some(x)` / `ok(v)` / `err(e)`.
+
+        Raises:
+            ZyloError: If the pattern is malformed.
+        """
+        first = self.cur
+        pos = {"line": first.line, "col": first.col}
+        if first.kind == "KW" and first.value == "none":
+            self.advance()
+            return ast.MatchArm(None, "none", [], self.parse_block(), **pos)
+        if first.kind in ("INT", "FLOAT", "STR") or (first.kind == "OP" and first.value == "-") \
+                or (first.kind == "KW" and first.value in ("true", "false")):
+            lit = self.parse_unary()
+            if not isinstance(lit, (ast.Int, ast.Float, ast.Str, ast.Bool, ast.UnaryOp)):
+                raise ZyloError("a `match` pattern must be a literal", first.line, first.col)
+            return ast.MatchArm(None, "literal", [], self.parse_block(), literal=lit, **pos)
+        self.expect("IDENT")
         if first.value == "_":
-            return ast.MatchArm(None, "_", [], self.parse_block(), line=first.line, col=first.col)
+            return ast.MatchArm(None, "_", [], self.parse_block(), **pos)
         parts = [first.value]
         while self.match("OP", "."):
             parts.append(self.expect("IDENT").value)
-        if len(parts) < 2:
+        if len(parts) < 2 and first.value not in ("some", "ok", "err"):
             raise ZyloError(f"write the enum before the variant: `Enum.{first.value}`", first.line, first.col)
         binds: list[str] = []
         if self.match("OP", "("):
@@ -516,22 +539,28 @@ class Parser:
             while self.match("OP", ","):
                 binds.append(self.expect("IDENT").value)
             self.expect("OP", ")")
+        if len(parts) == 1:  # some(x) / ok(v) / err(e)
+            if len(binds) != 1:
+                raise ZyloError(f"`{first.value}(...)` binds exactly one name: write `{first.value}(x)`", first.line, first.col)
+            return ast.MatchArm(None, first.value, binds, self.parse_block(), **pos)
         typ = ast.TypeRef(".".join(parts[:-1]), [], line=first.line, col=first.col)
-        return ast.MatchArm(typ, parts[-1], binds, self.parse_block(), line=first.line, col=first.col)
+        return ast.MatchArm(typ, parts[-1], binds, self.parse_block(), **pos)
 
     def parse_param(self) -> ast.Param:
-        """Parse one `name: type` parameter.
+        """Parse one `name: type` or `name: type = default` parameter.
 
         Raises:
             ZyloError: If the type is missing, or the name is `self` outside a method.
         """
         name = self.expect("IDENT")
         if name.value == "self":
-            raise ZyloError("`self` can only be the first parameter of a method, inside a struct", name.line, name.col)
+            raise ZyloError("`self` can only be the first parameter of a method, inside a struct or enum", name.line, name.col)
         if not self.check("OP", ":"):
             raise ZyloError(f"parameter {name.value!r} needs a type (`{name.value}: int`)", name.line, name.col)
         self.advance()
-        return ast.Param(name.value, self.parse_type(), line=name.line, col=name.col)
+        typ = self.parse_type()
+        default = self.parse_expr() if self.match("OP", "=") else None
+        return ast.Param(name.value, typ, default=default, line=name.line, col=name.col)
 
     # ---- types --------------------------------------------------------------------
 
@@ -664,7 +693,8 @@ class Parser:
                 self.advance()
                 name = self.expect("IDENT")
                 if self.check("OP", "("):
-                    expr = ast.MethodCall(expr, name.value, self.parse_args(), line=name.line, col=name.col)
+                    args, named = self.parse_args()
+                    expr = ast.MethodCall(expr, name.value, args, named=named, line=name.line, col=name.col)
                 else:
                     expr = ast.Attr(expr, name.value, line=name.line, col=name.col)
             else:
@@ -837,20 +867,37 @@ class Parser:
             raise ZyloError(f"unexpected {describe(sub.cur)} in f-string expression", tok.line, base)
         return expr
 
-    def parse_args(self) -> list[ast.Expr]:
-        """Parse a parenthesised, comma-separated argument list."""
+    def parse_args(self) -> tuple[list[ast.Expr], list[ast.NamedArg]]:
+        """Parse a parenthesised, comma-separated argument list: positional arguments, then `name=value` ones.
+
+        Returns:
+            The positional arguments and the named ones.
+
+        Raises:
+            ZyloError: If a positional argument follows a named one.
+        """
         self.expect("OP", "(")
         args: list[ast.Expr] = []
-        if not self.check("OP", ")"):
-            args.append(self.parse_expr())
-            while self.match("OP", ","):
+        named: list[ast.NamedArg] = []
+        while not self.check("OP", ")"):
+            tok = self.cur
+            if tok.kind == "IDENT" and self.peek().kind == "OP" and self.peek().value == "=":
+                self.advance()
+                self.advance()
+                named.append(ast.NamedArg(tok.value, self.parse_expr(), line=tok.line, col=tok.col))
+            else:
+                if named:
+                    raise ZyloError("positional arguments must come before named arguments", tok.line, tok.col)
                 args.append(self.parse_expr())
+            if not self.match("OP", ","):
+                break
         self.expect("OP", ")")
-        return args
+        return args, named
 
     def parse_call(self, name: Token) -> ast.Call:
         """Parse the arguments of a call to the function named by `name`."""
-        return ast.Call(name.value, self.parse_args(), line=name.line, col=name.col)
+        args, named = self.parse_args()
+        return ast.Call(name.value, args, named=named, line=name.line, col=name.col)
 
 
 def parse_collect(src: str, file: str | None = None) -> tuple[ast.Program, list[ZyloError]]:

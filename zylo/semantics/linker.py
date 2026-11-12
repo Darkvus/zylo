@@ -309,7 +309,8 @@ class Linker:
             dep = mod.aliases[node.value.id]
             target = self.export(dep, node.name, node, mod)
             args = [self.rw(a, mod) for a in node.args]
-            return ast.Call(target, args, line=node.line, col=node.col, file=node.file)
+            named = [self.rw(n, mod) for n in node.named]
+            return ast.Call(target, args, named=named, line=node.line, col=node.col, file=node.file)
         if isinstance(node, ast.Attr) and isinstance(node.value, ast.Name) and node.value.id in mod.aliases:
             dep = mod.aliases[node.value.id]
             if dep.defs.get(node.name) == "enum":  # `module.Enum` in `module.Enum.Variant`
