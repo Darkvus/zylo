@@ -149,8 +149,9 @@ class FnT:
     ret: "Type"
 
     def __str__(self) -> str:
-        """Return the type as `fn(A, B) -> R`."""
-        return f"fn({', '.join(map(str, self.params))}) -> {self.ret}"
+        """Return the type as `fn(A, B) -> R` (`fn(A, B)` when nothing is returned)."""
+        ret = "" if self.ret == UNIT else f" -> {self.ret}"
+        return f"fn({', '.join(map(str, self.params))}){ret}"
 
 
 INT = Prim("int")
@@ -174,12 +175,14 @@ class VarInfo:
         mutable: True if the variable is ever reassigned or modified; the generator then emits `let mut`.
         narrowed: True for a variable rebound with a narrower type by an `is` check; it cannot be reassigned.
         by_ref: True for a parameter its function never modifies: it is lent to the function instead of cloned.
+        captured: True for a read-only copy of an outer variable inside a closure; it cannot be modified there.
     """
     name: str
     ty: Type
     mutable: bool = False
     narrowed: bool = False  # rebound by `is` narrowing; cannot be reassigned
     by_ref: bool = False  # a parameter the function never modifies: passed by reference, not cloned
+    captured: bool = False  # a copy of an outer variable inside a closure: read-only
 
 
 def is_copy_type(t: Type) -> bool:

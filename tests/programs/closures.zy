@@ -1,0 +1,67 @@
+fn compose(f: fn(int) -> int, g: fn(int) -> int) -> fn(int) -> int:
+    return fn(x: int) => g(f(x))
+
+fn inc(x: int) -> int:
+    return x + 1
+
+fn make_counter_steps(step: int) -> list[fn(int) -> int]:
+    steps: list[fn(int) -> int] = []
+    for k in range(3):
+        steps.append(fn(x: int) => x + step * k)
+    return steps
+
+fn greet_all(names: list[str], greet: fn(str) -> str) -> list[str]:
+    return names.map(greet)
+
+struct Pipeline:
+    name: str
+    stages: list[fn(int) -> int]
+
+    fn run(self, x: int) -> int:
+        out = x
+        for s in self.stages:
+            out = s(out)
+        return out
+
+limit = 3
+big = fn(x: int) => x > limit
+limit = 100
+print(big(5), big(1))
+
+pipe = compose(inc, fn(x: int) => x * 10)
+print(pipe(4), compose(pipe, pipe)(0))
+
+steps = make_counter_steps(5)
+print(steps.map(fn(f) => f(100)))
+
+p = Pipeline("p", [inc, inc, fn(x: int) => x * x])
+q = p
+q.name = "q"
+print(p.name, q.name, p.run(1), len(q.stages))
+
+print(greet_all(["ann", "bo"], fn(n) => "hi " + n))
+nums = [5, 3, 8, 1, 9, 2]
+nums.sort_by(fn(n) => -n)
+print(nums)
+evens = nums.filter(fn(n) => n % 2 == 0)
+print(evens, nums.any(fn(n) => n > 8), nums.all(fn(n) => n > 1))
+print(nums.find(fn(n) => n < 3), nums.find(fn(n) => n > 50))
+print(nums.fold("", fn(s, n) => s + str(n)), nums.reduce(fn(a, b) => max(a, b)))
+empty: list[int] = []
+print(empty.reduce(fn(a, b) => a + b), empty.all(fn(n) => n > 0), empty.any(fn(n) => n > 0))
+pairs = ["bb", "a", "ccc"]
+pairs.sort_by(fn(s) => (len(s), s))
+print(pairs)
+
+fn describe(n: int) -> str:
+    fn label(k: int) -> str:
+        if k < 0:
+            return "neg"
+        if k == 0:
+            return "zero"
+        return "pos"
+    return label(n) + "/" + label(-n)
+
+print(describe(4), describe(0))
+table = {"sq": fn(x: int) => x * x, "neg": fn(x: int) => -x}
+print(table["sq"](7), table["neg"](7))

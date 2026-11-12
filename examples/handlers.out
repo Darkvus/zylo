@@ -1,0 +1,7 @@
+GET / -> [home] welcome ana
+GET /health -> ok
+POST /reset -> forbidden
+POST /reset -> [reset] state cleared
+GET /missing -> 404
+[1, 7, 6] 14
+["/", "/health"]

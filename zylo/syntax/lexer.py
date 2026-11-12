@@ -12,7 +12,7 @@ KEYWORDS = {
     "fn", "if", "elif", "else", "while", "for", "in", "return", "break", "continue",
     "and", "or", "not", "true", "false", "struct", "enum", "match", "is", "none", "import", "from", "as", "extern",
 }
-TWO_CHAR = {"==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=", "%="}
+TWO_CHAR = {"==", "!=", "<=", ">=", "->", "=>", "+=", "-=", "*=", "/=", "%="}
 ONE_CHAR = set("+-*/%<>=(),:[].?{}")
 ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "\\": "\\", '"': '"', "'": "'"}
 

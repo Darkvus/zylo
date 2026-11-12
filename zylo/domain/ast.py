@@ -37,10 +37,13 @@ class TypeRef(Node):
 
     Attributes:
         name: `int`, `list`, `Result`, a struct name, `mod.Struct`, or `?` for an optional type.
-        args: Type arguments (`list[int]` has one, `Result[T, E]` has two, `T?` has one).
+        args: Type arguments (`list[int]` has one, `Result[T, E]` has two, `T?` has one). For a function type
+            (`fn(A, B) -> R`, name `fn`) they are the parameter types.
+        ret: The return type of a function type, or None when it returns nothing (or for any other type).
     """
     name: str  # int float bool str list
     args: list["TypeRef"]
+    ret: "TypeRef | None" = None
 
 
 # ---- expressions ---------------------------------------------------------------
@@ -128,11 +131,45 @@ class Call(Node):
         args: Argument expressions. After checking, one per parameter: named arguments and defaults are folded in.
         ctor_fields: Field names when the checker found this is a struct constructor, otherwise None.
         named: Named arguments as written; the checker moves them into `args` and empties this list.
+        var: The variable of function type being called (`f(3)`), when the callee is a variable rather than a function.
     """
     func: str
     args: list["Expr"]
     ctor_fields: list[str] | None = None  # filled in by the checker if this is a struct constructor
     named: list[NamedArg] = field(default_factory=list)
+    var: VarInfo | None = None  # filled in by the checker if the callee is a variable holding a function
+
+
+@dataclass
+class CallValue(Node):
+    """A call of any expression that is not a plain name: `handlers["GET"](req)`, `make()(1)`, `(fn(x) => x)(2)`.
+
+    Attributes:
+        callee: The expression that produces the function.
+        args: Argument expressions.
+    """
+    callee: "Expr"
+    args: list["Expr"]
+
+
+@dataclass
+class Lambda(Node):
+    """An anonymous function `fn(x: int) => x * 2`, or a local `fn name(...)` with a block body.
+
+    Attributes:
+        params: Parameters; the type is None when it is left to the context.
+        ret: Declared return type, or None to infer it (an expression body) or return nothing (a block body).
+        expr: The body of the single-expression form, otherwise None.
+        body: The statements of the block form (empty for the expression form).
+        name: The function's name for a local `fn name(...)`, otherwise None.
+        captures: `(outer, inner)` variable pairs: what the closure copies when it is created (set by the checker).
+    """
+    params: list["Param"]
+    ret: "TypeRef | None"
+    expr: "Expr | None"
+    body: list["Stmt"] = field(default_factory=list)
+    name: str | None = None
+    captures: list = field(default_factory=list)
 
 
 @dataclass
@@ -222,12 +259,14 @@ class MethodCall(Node):
         args: Argument expressions (completed with defaults by the checker, like `Call.args`).
         variant: `(enum, variant)` when the checker found a variant constructor, otherwise None.
         named: Named arguments as written; the checker moves them into `args` and empties this list.
+        field_call: True when the checker found that `name` is a field of function type, not a method.
     """
     value: "Expr"
     name: str
     args: list["Expr"]
     variant: tuple[str, str] | None = None
     named: list[NamedArg] = field(default_factory=list)
+    field_call: bool = False
 
 
 @dataclass
@@ -249,7 +288,7 @@ class Try(Node):
 
 
 Expr = (Int | Float | Str | Bool | Name | BinOp | UnaryOp | Call | ListLit | Index | Attr
-        | MethodCall | NoneLit | IsCheck | Try | FString | TupleLit | DictLit | SetLit | Slice)
+        | MethodCall | NoneLit | IsCheck | Try | FString | TupleLit | DictLit | SetLit | Slice | CallValue | Lambda)
 
 
 # ---- statements ----------------------------------------------------------------
@@ -350,12 +389,12 @@ class Param(Node):
 
     Attributes:
         name: Parameter name.
-        type: Its declared type.
+        type: Its declared type (None only for an anonymous function's parameter whose type comes from the context).
         info: The checker's record of the variable; says whether the function modifies it or may borrow it.
         default: The default value (a constant expression), or None when the argument is required.
     """
     name: str
-    type: TypeRef
+    type: TypeRef | None
     info: VarInfo | None = None
     default: "Expr | None" = None
 
@@ -491,7 +530,7 @@ class Program(Node):
 
 # ---- generic traversal -----------------------------------------------------------------------
 
-_ANNOTATIONS = {"tys", "variant", "enum", "ty", "var", "vars", "info", "infos", "then_bind", "else_bind", "after_bind"}
+_ANNOTATIONS = {"tys", "variant", "enum", "ty", "var", "vars", "info", "infos", "then_bind", "else_bind", "after_bind", "captures"}
 
 
 def children(node: Node) -> Iterator[Node]:

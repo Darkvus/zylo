@@ -17,9 +17,10 @@ and is built vertically (lexer → parser → checker → codegen → tests).
 | **v0.8 Tooling** | `zylo fmt`, every error in one run, a language server (`zylo lsp`) and a VS Code extension with a generated grammar | done |
 | **v0.9 Enums** | `enum` with data per variant, exhaustive `match`, enums across modules and in editor symbols | done |
 | **v0.10 Language polish** | Methods on enums, `match` on `int` / `str` / `bool` / `Option` / `Result`, default values for parameters and struct fields, named arguments in calls and constructors | done |
+| **v0.11 Functions as values** | `fn(A) -> R` types, top-level functions as values, anonymous functions (`fn(x: int) => x * 2`) and local `fn`s that capture copies, calls of any function value, and `map` / `filter` / `fold` / `reduce` / `sort_by` / `any` / `all` / `find` on lists | done |
 | **Community** | Documentation translations (the docs are English-only for now) and localized diagnostics | |
 
-Later: generics, closures, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
+Later: generics, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
 
 ## Open questions
 

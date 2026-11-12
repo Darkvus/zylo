@@ -131,6 +131,106 @@ print(greet(times=3, name="Bo", greeting="Yo"))
 - Methods work the same way (`p.move(dy=1.0)`). Built-in functions and variant constructors take positional
   arguments only.
 
+## Functions are values
+
+A function can be passed around, stored and returned. Its type is written `fn(A, B) -> R` (`fn(A)` when it returns
+nothing, `fn() -> R` when it takes nothing) and can be used anywhere a type can: parameters, return types, struct
+fields, and the elements of lists, dicts, tuples, `Option` and `Result`.
+
+```zylo
+fn double(x: int) -> int:
+    return x * 2
+
+fn apply(f: fn(int) -> int, x: int) -> int:
+    return f(x)
+
+fn twice(f: fn(int) -> int) -> fn(int) -> int:
+    return fn(x: int) => f(f(x))
+
+print(apply(double, 3))          # 6: a top-level function used as a value
+print(twice(double)(5))          # 20: calling the result of a call
+ops: dict[str, fn(int, int) -> int] = {"add": fn(a: int, b: int) => a + b, "mul": fn(a: int, b: int) => a * b}
+print(ops["add"](2, 3), ops["mul"](2, 3))
+```
+
+Write `(fn(int) -> int)?` for an optional function: a `?` after a function type would otherwise belong to its return type.
+
+### Anonymous functions
+
+`fn(params) => expression` is a function without a name. Parameter types are required, unless the context already says
+what the function must be (an argument of a function or built-in method, a typed variable...), and then they may be
+left out. The return type is inferred from the expression; write `-> T` before the `=>` to state it.
+
+```zylo
+inc = fn(x: int) => x + 1
+parse = fn(s: str) -> int? => parse_int(s)
+print(inc(1))                    # 2
+print([1, 2, 3].map(fn(x) => x * x))
+```
+
+I chose `=>` after the parameter list over Python's `lambda x: ...` for three reasons: it keeps the word `fn` for
+every kind of function, so the same parameter and type syntax is used everywhere; a `:` would be ambiguous inside a
+dict literal (`{"k": fn(x: int): x}`) and in `if`/`while` headers; and it makes a one-expression body look like a
+value, which is what a callback is. The body is a single expression and ends at the next `,` or `)`.
+
+For a function that needs several statements, define it inside another function with a normal `fn`. It is an ordinary function that can use the variables around it, and its name is a variable holding it:
+
+```zylo
+fn make_counter_report(limit: int) -> list[str]:
+    fn label(n: int) -> str:
+        if n > limit:
+            return "big"
+        return "small"
+    return [1, 5, 9].map(label)
+
+print(make_counter_report(4))    # ["small", "big", "big"]
+```
+
+A local `fn` is defined when the line runs, so it cannot call itself (its name does not exist yet inside its own
+body); use a top-level function for recursion.
+
+### Closures capture copies
+
+An anonymous or local function can use the variables around it. Like everything in Zylo it captures **values**: when the
+function is created it takes a copy of each variable it uses.
+
+```zylo
+n = 10
+add_n = fn(x: int) => x + n
+n = 99
+print(add_n(1))                  # 11: it kept the n of 10
+```
+
+So a change made after the function was created is not seen inside, and a function can never change the variables it
+captured. The checker rejects an assignment (`n = 1`, `xs[0] = 1`, `xs.append(1)`...) to a captured variable inside the
+function, because it would silently change a copy; build and return a new value instead. Parameters and variables
+declared inside the function are its own and can be changed freely. `self` cannot be captured: copy what you need into a
+local first (`size = self.size`).
+
+### Calling function values
+
+`f(x)` calls a variable of function type, `handlers["GET"](req)` the result of any expression, and
+`self.handler(req)` a field of function type (the field and a method cannot share a name, so there is no ambiguity).
+
+```zylo
+struct Button:
+    label: str
+    on_click: fn(str) -> str
+
+    fn click(self) -> str:
+        return self.on_click(self.label)
+
+b = Button("ok", fn(s: str) => f"clicked {s}")
+print(b.click())
+print(b.on_click("direct"))
+```
+
+Function values are cheap to copy (they are reference counted), so passing and storing them never clones the code.
+They cannot be compared or printed: `==`, `print`, f-strings and `str()` reject a function, or a struct, enum or
+collection that contains one. A struct holding a function still works as any other struct otherwise. To use a method as a
+value, wrap it: `fn(x: int) => counter.add(x)` (the receiver is captured by copy). Built-in and `extern` functions are
+wrapped the same way.
+
 ## Lists
 
 ```zylo
@@ -153,6 +253,27 @@ print(2 in xs, len(xs))
 - Methods: `append(v)`, `pop()` (an `int?`: `none` on an empty list), `insert(i, v)`, `remove(v)` (a `bool`:
   was it there?), `clear()`, `reverse()`, `sort()`, `extend(other)`, `index(v)` (an `int?`), `count(v)`.
   `append(xs, v)` is the same as `xs.append(v)`.
+- Methods that take a function (see [Functions are values](#functions-are-values)); `T` is the element type:
+
+| Method | Result |
+|---|---|
+| `xs.map(f)` | `f: fn(T) -> U`; a new `list[U]` |
+| `xs.filter(f)` | `f: fn(T) -> bool`; a new list with the elements for which it is true |
+| `xs.fold(init, f)` | `f: fn(U, T) -> U`; folds from the left starting at `init`; returns `U` |
+| `xs.reduce(f)` | `f: fn(T, T) -> T`; like `fold` with the first element as start; a `T?` (`none` when empty) |
+| `xs.sort_by(key)` | `key: fn(T) -> K` (`K` int, float, str, bool or tuples of those); sorts in place, stable |
+| `xs.any(f)`, `xs.all(f)` | `f: fn(T) -> bool`; a `bool` (`all` of an empty list is true) |
+| `xs.find(f)` | `f: fn(T) -> bool`; the first element for which it is true, a `T?` |
+
+```zylo
+words = ["pear", "fig", "banana", "kiwi"]
+lengths = words.map(fn(w) => len(w))
+long_ones = words.filter(fn(w) => len(w) > 3)
+total = lengths.fold(0, fn(acc, n) => acc + n)
+words.sort_by(fn(w) => len(w))
+print(lengths, long_ones, total, words)
+print(words.any(fn(w) => w == "fig"), words.all(fn(w) => len(w) > 3), words.find(fn(w) => w.startswith("b")))
+```
 
 ## Strings
 
@@ -611,4 +732,4 @@ These stop the program with exit code **101**: integer overflow (compile with
 
 ## Known limitations
 
-No closures or generics, no list comprehensions. See the [roadmap](../ROADMAP.md).
+No generics, no list comprehensions, no recursive local functions, and no multi-statement anonymous functions (use a local `fn`). See the [roadmap](../ROADMAP.md).

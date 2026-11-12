@@ -1,0 +1,49 @@
+# A tiny request router: handlers are function values stored in a dict, wrapped by middleware closures.
+
+struct Request:
+    method: str
+    path: str
+    user: str
+
+struct Route:
+    method: str
+    path: str
+    handler: fn(Request) -> str
+
+fn home(req: Request) -> str:
+    return f"welcome {req.user}"
+
+fn health(req: Request) -> str:
+    return "ok"
+
+fn logged(name: str, handler: fn(Request) -> str) -> fn(Request) -> str:
+    return fn(req: Request) => f"[{name}] " + handler(req)
+
+fn only_admin(handler: fn(Request) -> str) -> fn(Request) -> str:
+    fn check(req: Request) -> str:
+        if req.user != "admin":
+            return "forbidden"
+        return handler(req)
+    return check
+
+fn find_route(routes: list[Route], req: Request) -> Route?:
+    return routes.find(fn(r) => r.method == req.method and r.path == req.path)
+
+fn main_():
+    routes = [Route("GET", "/", logged("home", home)), Route("GET", "/health", health)]
+    routes.append(Route("POST", "/reset", only_admin(logged("reset", fn(r) => "state cleared"))))
+    requests = [Request("GET", "/", "ana"), Request("GET", "/health", "bob"), Request("POST", "/reset", "bob")]
+    requests.append(Request("POST", "/reset", "admin"))
+    requests.append(Request("GET", "/missing", "ana"))
+    for req in requests:
+        found = find_route(routes, req)
+        if found is none:
+            print(req.method, req.path, "->", "404")
+        else:
+            print(req.method, req.path, "->", found.handler(req))
+    lengths = routes.map(fn(r) => len(r.path))
+    print(lengths, lengths.fold(0, fn(a, b) => a + b))
+    names = routes.filter(fn(r) => r.method == "GET").map(fn(r) => r.path)
+    print(names)
+
+main_()

@@ -134,12 +134,29 @@ change a program's meaning, and a test proves it on every program in the reposit
 translation (in the interface layer) of use cases in the application layer, and the VS Code grammar is generated from
 the lexer's keywords and the built-in catalog, so highlighting cannot drift from the language.
 
+**Functions are values, and closures capture copies.** A function type is `fn(A, B) -> R` and is `Rc<dyn Fn(A, B) -> R>`
+in Rust, so a function value is cheap to clone and can live in structs, lists and dicts like any other value. A top-level
+function used as a value is wrapped in a closure (lent parameters are lent inside the wrapper). Closures follow the
+language's value semantics: creating one clones every variable it uses (`{ let x = x.clone(); Rc::new(move |..| ..) }`),
+so it is `'static` and `Fn`, never `FnMut`, and later changes to the outer variable are invisible to it. Because of that
+the checker rejects assigning to, or mutating, a captured variable inside a closure (a silent change to a copy is a bug
+waiting to happen), and rejects capturing `self` (Rust cannot rebind it). The checker resolves captures with closure
+frames over the scope stack: a variable found outside a frame is replaced, inside it, by a fresh read-only variable and
+the pair is recorded on the `Lambda` node for the generator. Functions are neither comparable nor printable: the checker
+rejects `==`, `print`, f-strings and `str()` on any type that contains one, and the generator leaves `PartialEq` off such
+structs and enums and prints them opaquely, so a struct with a function field still derives `Clone` and works.
+The syntax is `fn(x: int) => expr`: `=>` avoids the `:` ambiguity with dict literals and block headers and keeps one
+keyword for all functions; parameter types may be omitted where the context fixes them (arguments of built-in higher-order
+methods, typed variables, fields). Multi-statement bodies are a local `fn name(...)` in a block, which the parser turns into
+a variable assigned a block-bodied lambda, so there is a single closure mechanism. A call whose callee is not a plain name is
+a `CallValue`; `obj.field(x)` is a method call node that the checker marks as a field call when the field has a function type.
+
 ## Known limitations
 
 - Values are still cloned when stored (assigned to another variable, put in a struct or a list) or returned.
 - `is` narrowing works on plain variables and a single condition (no `and` chains, no fields).
 - Rust generics and traits are not exposed, and there are no callbacks from Rust into Zylo.
-- No closures, generics or list comprehensions yet. `match` has no guards, no or-patterns (`1 | 2`) and no nested patterns.
+- No generics or list comprehensions yet; closures are limited (see above). `match` has no guards, no or-patterns (`1 | 2`) and no nested patterns.
 - The language server has no hover, go to definition or rename yet. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
 - No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.
 - Diagnostics are in English only.

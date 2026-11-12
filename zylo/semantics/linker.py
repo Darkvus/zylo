@@ -60,6 +60,30 @@ class Module:
         return name if self.is_entry else f"{self.id.replace('.', SEP)}{SEP}{name}"
 
 
+def local_names(stmt: ast.Stmt) -> set[str]:
+    """The variable names a top-level definition (or statement) declares, so they are not mistaken for functions.
+
+    Args:
+        stmt: A top-level statement.
+
+    Returns:
+        Parameter, assigned, loop, pattern and closure-parameter names found anywhere inside it.
+    """
+    names: set[str] = set()
+    for n in ast.walk(stmt):
+        if isinstance(n, ast.Param):
+            names.add(n.name)
+        elif isinstance(n, ast.For):
+            names.update(n.targets or [n.var])
+        elif isinstance(n, ast.Assign) and isinstance(n.target, ast.Name):
+            names.add(n.target.id)
+        elif isinstance(n, ast.Unpack):
+            names.update(t.id for t in n.targets)
+        elif isinstance(n, ast.MatchArm):
+            names.update(n.binds)
+    return names
+
+
 def err(msg: str, node: ast.Node, path: Path | None = None) -> ZyloError:
     """Build a positioned error.
 
@@ -97,6 +121,7 @@ class Linker:
         self.by_id: dict[str, Path] = {}
         self.order: list[Module] = []  # dependencies before dependents
         self.entry_dir = Path.cwd()
+        self.locals: set[str] = set()  # variables of the definition being rewritten: they hide functions of the same name
 
     # ---- public entry point ---------------------------------------------------------------
 
@@ -286,6 +311,7 @@ class Linker:
         for s in mod.program.body:
             if isinstance(s, (ast.Import, ast.FromImport)):
                 continue
+            self.locals = local_names(s)
             self.rw(s, mod)
             if isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef)):
                 if isinstance(s, (ast.StructDef, ast.EnumDef)) and not mod.is_entry:
@@ -315,6 +341,8 @@ class Linker:
             dep = mod.aliases[node.value.id]
             if dep.defs.get(node.name) == "enum":  # `module.Enum` in `module.Enum.Variant`
                 return ast.Name(self.export(dep, node.name, node, mod, kind="enum"), line=node.line, col=node.col, file=node.file)
+            if dep.defs.get(node.name) == "fn":  # `module.function` used as a value
+                return ast.Name(self.export(dep, node.name, node, mod, kind="fn"), line=node.line, col=node.col, file=node.file)
             raise err(f"module {node.value.id!r} has no values; call a function: {node.value.id}.name(...)", node, mod.path)
         if isinstance(node, ast.Name) and node.id in mod.aliases:
             raise err(f"{node.id!r} is a module, not a value", node, mod.path)
@@ -324,6 +352,12 @@ class Linker:
             elif node.id in mod.froms and mod.froms[node.id][0].defs.get(mod.froms[node.id][1]) == "enum":
                 dep, orig = mod.froms[node.id]
                 node.id = self.export(dep, orig, node, mod, kind="enum")
+            elif node.id not in self.locals:  # a function of this module, or imported by name, used as a value
+                if mod.defs.get(node.id) == "fn":
+                    node.id = mod.mangled(node.id)
+                elif node.id in mod.froms and mod.froms[node.id][0].defs.get(mod.froms[node.id][1]) == "fn":
+                    dep, orig = mod.froms[node.id]
+                    node.id = self.export(dep, orig, node, mod, kind="fn")
             return node
         for f in dataclasses.fields(node):
             if f.name in ast._ANNOTATIONS:
@@ -333,7 +367,7 @@ class Linker:
                 setattr(node, f.name, self.rw(v, mod))
             elif isinstance(v, list):
                 setattr(node, f.name, [self.rw(x, mod) if isinstance(x, ast.Node) else x for x in v])
-        if isinstance(node, ast.Call):
+        if isinstance(node, ast.Call) and node.func not in self.locals:
             if node.func in mod.defs:
                 node.func = mod.mangled(node.func)
             elif node.func in mod.froms:
