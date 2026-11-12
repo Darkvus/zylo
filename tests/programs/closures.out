@@ -1,0 +1,13 @@
+true false
+50 110
+[100, 105, 110]
+p q 9 3
+["hi ann", "hi bo"]
+[9, 8, 5, 3, 2, 1]
+[8, 2] true false
+Some(2) None
+985321 Some(9)
+None true false
+["a", "bb", "ccc"]
+pos/neg zero/zero
+49 -7

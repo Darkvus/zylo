@@ -222,6 +222,10 @@ class Parser:
             raise ZyloError("unexpected indentation", tok.line, tok.col)
         if tok.kind == "KW":
             match tok.value:
+                case "fn" if self.peek().kind != "IDENT":
+                    return self.parse_simple()  # an anonymous function used as an expression
+                case "fn" if self.depth > 0:
+                    return self.parse_local_fn()
                 case "fn":
                     return self.parse_fn()
                 case "extern":
@@ -377,6 +381,47 @@ class Parser:
             return ast.ExternFn(name, params, ret, [], False, False, template, line=kw.line, col=kw.col)
         body = self.parse_block()
         return ast.FnDef(name, params, ret, body, has_self, line=kw.line, col=kw.col)
+
+    def parse_local_fn(self) -> ast.Assign:
+        """Parse a `fn name(...)` inside a block: a variable holding a function that may use the variables around it.
+
+        Returns:
+            An assignment of a block-bodied `Lambda` to `name`.
+        """
+        f = self.parse_fn()
+        lam = ast.Lambda(f.params, f.ret, None, f.body, f.name, line=f.line, col=f.col)
+        return ast.Assign(ast.Name(f.name, line=f.line, col=f.col), None, lam, line=f.line, col=f.col)
+
+    def parse_lambda(self, kw: Token) -> ast.Lambda:
+        """Parse the rest of `fn(params) [-> T] => expression`, after the `fn` keyword.
+
+        Args:
+            kw: The `fn` token.
+
+        Returns:
+            The lambda; a parameter written without a type has `type` None.
+
+        Raises:
+            ZyloError: On a malformed parameter list, or a missing `=>` (a block body needs a name: `fn name(...):`).
+        """
+        self.expect("OP", "(")
+        params: list[ast.Param] = []
+        while not self.check("OP", ")"):
+            name = self.expect("IDENT")
+            if name.value == "self":
+                raise ZyloError("`self` can only be the first parameter of a method, inside a struct", name.line, name.col)
+            typ = self.parse_type() if self.match("OP", ":") else None
+            params.append(ast.Param(name.value, typ, line=name.line, col=name.col))
+            if not self.match("OP", ","):
+                break
+        self.expect("OP", ")")
+        ret = self.parse_type() if self.match("OP", "->") else None
+        if not self.check("OP", "=>"):
+            hint = " (for several statements, define a named `fn` inside a function)" if self.check("OP", ":") else ""
+            raise ZyloError(f"expected '=>' before the body of an anonymous function, found {describe(self.cur)}{hint}",
+                            self.cur.line, self.cur.col)
+        self.advance()
+        return ast.Lambda(params, ret, self.parse_expr(), line=kw.line, col=kw.col)
 
     def _is_self_param(self) -> bool:
         nxt = self.peek()
@@ -570,6 +615,13 @@ class Parser:
         Raises:
             ZyloError: On a nested optional (`T??`) or a malformed type.
         """
+        if self.check("OP", "("):  # a parenthesised type: `(fn(int) -> int)?`
+            self.advance()
+            t = self.parse_type()
+            self.expect("OP", ")")
+            return self._optional_suffix(t)
+        if self.check("KW", "fn"):
+            return self._optional_suffix(self.parse_fn_type())
         tok = self.expect("IDENT")
         name = tok.value
         while self.check("OP", ".") and self.peek().kind == "IDENT":  # qualified: module.Struct
@@ -604,8 +656,24 @@ class Parser:
             self.expect("OP", ",")
             args.append(self.parse_type())
             self.expect("OP", "]")
-        t = ast.TypeRef(name, args, line=tok.line, col=tok.col)
-        while self.check("OP", "?"):  # `T?` is Option; internally TypeRef("?", [T])
+        return self._optional_suffix(ast.TypeRef(name, args, line=tok.line, col=tok.col))
+
+    def parse_fn_type(self) -> ast.TypeRef:
+        """Parse a function type `fn(A, B) -> R`; without `-> R` it returns nothing."""
+        kw = self.advance()
+        self.expect("OP", "(")
+        params: list[ast.TypeRef] = []
+        while not self.check("OP", ")"):
+            params.append(self.parse_type())
+            if not self.match("OP", ","):
+                break
+        self.expect("OP", ")")
+        ret = self.parse_type() if self.match("OP", "->") else None
+        return ast.TypeRef("fn", params, ret, line=kw.line, col=kw.col)
+
+    def _optional_suffix(self, t: ast.TypeRef) -> ast.TypeRef:
+        """Apply any `?` after a type: `T?` is Option, internally `TypeRef("?", [T])`."""
+        while self.check("OP", "?"):
             q = self.advance()
             if t.name == "?":
                 raise ZyloError("nested Option types (`T??`) are not allowed", q.line, q.col)
@@ -689,6 +757,9 @@ class Parser:
             elif self.check("OP", "?"):
                 q = self.advance()
                 expr = ast.Try(expr, line=q.line, col=q.col)
+            elif self.check("OP", "("):  # calling the value of an expression: `table[k](x)`, `make()(x)`
+                lp = self.cur
+                expr = ast.CallValue(expr, self.parse_args(), line=lp.line, col=lp.col)
             elif self.check("OP", "."):
                 self.advance()
                 name = self.expect("IDENT")
@@ -720,6 +791,8 @@ class Parser:
             return ast.Bool(tok.value == "true", **pos)
         if tok.kind == "KW" and tok.value == "none":
             return ast.NoneLit(**pos)
+        if tok.kind == "KW" and tok.value == "fn":
+            return self.parse_lambda(tok)
         if tok.kind == "IDENT":
             if self.check("OP", "("):
                 return self.parse_call(tok)

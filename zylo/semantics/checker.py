@@ -105,6 +105,20 @@ class Scopes:
 
 
 @dataclass
+class ClosureFrame:
+    """A closure being checked: where its scopes start and which outer variables it has captured so far.
+
+    Attributes:
+        base: Index in the scope stack of the closure's parameter scope; scopes below it belong to the enclosing code.
+        node: The closure, whose `captures` list is filled in.
+        by_outer: The inner copy of each captured outer variable, keyed by the outer variable.
+    """
+    base: int
+    node: "ast.Lambda"
+    by_outer: dict[int, VarInfo] = field(default_factory=dict)
+
+
+@dataclass
 class StructInfo:
     """What the checker knows about one struct.
 
@@ -156,6 +170,8 @@ class Checker:
             mutating: `(struct, method)` pairs already known to modify `self`, from a previous run.
         """
         self.fns: dict[str, FnT] = {}
+        self.externs: set[str] = set()  # extern fns: they cannot be used as values
+        self.closures: list[ClosureFrame] = []  # the closures being checked, outermost first
         self.structs: dict[str, StructInfo] = {}
         self.enums: dict[str, EnumInfo] = {}
         self.mutating: set[tuple[str, str]] = set(mutating or ())  # (struct, method) pairs that modify self
@@ -236,6 +252,8 @@ class Checker:
             return ListT(self.resolve(t.args[0]))
         if t.name == "?":
             return OptionT(self.resolve(t.args[0]))
+        if t.name == "fn":
+            return FnT(tuple(self.resolve(a) for a in t.args), self.resolve(t.ret) if t.ret else UNIT)
         if t.name == "Result":
             return ResultT(self.resolve(t.args[0]), self.resolve(t.args[1]))
         if t.name == "tuple":
@@ -559,6 +577,8 @@ class Checker:
             raise err(f"function {f.name!r} is already defined", f)
         f.ty = self.fns[f.name] = self.signature(f)
         self.specs[f.name] = f.params
+        if isinstance(f, ast.ExternFn):
+            self.externs.add(f.name)
 
     def check_extern(self, f: ast.ExternFn) -> None:
         """Validate an `extern fn`: it needs a template, and `{n}` placeholders must name real parameters."""
@@ -583,6 +603,7 @@ class Checker:
         sig = f.ty
         top, saved_poison = self.scopes, self.poisoned
         self.scopes, self.ret, self.loops, self.owner, self.poisoned = Scopes(), sig.ret, 0, owner, set()
+        self.closures = []
         try:
             self_info = self.scopes.declare("self", EnumT(owner) if owner in self.enums else StructT(owner)) if owner else None
             for p, pt in zip(f.params, sig.params):
@@ -755,7 +776,9 @@ class Checker:
             if name in seen:
                 raise err(f"{name!r} appears twice on the left of the assignment", target)
             seen.add(name)
-            existing = self.scopes.lookup(name)
+            existing = self.lookup_var(name, target)
+            if existing is not None and existing.captured:
+                raise self.captured_error(name, target)
             if existing is None:
                 s.declares.append(True)
                 s.vars.append(self.scopes.declare(name, et))
@@ -847,7 +870,9 @@ class Checker:
             raise err("`self` cannot be declared or reassigned" if self.owner is None
                       else "enum values are immutable: return a new value instead of reassigning `self`" if self.owner in self.enums
                       else "cannot reassign `self`; modify its fields (`self.x = ...`)", s)
-        existing = self.scopes.lookup(target.id)
+        existing = self.lookup_var(target.id, target)
+        if existing is not None and existing.captured:
+            raise self.captured_error(target.id, target)
         if s.annotation:
             if existing:
                 raise err(f"{target.id!r} is already declared", s)
@@ -875,8 +900,48 @@ class Checker:
         """Mark the root variable of a place (`xs[i]`, `p.x`, `p.items[0]`...) as mutable."""
         while isinstance(e, (ast.Index, ast.Attr)):
             e = e.value
-        if isinstance(e, ast.Name) and (info := self.scopes.lookup(e.id)):
+        if isinstance(e, ast.Name) and (info := self.lookup_var(e.id, e)):
+            if info.captured:
+                raise self.captured_error(e.id, e)
             info.mutable = True
+
+    def captured_error(self, name: str, node: ast.Node) -> ZyloError:
+        """The error for modifying a variable that a closure captured."""
+        return err(f"cannot modify {name!r} inside a function that captured it: closures capture a copy of the variables "
+                   f"they use, so the change would be lost; copy it into a local first or return the new value", node)
+
+    def lookup_var(self, name: str, node: ast.Node) -> VarInfo | None:
+        """Find a visible variable, turning it into a captured copy when it lives outside the closures being checked.
+
+        Args:
+            name: The variable's name.
+            node: Where it is used, for errors.
+
+        Returns:
+            The variable as seen from the current code: the variable itself, or the read-only copy a closure holds of it.
+
+        Raises:
+            ZyloError: If a closure tries to capture `self`.
+        """
+        found, info = -1, None
+        for i in range(len(self.scopes.stack) - 1, -1, -1):
+            if name in self.scopes.stack[i]:
+                found, info = i, self.scopes.stack[i][name]
+                break
+        if info is None:
+            return None
+        for frame in self.closures:  # outermost first, so a nested closure copies the outer closure's copy
+            if frame.base > found:
+                if name == "self":
+                    raise err("a function cannot capture `self`; copy what it needs into a local first (`size = self.size`)", node)
+                inner = frame.by_outer.get(id(info))
+                if inner is None:
+                    inner = VarInfo(info.name, info.ty, narrowed=info.narrowed, captured=True)
+                    frame.by_outer[id(info)] = inner
+                    frame.node.captures.append((info, inner))
+                    self.scopes.stack[frame.base][name] = inner
+                info, found = inner, frame.base
+        return info
 
     def expect_int(self, e: ast.Expr) -> None:
         """Require an expression to be an int.
@@ -914,14 +979,18 @@ class Checker:
             case ast.Bool():
                 return BOOL
             case ast.Name(id):
-                info = self.scopes.lookup(id)
+                info = self.lookup_var(id, e)
                 if info is None:
                     if id in self.structs:
                         raise err(f"{id!r} is a struct; build it with parentheses: {id}(...)", e)
                     if id in self.enums:
                         raise err(f"{id!r} is an enum; name one of its variants: {id}.Variant", e)
-                    if id in self.fns or id in BUILTINS:
-                        raise err(f"{id!r} is a function; call it with parentheses", e)
+                    if id in self.fns and id in self.externs:
+                        raise err(f"{id!r} is an `extern fn` and cannot be used as a value; wrap it: fn(...) => {id}(...)", e)
+                    if id in self.fns:
+                        return self.fns[id]  # a top-level function used as a value
+                    if id in BUILTINS:
+                        raise err(f"{id!r} is a built-in function; call it, or wrap it: fn(x) => {id}(x)", e)
                     if id in self.poisoned:
                         raise _Poisoned
                     raise err(f"undefined variable {id!r}", e)
@@ -970,6 +1039,14 @@ class Checker:
                 if not key_ok(first):
                     raise err(f"set elements must be int, str, bool or tuples of those, not {first}", e)
                 return SetT(first)
+            case ast.Lambda():
+                return self.lambda_expr(e, expected)
+            case ast.CallValue(callee, args):
+                ft = self.expr(callee)
+                if not isinstance(ft, FnT):
+                    raise err(f"cannot call a value of type {ft}", e)
+                self.check_args(e, "the function", args, ft)
+                return ft.ret
             case ast.Slice(v, lo, hi):
                 vt = self.expr(v)
                 if vt != STR and not isinstance(vt, ListT):
@@ -1027,6 +1104,8 @@ class Checker:
             lt = self.expr(left, want)
             if lt != want:
                 raise err(f"`{op}` on {rt} needs a {want} on the left, not {lt}", e)
+            if self.contains_fn(lt):
+                raise err(f"cannot use `{op}` with {lt}: functions cannot be compared", e)
             return BOOL
         if isinstance(left, ast.NoneLit):  # `none == x`: the other side gives the type
             rt = self.expr(right)
@@ -1050,6 +1129,8 @@ class Checker:
                 return BOOL
             raise err(f"`{op}` is not defined for {lt}", e)
         if op in EQ:
+            if self.contains_fn(lt):
+                raise err(f"cannot compare {lt} with `{op}`: functions cannot be compared", e)
             return BOOL
         raise err(f"unknown operator {op!r}", e)
 
@@ -1125,9 +1206,7 @@ class Checker:
 
     def format_part(self, p: ast.FormatPart) -> None:
         """Check one `{expression:spec}` field of an f-string: a printable value and a valid specification."""
-        t = self.expr(p.value)
-        if t == UNIT:
-            raise err("the expression produces no value", p.value)
+        t = self.printable(p.value)
         m = self.SPEC_RE.match(p.spec)
         if not m:
             raise err(f"unsupported format specification {p.spec!r} (use e.g. `:.2f`, `:>8`, `:05d`)", p)
@@ -1135,6 +1214,36 @@ class Checker:
         want = {"f": FLOAT, "d": INT, "x": INT, "X": INT, "b": INT, "s": STR}.get(kind)
         if want is not None and t != want:
             raise err(f"format type `{kind}` needs {want}, not {t}", p)
+
+    def printable(self, e: ast.Expr) -> Type:
+        """Check an expression that is about to be printed: it needs a value, and functions cannot be shown."""
+        t = self.expr(e)
+        if t == UNIT:
+            raise err("the expression produces no value", e)
+        if self.contains_fn(t):
+            raise err(f"cannot print {t}: functions cannot be printed", e)
+        return t
+
+    def contains_fn(self, t: Type, seen: frozenset[str] = frozenset()) -> bool:
+        """Whether a value of this type holds a function somewhere (functions can be neither compared nor printed)."""
+        if isinstance(t, FnT):
+            return True
+        if isinstance(t, (ListT, SetT)):
+            return self.contains_fn(t.elem, seen)
+        if isinstance(t, OptionT):
+            return self.contains_fn(t.inner, seen)
+        if isinstance(t, ResultT):
+            return self.contains_fn(t.ok, seen) or self.contains_fn(t.err, seen)
+        if isinstance(t, DictT):
+            return self.contains_fn(t.val, seen)
+        if isinstance(t, TupleT):
+            return any(self.contains_fn(x, seen) for x in t.elems)
+        if isinstance(t, (StructT, EnumT)) and t.name not in seen:
+            seen = seen | {t.name}
+            if isinstance(t, StructT):
+                return any(self.contains_fn(x, seen) for x in self.structs[t.name].fields.values())
+            return any(self.contains_fn(x, seen) for ts in self.enums[t.name].variants.values() for x in ts)
+        return False
 
     def type_method(self, e: ast.MethodCall, rt: Type) -> Type:
         """Methods of the built-in str / list / dict / set types."""
@@ -1153,6 +1262,10 @@ class Checker:
 
         def mutates() -> None:
             self.mark_mutable(e.value)
+
+        def no_fn(t: Type) -> None:
+            if self.contains_fn(t):
+                raise err(f"{n}() compares elements, and functions cannot be compared", e)
 
         if rt == STR:
             if n in ("strip", "upper", "lower"):
@@ -1214,6 +1327,7 @@ class Checker:
             if n == "remove":
                 arity(1)
                 arg(0, el)
+                no_fn(el)
                 mutates()
                 return BOOL
             if n in ("clear", "reverse"):
@@ -1234,12 +1348,55 @@ class Checker:
             if n == "index":
                 arity(1)
                 arg(0, el)
+                no_fn(el)
                 return OptionT(INT)
             if n == "count":
                 arity(1)
                 arg(0, el)
+                no_fn(el)
                 return INT
-            have = "append, pop, insert, remove, clear, reverse, sort, extend, index, count"
+            if n == "map":
+                arity(1)
+                ft = self.fn_arg(args[0], [el])
+                if ft.ret == UNIT:
+                    raise err("the function given to map must return a value", args[0])
+                return ListT(ft.ret)
+            if n == "filter":
+                arity(1)
+                self.fn_arg(args[0], [el], BOOL)
+                return rt
+            if n in ("any", "all"):
+                arity(1)
+                self.fn_arg(args[0], [el], BOOL)
+                return BOOL
+            if n == "find":
+                arity(1)
+                if isinstance(el, OptionT):
+                    raise err("find() on a list of Option values is not supported", e)
+                self.fn_arg(args[0], [el], BOOL)
+                return OptionT(el)
+            if n == "fold":
+                arity(2)
+                acc = self.expr(args[0])
+                if acc == UNIT:
+                    raise err("the expression produces no value", args[0])
+                self.fn_arg(args[1], [acc, el], acc)
+                return acc
+            if n == "reduce":
+                arity(1)
+                if isinstance(el, OptionT):
+                    raise err("reduce() on a list of Option values is not supported", e)
+                self.fn_arg(args[0], [el, el], el)
+                return OptionT(el)
+            if n == "sort_by":
+                arity(1)
+                ft = self.fn_arg(args[0], [el])
+                if not sortable(ft.ret):
+                    raise err(f"sort_by needs a key function that returns int, float, str, bool or a tuple of those, not {ft.ret}", args[0])
+                mutates()
+                return UNIT
+            have = ("append, pop, insert, remove, clear, reverse, sort, extend, index, count, map, filter, fold, reduce, "
+                    "sort_by, any, all, find")
         elif isinstance(rt, DictT):
             if n == "get":
                 arity(1, 2)
@@ -1344,6 +1501,11 @@ class Checker:
         info = self.enums[rt.name] if isinstance(rt, EnumT) else self.struct_of(rt, e, "methods")
         sig = info.methods.get(e.name)
         if sig is None:
+            ft = info.fields.get(e.name) if isinstance(rt, StructT) else None
+            if isinstance(ft, FnT):  # `self.handler(req)`: calling a field that holds a function
+                self.check_args(e, f"{rt}.{e.name}", e.args, ft)
+                e.field_call = True
+                return ft.ret
             if isinstance(rt, StructT) and e.name in info.fields:
                 raise err(f"{e.name!r} is a field of {rt}, not a method", e)
             have = ", ".join(info.methods)
@@ -1361,6 +1523,94 @@ class Checker:
         self.check_args(e, e.func, e.args, FnT(tuple(types), StructT(e.func)), self.specs.get(e.func))
         e.ctor_fields = list(info.fields)
         return StructT(e.func)
+
+    # ---- functions as values ---------------------------------------------------------------
+
+    def fn_arg(self, a: ast.Expr, params: list[Type], ret: Type | None = None) -> FnT:
+        """Check an argument that must be a function with the given parameter types.
+
+        Args:
+            a: The argument. An anonymous function may leave its parameter types out: they come from `params`.
+            params: The parameter types the function must take.
+            ret: The return type it must have, or None to accept (and report) any.
+
+        Returns:
+            The argument's function type.
+
+        Raises:
+            ZyloError: If the argument is not a function of that shape.
+        """
+        t = self.lambda_expr(a, None, params, ret) if isinstance(a, ast.Lambda) else self.expr(a)
+        if isinstance(a, ast.Lambda):
+            a.ty = t
+        want = FnT(tuple(params), ret if ret is not None else (t.ret if isinstance(t, FnT) else UNIT))
+        if t != want:
+            raise err(f"expected a function {want}, got {t}", a)
+        return t
+
+    def lambda_expr(self, e: ast.Lambda, expected: Type | None, params: list[Type] | None = None,
+                    ret: Type | None = None) -> Type:
+        """Type an anonymous function (or a local `fn`) and work out what it captures.
+
+        Args:
+            e: The function.
+            expected: The type the context wants, if any; it fills in omitted parameter types.
+            params: Parameter types the context requires (for the arguments of built-in methods).
+            ret: A return type the context requires, used as a hint for the body.
+
+        Returns:
+            The function's type.
+
+        Raises:
+            ZyloError: On a missing or mismatched parameter type, or a body that does not fit its return type.
+        """
+        if params is None and isinstance(expected, FnT):
+            params, ret = list(expected.params), expected.ret
+        if params is not None and len(params) != len(e.params):
+            raise err(f"this function takes {len(e.params)} parameter(s) but {len(params)} are expected here", e)
+        types: list[Type] = []
+        seen: set[str] = set()
+        for i, p in enumerate(e.params):
+            if p.name in seen:
+                raise err(f"duplicate parameter {p.name!r}", p)
+            seen.add(p.name)
+            if p.type is not None:
+                pt = self.resolve(p.type)
+                if params is not None and params[i] != pt:
+                    raise err(f"parameter {p.name!r} is {pt} but {params[i]} is expected here", p)
+            elif params is not None:
+                pt = params[i]
+            else:
+                raise err(f"parameter {p.name!r} needs a type (`{p.name}: int`): nothing here tells which one it is", p)
+            types.append(pt)
+        declared = self.resolve(e.ret) if e.ret else None
+        if declared is None and e.expr is None:
+            declared = UNIT  # a block body returns nothing unless `-> T` says so
+        want = declared if declared is not None else ret
+        e.captures = []
+        saved = (self.ret, self.loops)
+        self.scopes.push()
+        self.closures.append(ClosureFrame(len(self.scopes.stack) - 1, e))
+        try:
+            for p, pt in zip(e.params, types):
+                p.info = self.scopes.declare(p.name, pt)
+            self.ret, self.loops = want, 0
+            if e.expr is not None:
+                got = self.expr(e.expr, want)
+                if declared is not None and got != declared:
+                    raise err(f"the function declares -> {declared} but its body is {got}", e.expr)
+            else:
+                before = len(self.errors)
+                for s in e.body:
+                    self.stmt(s)
+                got = declared
+                if len(self.errors) == before and got != UNIT and not always_returns(e.body):
+                    raise err(f"function {e.name or '(anonymous)'!r} can finish without a `return`", e)
+        finally:
+            self.closures.pop()
+            self.scopes.pop()
+            self.ret, self.loops = saved
+        return FnT(tuple(types), got)
 
     # ---- calls ------------------------------------------------------------------
 
@@ -1431,7 +1681,14 @@ class Checker:
         return slots  # type: ignore[return-value]
 
     def call(self, e: ast.Call, expected: Type | None = None) -> Type:
-        """Type a call: a struct constructor, a built-in, or a user function."""
+        """Type a call: a function-typed variable, a struct constructor, a built-in, or a user function."""
+        var = self.lookup_var(e.func, e)
+        if var is not None and isinstance(var.ty, FnT):
+            e.var = var
+            self.check_args(e, e.func, e.args, var.ty)
+            return var.ty.ret
+        if var is not None and e.func not in self.structs and e.func not in self.fns and e.func not in BUILTINS:
+            raise err(f"{e.func!r} is a {var.ty}, not a function", e)
         if e.func in self.structs:
             return self.ctor(e)
         if e.func in BUILTINS and not (e.func in SHADOWABLE and e.func in self.fns):
@@ -1455,8 +1712,7 @@ class Checker:
         match name:
             case "print":  # any number of values, separated by spaces
                 for a in args:
-                    if self.expr(a) == UNIT:
-                        raise err("the expression produces no value", a)
+                    self.printable(a)
                 return UNIT
             case "len":
                 arity(1)
@@ -1583,8 +1839,7 @@ class Checker:
                 return ResultT(INT, STR)
             case "eprint":
                 for a in args:
-                    if self.expr(a) == UNIT:
-                        raise err("the expression produces no value", a)
+                    self.printable(a)
                 return UNIT
             case "sleep":
                 arity(1)

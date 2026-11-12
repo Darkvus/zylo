@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from zylo.domain import ast
 from zylo.domain.builtins import BUILTINS
-from zylo.syntax.formatter import expr_text
+from zylo.syntax.formatter import expr_text, type_text
 from zylo.syntax.lexer import KEYWORDS
 from zylo.syntax.parser import parse_collect
 
@@ -52,9 +52,7 @@ class Completion:
 
 
 def _type_text(t: ast.TypeRef) -> str:
-    if t.name == "?":
-        return _type_text(t.args[0]) + "?"
-    return f"{t.name}[{', '.join(_type_text(a) for a in t.args)}]" if t.args else t.name
+    return type_text(t)
 
 
 def _signature(f: ast.FnDef) -> str:

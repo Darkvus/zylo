@@ -60,7 +60,11 @@ def float_text(v: float) -> str:
 def type_text(t: ast.TypeRef) -> str:
     """Return a written type."""
     if t.name == "?":
-        return type_text(t.args[0]) + "?"
+        inner = type_text(t.args[0])
+        return f"({inner})?" if t.args[0].name == "fn" else inner + "?"  # `fn(int) -> int?` returns an Option
+    if t.name == "fn":
+        ret = f" -> {type_text(t.ret)}" if t.ret else ""
+        return f"fn({', '.join(type_text(a) for a in t.args)}){ret}"
     if t.args:
         return f"{t.name}[{', '.join(type_text(a) for a in t.args)}]"
     return t.name
@@ -119,6 +123,12 @@ def _expr(e: ast.Expr, q: str) -> tuple[str, int]:
             return f"{expr_text(v, ATOM, q)}?", ATOM
         case ast.Call(func, args, named=named):
             return f"{func}({_args(args, q, named)})", ATOM
+        case ast.CallValue(callee, args):
+            return f"{expr_text(callee, ATOM, q)}({_args(args, q)})", ATOM
+        case ast.Lambda():
+            params = ", ".join(p.name + (f": {type_text(p.type)}" if p.type else "") for p in e.params)
+            ret = f" -> {type_text(e.ret)}" if e.ret else ""
+            return f"fn({params}){ret} => {expr_text(e.expr, 0, q)}", 0
         case ast.MethodCall(v, name, args, named=named):
             return f"{expr_text(v, ATOM, q)}.{name}({_args(args, q, named)})", ATOM
         case ast.Attr(v, name):
@@ -265,6 +275,11 @@ class _Formatter:
         match s:
             case ast.ExprStmt(e):
                 self.line(s.line, indent, expr_text(e), first_in_block)
+            case ast.Assign(value=ast.Lambda(name=str()) as lam):  # a local `fn name(...)`
+                params = ", ".join(f"{p.name}: {type_text(p.type)}" for p in lam.params)
+                ret = f" -> {type_text(lam.ret)}" if lam.ret else ""
+                self.header(s, indent, f"fn {lam.name}({params}){ret}", first_in_block)
+                self.block(lam.body, indent + 1)
             case ast.Assign():
                 self.line(s.line, indent, self.assign_text(s), first_in_block)
             case ast.Unpack(targets, value):

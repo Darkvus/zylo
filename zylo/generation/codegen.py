@@ -22,6 +22,7 @@ from zylo.domain.types import (
     UNIT,
     DictT,
     EnumT,
+    FnT,
     ListT,
     OptionT,
     ResultT,
@@ -224,7 +225,62 @@ def rust_type(t: Type) -> str:
         return f"Option<{rust_type(t.inner)}>"
     if isinstance(t, ResultT):
         return f"Result<{rust_type(t.ok)}, {rust_type(t.err)}>"
+    if isinstance(t, FnT):
+        ret = "" if t.ret == UNIT else f" -> {rust_type(t.ret)}"
+        return f"std::rc::Rc<dyn Fn({', '.join(rust_type(x) for x in t.params)}){ret}>"
     raise ZyloError(f"type has no Rust equivalent: {t}")
+
+
+def holds_fn(t: Type, opaque: set[str]) -> bool:
+    """Whether a type holds a function (directly, or through a struct or enum in `opaque`).
+
+    Args:
+        t: The type.
+        opaque: Names of the structs and enums already known to hold a function.
+
+    Returns:
+        True if values of the type cannot derive `PartialEq` or `Debug` in Rust.
+    """
+    if isinstance(t, FnT):
+        return True
+    if isinstance(t, (StructT, EnumT)):
+        return t.name in opaque
+    if isinstance(t, (ListT, SetT)):
+        return holds_fn(t.elem, opaque)
+    if isinstance(t, OptionT):
+        return holds_fn(t.inner, opaque)
+    if isinstance(t, ResultT):
+        return holds_fn(t.ok, opaque) or holds_fn(t.err, opaque)
+    if isinstance(t, DictT):
+        return holds_fn(t.val, opaque)
+    if isinstance(t, TupleT):
+        return any(holds_fn(x, opaque) for x in t.elems)
+    return False
+
+
+def fn_holders(structs: list[ast.StructDef], enums: list[ast.EnumDef]) -> set[str]:
+    """Find the structs and enums that hold a function, directly or through another one.
+
+    Args:
+        structs: The program's structs.
+        enums: The program's enums.
+
+    Returns:
+        Their names.
+    """
+    found: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for sd in structs:
+            if sd.name not in found and any(holds_fn(f.ty, found) for f in sd.fields):
+                found.add(sd.name)
+                changed = True
+        for ed in enums:
+            if ed.name not in found and any(holds_fn(t, found) for v in ed.variants for t in v.tys):
+                found.add(ed.name)
+                changed = True
+    return found
 
 
 def is_copy(t: Type) -> bool:
@@ -273,6 +329,7 @@ class Gen:
         self.out: list[str] = []
         self.depth = 0
         self.tmp = 0
+        self.opaque: set[str] = set()  # structs and enums that hold a function: no `PartialEq`, opaque `Debug`
 
     def line(self, text: str) -> None:
         """Append one line at the current indentation."""
@@ -294,6 +351,7 @@ class Gen:
         fns = [s for s in prog.body if isinstance(s, ast.FnDef) and not isinstance(s, ast.ExternFn)]
         enums = [s for s in prog.body if isinstance(s, ast.EnumDef)]
         rest = [s for s in prog.body if not isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef))]
+        self.opaque = fn_holders(structs, enums)
         for ed in enums:
             self.enum(ed)
             self.out.append("")
@@ -310,12 +368,19 @@ class Gen:
 
     def enum(self, ed: ast.EnumDef) -> None:
         """Emit an enum with its variants; `Debug` prints a value like `Circle(2.0)`."""
-        self.line("#[derive(Clone, PartialEq, Debug)]")
+        opaque = ed.name in self.opaque
+        self.line("#[derive(Clone)]" if opaque else "#[derive(Clone, PartialEq, Debug)]")
         self.line(f"enum {tname(ed.name)} {{")
         for v in ed.variants:
             data = f"({', '.join(rust_type(t) for t in v.tys)})" if v.tys else ""
             self.line(f"    {v.name}{data},")
         self.line("}")
+        if opaque:
+            self.line(f"impl std::fmt::Debug for {tname(ed.name)} {{")
+            self.line("    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {")
+            self.line(f'        write!(f, "{ed.display or ed.name}(..)")')
+            self.line("    }")
+            self.line("}")
         if ed.methods:
             self.out.append("")
             self.line(f"impl {tname(ed.name)} {{")
@@ -366,7 +431,8 @@ class Gen:
     def struct(self, sd: ast.StructDef) -> None:
         """Emit a struct, its `Debug` implementation and its methods."""
         name = tname(sd.name)
-        self.line("#[derive(Clone, PartialEq)]")
+        opaque = sd.name in self.opaque
+        self.line("#[derive(Clone)]" if opaque else "#[derive(Clone, PartialEq)]")
         self.line(f"struct {name} {{")
         for f in sd.fields:
             self.line(f"    {ident(f.name)}: {rust_type(f.ty)},")
@@ -376,7 +442,10 @@ class Gen:
         args = ", ".join(f"self.{ident(f.name)}" for f in sd.fields)
         self.line(f"impl std::fmt::Debug for {name} {{")
         self.line("    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {")
-        self.line(f'        write!(f, "{sd.display or sd.name}({shown})", {args})')
+        if opaque:  # a function cannot be shown, so neither can the fields around it (the checker never prints it)
+            self.line(f'        write!(f, "{sd.display or sd.name}(..)")')
+        else:
+            self.line(f'        write!(f, "{sd.display or sd.name}({shown})", {args})')
         self.line("    }")
         self.line("}")
         if sd.methods:
@@ -571,6 +640,8 @@ class Gen:
 def emit(e: ast.Expr) -> str:
     """Expression as an owned value (clones non-Copy values read from a variable)."""
     code = emit_ref(e)
+    if isinstance(e, ast.Name) and e.var is None:
+        return code  # a top-level function used as a value: already a fresh function value
     if isinstance(e, (ast.Name, ast.Index, ast.Attr)) and not is_copy(e.ty) and not getattr(e, "variant", None):
         return f"{code}.clone()"
     return code
@@ -619,8 +690,14 @@ def emit_ref(e: ast.Expr) -> str:
             return f"String::from({str_lit(v)})"
         case ast.Bool(v):
             return "true" if v else "false"
+        case ast.Name(i) if e.var is None and isinstance(e.ty, FnT):
+            return fn_value(i)
         case ast.Name(i):
             return f"(*{ident(i)})" if e.var is not None and e.var.by_ref else ident(i)
+        case ast.Lambda():
+            return lambda_value(e)
+        case ast.CallValue(callee, args):
+            return f"({emit_ref(callee)})({', '.join(emit(a) for a in args)})"
         case ast.TupleLit(items):
             return "(" + ", ".join(emit(x) for x in items) + ")"
         case ast.DictLit(keys, values):
@@ -664,6 +741,8 @@ def emit_ref(e: ast.Expr) -> str:
             return f"({emit(v)}?)"
         case ast.MethodCall() if e.variant:
             return f"{tname(e.variant[0])}::{e.variant[1]}({', '.join(emit(a) for a in e.args)})"
+        case ast.MethodCall(v, name, args) if e.field_call:
+            return f"({emit_ref(v)}.{ident(name)})({', '.join(emit(a) for a in args)})"
         case ast.MethodCall(v, name, args) if isinstance(v.ty, (OptionT, ResultT)):
             return f"{emit(v)}.{name}({', '.join(emit(a) for a in args)})"
         case ast.MethodCall(v, name, args) if v.ty == STR or isinstance(v.ty, (ListT, DictT, SetT)):
@@ -687,6 +766,32 @@ def emit_ref(e: ast.Expr) -> str:
         case ast.Call():
             return call(e)
     raise ZyloError(f"unsupported node: {type(e).__name__}", e.line, e.col)
+
+
+def fn_value(name: str) -> str:
+    """A top-level function used as a value: a function value wrapping a call (lent parameters stay lent inside)."""
+    fd = _FNS[name]
+    names = [f"__a{i}" for i in range(len(fd.params))]
+    params = ", ".join(f"{n}: {rust_type(t)}" for n, t in zip(names, fd.ty.params))
+    args = ", ".join(("&" if p.info.by_ref else "") + n for n, p in zip(names, fd.params))
+    return f"(std::rc::Rc::new(|{params}| {ident(name)}({args})) as {rust_type(fd.ty)})"
+
+
+def lambda_value(e: ast.Lambda) -> str:
+    """An anonymous function: a function value that owns a copy of everything it captured."""
+    ft = e.ty
+    params = ", ".join(f"{'mut ' if p.info.mutable else ''}{ident(p.name)}: {rust_type(p.info.ty)}" for p in e.params)
+    ret = "" if ft.ret == UNIT else f" -> {rust_type(ft.ret)}"
+    if e.expr is not None:
+        body = f"{emit(e.expr)}" if ft.ret != UNIT else f"{emit_ref(e.expr)};"
+    else:
+        g = Gen()
+        g.block(e.body)
+        body = "\n".join(g.out)
+    copies = "".join(
+        f"let {ident(inner.name)} = {emit(ast.Name(outer.name, var=outer, ty=outer.ty))}; "
+        for outer, inner in e.captures)
+    return (f"{{ {copies}std::rc::Rc::new(move |{params}|{ret} {{ {body} }}) as {rust_type(ft)} }}")
 
 
 def fstring(parts: list) -> str:
@@ -733,6 +838,40 @@ def call_args(params: list[ast.Param], args: list[ast.Expr], by_ref_ok: bool = T
     return ", ".join(out)
 
 
+HIGHER_ORDER = {"map", "filter", "fold", "reduce", "sort_by", "any", "all", "find"}
+
+
+def higher_order(e: ast.MethodCall) -> str:
+    """Render `map`, `filter`, `fold`, `reduce`, `sort_by`, `any`, `all` and `find` on a list.
+
+    The function argument is bound once (`__f`, by reference so a variable holding it is not cloned) and called for
+    each element.
+
+    Args:
+        e: The method call.
+
+    Returns:
+        The Rust expression.
+    """
+    v, n, args = e.value, e.name, e.args
+    fn = args[-1]
+    bound = f"let __f = &{emit_ref(fn)};"
+    if n == "sort_by":
+        body = f"{emit_mut(v)}.sort_by(|__a, __b| (__f)(__a.clone()).partial_cmp(&(__f)(__b.clone())).unwrap())"
+        return f"{{ {bound} {body} }}"
+    it = f"{emit_ref(v)}.iter().cloned()"
+    body = {
+        "map": f"{it}.map(|__x| (__f)(__x)).collect::<Vec<_>>()",
+        "filter": f"{it}.filter(|__x| (__f)(__x.clone())).collect::<Vec<_>>()",
+        "any": f"{it}.any(|__x| (__f)(__x))",
+        "all": f"{it}.all(|__x| (__f)(__x))",
+        "find": f"{it}.find(|__x| (__f)(__x.clone()))",
+        "reduce": f"{it}.reduce(|__acc, __x| (__f)(__acc, __x))",
+        "fold": f"{it}.fold({emit(args[0])}, |__acc, __x| (__f)(__acc, __x))",
+    }[n]
+    return f"{{ {bound} {body} }}"
+
+
 def type_method(e: ast.MethodCall) -> str:
     """Render a method call on a built-in str, list, dict or set.
 
@@ -763,6 +902,8 @@ def type_method(e: ast.MethodCall) -> str:
             "chars": lambda: f"{a}.chars().map(|c| c.to_string()).collect::<Vec<String>>()",
             "repeat": lambda: f"{a}.repeat(({r[0]}) as usize)",
         }[n]()
+    if isinstance(t, ListT) and n in HIGHER_ORDER:
+        return higher_order(e)
     if isinstance(t, ListT):
         sort = f"{m}.sort_by(|a, b| a.partial_cmp(b).unwrap())" if t.elem == FLOAT else f"{m}.sort()"
         return {
@@ -834,6 +975,9 @@ def call(e: ast.Call) -> str:
         The Rust expression.
     """
     args = e.args
+    if e.var is not None:  # calling a variable that holds a function
+        callee = f"(*{ident(e.func)})" if e.var.by_ref else ident(e.func)
+        return f"({callee})({', '.join(emit(a) for a in args)})"
     if e.ctor_fields is not None:
         fields = ", ".join(f"{ident(n)}: {emit(a)}" for n, a in zip(e.ctor_fields, args))
         return f"{tname(e.func)} {{ {fields} }}"

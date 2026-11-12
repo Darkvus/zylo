@@ -141,7 +141,8 @@ def test_undefined_variable_position():
 
 
 def test_function_used_without_call():
-    fails("fn f():\n    return\nx = f\n", "call it with parentheses")
+    fails("x = print\n", "built-in function")
+    fails("struct P:\n    a: int\nx = P\n", "build it with parentheses")
 
 
 def test_empty_list_needs_annotation():
@@ -211,8 +212,8 @@ def test_duplicate_fn_and_param_and_builtin_shadow():
     fails("fn print():\n    return\n", "built-in")
 
 
-def test_nested_fn_rejected():
-    fails("fn f():\n    fn g():\n        return\n", "top level", line=2)
+def test_nested_fn_is_a_local_function():
+    check(parse("fn f():\n    fn g():\n        return\n    g()\n"))  # a local fn is a closure (see test_functions.py)
 
 
 # ---- bucles -----------------------------------------------------------------------------------
