@@ -6,3 +6,4 @@ build/
 .cargo/
 *.rs.out
 dist/
+.zylo-build/

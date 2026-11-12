@@ -1,0 +1,6 @@
+# Crates that `import std.http` needs. A program that imports the module is built with Cargo and these crates;
+# a program that does not keeps the fast direct `rustc` path. See docs/rust-interop.md.
+[rust-dependencies]
+tiny_http = "0.12"
+# Plain HTTP only: no TLS stack, so the first build stays fast and needs no C toolchain.
+ureq = { version = "2", default-features = false }

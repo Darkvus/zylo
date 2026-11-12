@@ -162,7 +162,7 @@ a `CallValue`; `obj.field(x)` is a method call node that the checker marks as a 
 
 - Values are still cloned when stored (assigned to another variable, put in a struct or a list) or returned.
 - `is` narrowing works on plain variables and a single condition (no `and` chains, no fields).
-- Rust generics and traits are not exposed, and there are no callbacks from Rust into Zylo.
+- Rust generics and traits are not exposed. Rust can call Zylo function values passed to an `extern fn` (see rust-interop.md).
 - No generics or list comprehensions yet; closures are limited (see above). `match` has no guards, no or-patterns (`1 | 2`) and no nested patterns.
 - The language server has no hover, go to definition or rename yet. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
 - No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.

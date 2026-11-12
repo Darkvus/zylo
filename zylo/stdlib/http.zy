@@ -1,0 +1,94 @@
+# std.http: a blocking HTTP/1.1 server and a simple client. See docs/stdlib.md.
+# The Rust side lives in http.rs and its crates in http.toml; both are added to a program that imports this module.
+
+extern fn _serve(host: str, port: int, max_requests: int, max_body: int, handler: fn(str, str, dict[str, str], dict[str, str], str) -> tuple[int, dict[str, str], str]) -> Result[int, str] = "zylo_http::serve({0}, {1}, {2}, {3}, {4})"
+
+extern fn _request(method: str, url: str, body: str, headers: dict[str, str], timeout: int) -> Result[tuple[int, dict[str, str], str], str] = "zylo_http::request({0}, {1}, {2}, {3}, {4})"
+
+# What a handler receives. Header names are lower-case; `path` is percent-decoded and has no query string;
+# `path_params` is empty until a router fills it in.
+struct Request:
+    method: str
+    path: str
+    query: dict[str, str]
+    headers: dict[str, str]
+    body: str
+    path_params: dict[str, str]
+
+# What a handler returns, and what the client gives back.
+struct Response:
+    status: int
+    headers: dict[str, str]
+    body: str
+
+# The most bytes of request body the server accepts by default (1 MiB); more is answered with 413.
+fn default_max_body() -> int:
+    return 1048576
+
+# A `text/plain` response.
+fn text(status: int, body: str) -> Response:
+    headers: dict[str, str] = {}
+    headers["content-type"] = "text/plain; charset=utf-8"
+    return Response(status, headers, body)
+
+# An `application/json` response; `body` is JSON text you already built.
+fn json_response(status: int, body: str) -> Response:
+    headers: dict[str, str] = {}
+    headers["content-type"] = "application/json"
+    return Response(status, headers, body)
+
+# A 302 response pointing at `location`.
+fn redirect(location: str) -> Response:
+    headers: dict[str, str] = {}
+    headers["location"] = location
+    return Response(302, headers, "")
+
+# A 404 `text/plain` response.
+fn not_found() -> Response:
+    return text(404, "Not Found")
+
+# The value of a header (names compare in lower case), or none.
+fn header(headers: dict[str, str], name: str) -> str?:
+    return headers.get(name.lower())
+
+# Answer every request with `handler`, forever (or until the port cannot be used). `max_requests` stops after that
+# many requests (0 means no limit); `max_body` is the largest accepted body in bytes. Returns the number of requests
+# served, or an error such as "cannot listen on ...".
+fn serve_with(host: str, port: int, handler: fn(Request) -> Response, max_requests: int, max_body: int) -> Result[int, str]:
+    fn dispatch(method: str, path: str, query: dict[str, str], headers: dict[str, str], body: str) -> tuple[int, dict[str, str], str]:
+        no_params: dict[str, str] = {}
+        resp = handler(Request(method, path, query, headers, body, no_params))
+        return resp.status, resp.headers, resp.body
+    return _serve(host, port, max_requests, max_body, dispatch)
+
+# Serve forever, one request at a time.
+fn serve(host: str, port: int, handler: fn(Request) -> Response) -> Result[int, str]:
+    return serve_with(host, port, handler, 0, default_max_body())
+
+# Serve exactly `max_requests` requests, then return (for tests and scripts).
+fn serve_n(host: str, port: int, handler: fn(Request) -> Response, max_requests: int) -> Result[int, str]:
+    return serve_with(host, port, handler, max_requests, default_max_body())
+
+# Send one request. Any HTTP status, including 404 and 500, is an `ok` response; an `err` means no response arrived
+# (connection refused, a bad URL, a timeout). Redirects are not followed and only `http://` URLs work.
+fn send(method: str, url: str, body: str, headers: dict[str, str]) -> Result[Response, str]:
+    r = _request(method.upper(), url, body, headers, 30)
+    match r:
+        ok(parts):
+            return ok(Response(parts[0], parts[1], parts[2]))
+        err(e):
+            return err(e)
+
+fn get(url: str) -> Result[Response, str]:
+    no_headers: dict[str, str] = {}
+    return send("GET", url, "", no_headers)
+
+fn delete(url: str) -> Result[Response, str]:
+    no_headers: dict[str, str] = {}
+    return send("DELETE", url, "", no_headers)
+
+fn post(url: str, body: str, headers: dict[str, str]) -> Result[Response, str]:
+    return send("POST", url, body, headers)
+
+fn put(url: str, body: str, headers: dict[str, str]) -> Result[Response, str]:
+    return send("PUT", url, body, headers)

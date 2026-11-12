@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zylo"
-version = "0.12.1"
+version = "0.13.0"
 description = "Lenguaje Python-like que transpila a Rust"
 requires-python = ">=3.11"
 
@@ -18,7 +18,7 @@ zylo = "zylo.interface.cli:main"
 include = ["zylo*"]
 
 [tool.setuptools.package-data]
-zylo = ["stdlib/*.zy"]
+zylo = ["stdlib/*.zy", "stdlib/*.rs", "stdlib/*.toml"]
 
 [tool.ruff]
 line-length = 120
