@@ -640,12 +640,65 @@ fn add_one(s: str) -> int?:
 print(add_one("41"))
 ```
 
+**Fields narrow too.** A field path (`p.name`, `self.limit`, `req.user.email`) can be tested like a variable, so you
+no longer copy it to a local first:
+
+```zylo
+struct Patch:
+    name: str?
+    age: int?
+
+fn describe(p: Patch) -> str:
+    if p.name is some:
+        return "name " + p.name          # p.name is a plain str here
+    return "no name"
+
+fn next_age(p: Patch) -> int:
+    if p.age is none:
+        return -1
+    return p.age + 1                     # narrowed for the rest of the block
+
+print(describe(Patch(name=some("Ada"), age=none)))
+print(next_age(Patch(name=none, age=some(41))))
+```
+
 Narrowing rules and limits:
 
-- It applies to plain variables only (`x is some`), not to fields or call results.
+- It applies to plain variables (`x is some`) and to field paths made only of names and fields (`p.name`, `self.a.b`),
+  not to call results or indexed elements (`xs[0].name`).
 - The condition must be exactly one `is` check (`x is some and y > 0` does not narrow).
 - A narrowed variable cannot be reassigned inside the region where it is narrowed.
+- A narrowed field path is narrowed only while nothing can change it. In the region where it holds (the branch, or the
+  rest of the block after an early exit) it is an error to assign the path, a part of it, or its owner (`p.name = ...`,
+  `p = ...`), or to call a method that modifies the owner (`p.clear()`). Writing a sibling field
+  (`p.items.append(1)`, `p.n = 2`) is fine.
+- Closures and local functions do not see a field narrowing: copy the field to a local first.
 - For a `Result`, the `ok` branch sees the value and the `err` branch sees the error.
+
+### Multi-line literals
+
+Inside `(...)`, `[...]` or `{...}` a line break does not end the statement, and indentation does not matter, so long
+lists, dicts, tuples and calls can be written one item per line. A trailing comma is allowed. Comments and blank lines may
+appear between the items.
+
+```zylo
+routes = {
+    "home": [1, 2],
+    "about": [
+        3,
+        4,
+    ],
+}
+point = (
+    10,
+    20,
+)
+print(len(routes), point)
+```
+
+A line that is not indented past the line that opened a bracket and does not start with a closing bracket is taken as
+the start of the next statement, so a forgotten `)` is reported where it happened. `zylo fmt` prints such a literal on
+one line (wrapping long lines is still an open question).
 
 ### The `?` operator
 

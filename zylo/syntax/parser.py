@@ -864,6 +864,8 @@ class Parser:
             if not self.check("OP", "]"):
                 items.append(self.parse_expr())
                 while self.match("OP", ","):
+                    if self.check("OP", "]"):
+                        break
                     items.append(self.parse_expr())
             self.expect("OP", "]")
             return ast.ListLit(items, **pos)

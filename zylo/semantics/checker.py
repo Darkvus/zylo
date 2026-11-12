@@ -173,6 +173,7 @@ class Checker:
         """
         self.fns: dict[str, FnT] = {}
         self.externs: set[str] = set()  # extern fns: they cannot be used as values
+        self.field_meta: dict[int, tuple[VarInfo, str]] = {}  # narrowed field path -> (root variable, unwrap method)
         self.closures: list[ClosureFrame] = []  # the closures being checked, outermost first
         self.structs: dict[str, StructInfo] = {}
         self.enums: dict[str, EnumInfo] = {}
@@ -657,29 +658,89 @@ class Checker:
         return info
 
     def narrowing(self, cond: ast.Expr) -> tuple[str, Type | None, Type | None] | None:
-        """Work out what an `is` check tells about a variable.
+        """Work out what an `is` check tells about a variable or a field path.
 
         Args:
             cond: The condition of an `if`.
 
         Returns:
-            For `x is K` on a plain variable, `(name, type of x in the then-branch, type in the else-branch)`, where a
-            type of None means no information; None for any other condition.
+            For `x is K` on a plain variable or a field path (`p.name`, `self.a.b`), `(name or dotted path, type of the
+            value in the then-branch, type in the else-branch)`, where a type of None means no information; None for any
+            other condition.
         """
-        if not (isinstance(cond, ast.IsCheck) and isinstance(cond.value, ast.Name)):
+        if not isinstance(cond, ast.IsCheck):
+            return None
+        key = field_path(cond.value)
+        if key is None or (isinstance(cond.value, ast.Attr) and cond.value.variant):
             return None
         t, k = cond.value.ty, cond.kind
         if isinstance(t, OptionT):
             then_t, else_t = (t.inner, None) if k == "some" else (None, t.inner)
         else:
             then_t, else_t = (t.ok, t.err) if k == "ok" else (t.err, t.ok)
-        return cond.value.id, then_t, else_t
+        return key, then_t, else_t
+
+    def narrow_field(self, cond: ast.IsCheck, key: str, ty: Type | None, ok_side: bool) -> None:
+        """Narrow a field path such as `p.name` in the current scope (see `narrowing`).
+
+        The narrowing is recorded as a pseudo variable named by the dotted path, so it ends with the scope. Reads of that
+        path then have the unwrapped type; any write to the path, to a prefix of it or a mutating call on a prefix is an
+        error while it is in force.
+
+        Args:
+            cond: The `is` check.
+            key: The dotted path.
+            ty: The narrowed type, or None for no narrowing.
+            ok_side: True when this scope is the side where `cond.kind` holds.
+        """
+        if ty is None:
+            return
+        root = self.scopes.lookup(key.split(".")[0])
+        if root is None:
+            return
+        want_ok = isinstance(cond.value.ty, OptionT) or (cond.kind == "ok") == ok_side
+        extract = "unwrap" if want_ok else "unwrap_err"
+        info = self.scopes.declare(key, ty)
+        info.narrowed = True
+        self.field_meta[id(info)] = (root, extract)
+
+    def field_conflict(self, place: ast.Expr) -> None:
+        """Reject a write to a place that overlaps a narrowed field path.
+
+        Args:
+            place: The place being assigned or mutated (`p`, `p.name`, `p.items[0]`...).
+
+        Raises:
+            ZyloError: If the place is, is inside, or contains a narrowed field path.
+        """
+        path, e = None, place
+        while path is None and isinstance(e, (ast.Attr, ast.Index, ast.Name)):
+            path = field_path(e)
+            e = e.value if isinstance(e, (ast.Attr, ast.Index)) else None
+        if path is None:
+            return
+        paths = [path]
+        keys = [k for scope in self.scopes.stack for k in scope if "." in k]
+        for key in keys:
+            if any(key == p or key.startswith(p + ".") or p.startswith(key + ".") for p in paths):
+                raise err(f"{key!r} is narrowed by an `is` check here and cannot be reassigned or modified", place)
 
     def if_stmt(self, s: ast.If) -> None:
-        """Check an `if`, narrowing `Option`/`Result` variables tested with `is` inside its branches."""
+        """Check an `if`, narrowing `Option`/`Result` variables and fields tested with `is` inside its branches."""
         self.expect_bool(s.cond, "the `if` condition")
         nar = self.narrowing(s.cond)
         name, then_t, else_t = nar if nar else (None, None, None)
+        if nar and "." in name:
+            for body, t, side in ((s.then, then_t, True), (s.else_, else_t, False)):
+                self.scopes.push()
+                self.narrow_field(s.cond, name, t, side)
+                for st in body:
+                    self.stmt(st)
+                self.scopes.pop()
+            if not s.else_ and else_t is not None and exits(s.then):
+                # early exit: `if p.x is none: return ...` narrows the field for the rest of the enclosing block
+                self.narrow_field(s.cond, name, else_t, False)
+            return
         s.then_bind = self.block(s.then, (name, then_t))
         s.else_bind = self.block(s.else_, (name, else_t))
         if nar and not s.else_ and else_t is not None and exits(s.then):
@@ -793,6 +854,7 @@ class Checker:
                 s.declares.append(True)
                 s.vars.append(self.scopes.declare(name, et))
             else:
+                self.field_conflict(target)
                 if existing.narrowed:
                     raise err(f"{name!r} is narrowed to {existing.ty} by an `is` check here and cannot be reassigned", target)
                 if existing.ty != et:
@@ -870,6 +932,7 @@ class Checker:
             self.mark_mutable(target.value)
             return
         if isinstance(target, ast.Attr):
+            self.field_conflict(target)
             ft = self.expr(target)
             vt = self.expr(s.value, ft)
             if vt != ft:
@@ -892,6 +955,7 @@ class Checker:
                 raise err(f"{target.id!r} is {declared} but {vt} is assigned", s.value)
             s.declares, s.var = True, self.scopes.declare(target.id, declared)
         elif existing:
+            self.field_conflict(target)
             if existing.narrowed:
                 raise err(f"{target.id!r} is narrowed to {existing.ty} by an `is` check here and cannot be reassigned", s)
             vt = self.expr(s.value, existing.ty)
@@ -908,6 +972,7 @@ class Checker:
 
     def mark_mutable(self, e: ast.Expr) -> None:
         """Mark the root variable of a place (`xs[i]`, `p.x`, `p.items[0]`...) as mutable."""
+        self.field_conflict(e)
         while isinstance(e, (ast.Index, ast.Attr)):
             e = e.value
         if isinstance(e, ast.Name) and (info := self.lookup_var(e.id, e)):
@@ -1198,6 +1263,7 @@ class Checker:
 
     def attr(self, e: ast.Attr, v: ast.Expr, name: str) -> Type:
         """Type a field access `value.name`, or a variant without data `Enum.Variant`."""
+        e.unwrap = None
         enum = self.variant_of(v)
         if enum:
             return self.variant_ctor(e, enum, name, None)
@@ -1210,6 +1276,11 @@ class Checker:
             if name in info.methods:
                 raise err(f"{name!r} is a method of {t}; call it with parentheses: .{name}(...)", e)
             raise err(f"{t} has no field {name!r}{hint}", e)
+        if (key := field_path(e)) is not None and (info := self.scopes.lookup(key)) is not None:
+            meta = self.field_meta.get(id(info))
+            if meta and self.scopes.lookup(key.split(".")[0]) is meta[0]:
+                e.unwrap = meta[1]
+                return info.ty
         return ft
 
     SPEC_RE = re.compile(r"^(?:[<>^])?0?\d*(?:\.\d+)?([fdsxXb]?)$")
@@ -1917,6 +1988,15 @@ class Checker:
             case "range":
                 raise err("range(...) can only be used in a `for`", e)
         raise err(f"unknown built-in function {name!r}", e)
+
+
+def field_path(e: ast.Expr) -> str | None:
+    """The dotted path of a variable or a chain of field accesses (`p`, `p.name`, `self.a.b`), or None for anything else."""
+    if isinstance(e, ast.Name):
+        return e.id
+    if isinstance(e, ast.Attr) and not e.variant and (base := field_path(e.value)) is not None:
+        return f"{base}.{e.name}"
+    return None
 
 
 def key_ok(t: Type) -> bool:

@@ -50,11 +50,27 @@ def tokenize(src: str) -> list[Token]:
     tokens: list[Token] = []
     indents = [0]
     end = (1, 1)  # position after the last line with code
+    depth = 0  # open `(`, `[`, `{`: lines inside them continue the logical line
+    opener = 0  # indentation of the line that opened them
     for lineno, raw in enumerate(src.splitlines(), start=1):
         line = raw.rstrip()
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         width = len(line) - len(line.lstrip(" "))
+        if depth > 0 and width <= opener and line[width] not in ")]}":
+            # a line that is not indented past the opener and does not close it: the bracket was never closed, so end
+            # that line here and let the parser report what it expected
+            tokens.append(Token("NEWLINE", "", *end))
+            depth = 0
+        if depth > 0:  # continuation line: no indentation or NEWLINE tokens
+            before = len(tokens)
+            _lex_line(line, width, lineno, tokens)
+            depth += _bracket_delta(tokens[before:])
+            if depth <= 0:
+                depth = 0
+                tokens.append(Token("NEWLINE", "", lineno, len(line) + 1))
+            end = (lineno, len(line) + 1)
+            continue
         if line[width:width + 1] == "\t":
             raise ZyloError("use spaces, not tabs", lineno, width + 1)
         if width > indents[-1]:
@@ -65,14 +81,25 @@ def tokenize(src: str) -> list[Token]:
             tokens.append(Token("DEDENT", "", lineno, 1))
         if width != indents[-1]:
             raise ZyloError("inconsistent indentation", lineno, width + 1)
+        before = len(tokens)
         _lex_line(line, width, lineno, tokens)
-        tokens.append(Token("NEWLINE", "", lineno, len(line) + 1))
+        depth = max(0, _bracket_delta(tokens[before:]))
+        opener = width
+        if depth == 0:
+            tokens.append(Token("NEWLINE", "", lineno, len(line) + 1))
         end = (lineno, len(line) + 1)
+    if depth > 0:  # an unclosed bracket: end the line so the parser reports what it expected
+        tokens.append(Token("NEWLINE", "", *end))
     while len(indents) > 1:
         indents.pop()
         tokens.append(Token("DEDENT", "", *end))
     tokens.append(Token("EOF", "", *end))
     return tokens
+
+
+def _bracket_delta(toks: list[Token]) -> int:
+    """Net number of brackets opened by these tokens."""
+    return sum(1 if t.value in "([{" else -1 if t.value in ")]}" else 0 for t in toks if t.kind == "OP")
 
 
 def unescape(raw: str, lineno: int = 0, col: int = 0) -> str:

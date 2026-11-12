@@ -397,6 +397,54 @@ fn as_dict(j: Json) -> dict[str, Json]?:
 fn is_null(j: Json) -> bool:
     return j == Json.Null
 
+# Aliases with the names other languages use for the same accessors.
+fn at(j: Json, i: int) -> Json?:
+    return index(j, i)
+
+fn as_array(j: Json) -> list[Json]?:
+    return as_list(j)
+
+fn as_object(j: Json) -> dict[str, Json]?:
+    return as_dict(j)
+
+# Read a member and convert it in one step: `none` when `j` is not an object, the key is missing or the member has
+# another type.
+fn get_str(j: Json, key: str) -> str?:
+    v = get(j, key)
+    if v is none:
+        return none
+    return as_str(v)
+
+fn get_int(j: Json, key: str) -> int?:
+    v = get(j, key)
+    if v is none:
+        return none
+    return as_int(v)
+
+fn get_float(j: Json, key: str) -> float?:
+    v = get(j, key)
+    if v is none:
+        return none
+    return as_float(v)
+
+fn get_bool(j: Json, key: str) -> bool?:
+    v = get(j, key)
+    if v is none:
+        return none
+    return as_bool(v)
+
+fn get_array(j: Json, key: str) -> list[Json]?:
+    v = get(j, key)
+    if v is none:
+        return none
+    return as_list(v)
+
+fn get_object(j: Json, key: str) -> dict[str, Json]?:
+    v = get(j, key)
+    if v is none:
+        return none
+    return as_dict(v)
+
 # ---- Support for `to_json`, `from_json` and `json_schema` ----
 # The compiler writes the conversion functions for your own types (see docs/guide.md, "Typed JSON"); the parts that do
 # not depend on the type live here. They are private: only generated code calls them.

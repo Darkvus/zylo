@@ -1,0 +1,76 @@
+import std.json as json
+
+struct Patch:
+    name: str?
+    age: int?
+    ratio: Result[int, str]
+    inner: Inner?
+
+struct Inner:
+    tag: str?
+
+struct Counter:
+    limit: int?
+    hits: list[int]
+
+    fn room(self) -> int:
+        if self.limit is none:
+            return -1
+        return self.limit - len(self.hits)
+
+# Field narrowing in the then-branch, with a result and with an early exit.
+fn describe(p: Patch) -> str:
+    if p.name is some:
+        return "name=" + p.name + " len=" + str(len(p.name))
+    return "no name"
+
+fn next_age(p: Patch) -> int:
+    if p.age is none:
+        return -1
+    return p.age + 1
+
+fn ratio(p: Patch) -> str:
+    if p.ratio is ok:
+        return "ok " + str(p.ratio * 2)
+    else:
+        return "err " + p.ratio
+
+fn tag(p: Patch) -> str:
+    if p.inner is some:
+        if p.inner.tag is some:
+            return p.inner.tag
+    return "-"
+
+# Writing other fields of the same value is fine while a field is narrowed.
+fn bump(c: Counter) -> int:
+    if c.limit is some:
+        c.hits.append(1)
+        return c.limit * 10
+    return 0
+
+p = Patch(name=some("Ada"), age=none, ratio=ok(21), inner=some(Inner(tag=some("t"))))
+q = Patch(name=none, age=some(41), ratio=err("bad"), inner=none)
+print(describe(p), describe(q))
+print(next_age(p), next_age(q))
+print(ratio(p), ratio(q))
+print(tag(p), tag(q))
+c = Counter(limit=some(5), hits=[])
+print(c.room(), bump(c), c.room())
+
+# Multi-line literals and calls, with trailing commas.
+numbers = [1, 2, 3]
+table = {"a": [1, 2], "b": [3, 4]}
+pair = "x", 7
+print(len(numbers), len(table), pair)
+print(sum([10, 20]), len({"k": 1}))
+r = Patch(name=some("multi"), age=some(1), ratio=ok(1), inner=none)
+print(describe(r))
+
+# std.json accessors.
+doc = json.parse("{\"name\": \"Ada\", \"age\": 36, \"pi\": 3.5, \"ok\": true, \"tags\": [\"a\", \"b\"], \"meta\": {\"x\": 1}}").unwrap()
+print(json.get_str(doc, "name"), json.get_int(doc, "age"), json.get_float(doc, "pi"), json.get_bool(doc, "ok"))
+print(json.get_str(doc, "age"), json.get_int(doc, "missing"), json.get_str(json.Json.Null, "name"))
+print(len(json.get_array(doc, "tags").unwrap()), len(json.get_object(doc, "meta").unwrap()))
+tags = json.as_array(json.get(doc, "tags").unwrap()).unwrap()
+print(json.as_str(json.at(json.Json.Arr(tags), -1).unwrap()))
+print(json.as_object(doc) is some, json.as_object(json.Json.Null) is none)
