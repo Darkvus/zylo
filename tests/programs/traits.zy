@@ -1,0 +1,71 @@
+trait Named:
+    fn name(self) -> str
+
+trait Scorable:
+    fn score(self) -> int
+    fn bump(self, by: int) -> Self
+
+struct Player(Named, Scorable):
+    nick: str
+    points: int
+
+    fn name(self) -> str:
+        return self.nick
+
+    fn score(self) -> int:
+        return self.points
+
+    fn bump(self, by: int) -> Player:
+        return Player(nick=self.nick, points=self.points + by)
+
+enum Level(Named):
+    Easy
+    Hard
+
+    fn name(self) -> str:
+        match self:
+            Level.Easy:
+                return "easy"
+            Level.Hard:
+                return "hard"
+
+struct Team[T](Named):
+    members: list[T]
+    label: str
+
+    fn name(self) -> str:
+        return self.label
+
+fn best[T: Scorable + Named](xs: list[T]) -> str:
+    top = xs[0]
+    for x in xs:
+        if x.score() > top.score():
+            top = x
+    return f"{top.name()}={top.score()}"
+
+fn boosted[T: Scorable](x: T, by: int) -> int:
+    return x.bump(by).score()
+
+fn title[T: Named + Show](x: T) -> str:
+    return f"<{x.name()}> {x}"
+
+struct Counter[T = int]:
+    items: list[T] = []
+
+    fn size(self) -> int:
+        return len(self.items)
+
+fn zero[T: Num = int]() -> T:
+    return 0
+
+players = [Player(nick="ann", points=7), Player(nick="bo", points=12)]
+print(best(players))
+print(boosted(players[0], 5))
+print(title(Level.Hard))
+print(title(Player(nick="cy", points=1)))
+print(Team(members=players, label="red").name())
+print(title(Team(members=[Level.Easy], label="blue")))
+c: Counter = Counter()
+print(c.size(), Counter[str](items=["a", "b"]).size())
+x: float = zero[float]()
+print(zero(), x)

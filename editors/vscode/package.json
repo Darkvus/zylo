@@ -2,7 +2,7 @@
   "name": "zylo",
   "displayName": "Zylo",
   "description": "Syntax highlighting and language server for Zylo, a statically typed language with Python-like syntax that compiles to Rust",
-  "version": "0.26.2",
+  "version": "0.28.0",
   "publisher": "zylo",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/Darkvus/zylo" },

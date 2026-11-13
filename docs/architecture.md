@@ -28,7 +28,7 @@ the ones listed below. `tests/test_architecture.py` enforces it on every change.
 |---|---|---|
 | `domain` | nothing | The **ubiquitous language**: `ast` (syntax nodes), `types`, `builtins` (the catalog of built-in functions and methods, with the signatures and descriptions editors show) and `errors`. Pure: no input or output. |
 | `syntax` | domain | The lexer, the parser (with error recovery) and the formatter: text ⇄ syntax tree. |
-| `semantics` | domain, syntax, packaging | The type `checker`, the module `linker`, `derive` (the typed JSON functions the checker generates per type), `exhaustive` (which values a `match` leaves unmatched and which arms can never run: Maranget's usefulness algorithm over nested patterns and integer ranges), `generics` (templates, inference and the copies the checker makes per type) and `navigation` (which name refers to what, for hover, definition and rename): what a program means. |
+| `semantics` | domain, syntax, packaging | The type `checker`, the module `linker`, `derive` (the typed JSON functions the checker generates per type), `exhaustive` (which values a `match` leaves unmatched and which arms can never run: Maranget's usefulness algorithm over nested patterns and integer ranges), `generics` (templates, inference and the copies the checker makes per type), `traits` (trait declarations, the check that a struct or enum implements them, and method calls through a trait bound) and `navigation` (which name refers to what, for hover, definition and rename): what a program means. |
 | `generation` | domain | The code generator: typed program → Rust source. |
 | `packaging` | domain | `manifest` (zylo.toml), `lock`, virtual `env`ironments, the `installer`, and `rust_deps` validation. |
 | `stdlib` (data) | nothing | Not a layer: the `.zy` modules shipped with the compiler (`import std.json`), found by `packaging/stdlib.py`. |
@@ -63,6 +63,7 @@ adapter's `fetch`. That keeps the installer testable without git and independent
 | **Module** | One `.zy` file. A *library module* has only imports, functions and structs. |
 | **Linking** | Resolving imports and renaming library definitions to `module·name` so everything becomes one program. |
 | **Generic / instance** | A function, struct or enum with type parameters (`Box[T]`), and the copy the checker makes for one list of type arguments (`Box[int]`). Only instances are compiled. |
+| **Trait** | A named list of method signatures (`trait Shape:`). A struct or enum implements it by listing it (`struct Circle(Shape):`); a generic uses it as a bound (`T: Shape`). Checked by the compiler, never emitted. |
 | **Narrowing** | After an `is` check, a variable has the narrower type inside the branch (or after an early exit). |
 | **Borrow** | A parameter the function never modifies is lent (`&T`) instead of cloned. |
 | **Package** | Zylo source installed from git into an environment. |

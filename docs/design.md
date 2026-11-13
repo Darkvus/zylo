@@ -230,9 +230,9 @@ as opaque `ParamT` types, so a mistake in a generic is reported once at its own 
 `ParamT` can be stored, passed and returned; every other operation asks for a capability the parameter must declare. The
 fixed set of bounds is `Eq` (`==`, `in`), `Show` (printing, f-strings), `Ord` (`<`, `min`, `sorted`), `Num` (arithmetic) and
 `Key` (dict keys, set elements); `Num` and `Key` imply `Ord`, `Eq` and `Show`. A bound is satisfied by an argument type with
-the same rules the operation uses on concrete types (`Ord` is exactly what `<` accepts: `int`, `float`, `str`). There are no
-user-defined bounds: they would need traits, whose design (method dispatch, associated types, coherence) is a language of
-its own. When the template has a mistake, its copies are not checked again (the same error would be repeated per type).
+the same rules the operation uses on concrete types (`Ord` is exactly what `<` accepts: `int`, `float`, `str`). User-defined
+bounds are traits (see [Traits](#traits)). When the template has a mistake, its copies are not checked again (the same error
+would be repeated per type).
 
 **Inference is unification at the call.** The declared parameter types (in terms of `ParamT`) are unified with the argument
 types: the first occurrence binds `T`, later ones must agree. What no argument decides comes from the expected type
@@ -295,17 +295,85 @@ says so. A local variable named like the function still wins (`first[0](5)` call
 like `origin`). The editor, which only sees the original tree, shows for a name whose type mentions a type parameter the
 parameter with its bounds and those types, or says it is not instantiated.
 
-Not done: default type arguments, user-defined bounds, float literals of type `T`, and inferring a generic function value
-whose own type parameters appear only in a result that the context does not name.
+**Default type arguments.** `struct Counter[T = int]`, `fn zero[T: Num = int]() -> T`: a parameter may name the type it takes
+when nothing decides it, and the parameters with defaults come last. The default is a plain type (it cannot mention another
+parameter) and must satisfy the parameter's bounds, which is checked once with the definition. It applies where a type is
+written with fewer arguments (`c: Counter` is `Counter[int]`) and, at a call, after the arguments and the expected type have
+had their say (`Counter()` with an empty list field is `Counter[int]`, but `Counter(items=["a"])` is `Counter[str]`). Methods'
+own parameters take no defaults: a method call has the receiver to decide them, and the rule would only add a way to be
+surprised.
+
+Not done: float literals of type `T`, and inferring a generic function value whose own type parameters appear only in a
+result that the context does not name.
+
+## Traits
+
+Syntax:
+
+```
+trait Shape:
+    fn area(self) -> float
+    fn scale(self, by: float) -> Self
+
+struct Circle(Shape):            # enum Light(Shape): works the same
+    r: float
+    fn area(self) -> float: ...
+    fn scale(self, by: float) -> Circle: ...
+
+fn total[T: Shape + Show](xs: list[T]) -> float
+```
+
+**Where a type says it implements a trait.** Three shapes were weighed.
+`impl Shape for Circle:` (Rust) puts the methods in a second block, so a type's methods live in two kinds of places, the
+checker has to merge them into the struct and a second pass has to forbid two `impl`s of the same pair, across modules and
+re-exports too. Structural conformance (Go) needs no declaration, but a type satisfies a trait by accident of naming, a
+missing method is reported far from where the author meant to implement the trait, and there is nothing to attach the
+"implements" relation to for the editor. So a trait is listed after the name, like the base classes of a Python class:
+`struct Circle(Shape):`. The methods are the ones already written inside the struct, the declaration is one token away from
+the name (hover, go to definition and rename see it), the trait is looked up by the linker like any imported name (so
+`from shapes import Shape`, `pub from` re-exports and `shapes.Shape` work), and a type can list a trait once only. The price
+is that a trait cannot be implemented for a type the author does not own: not for `int` or `list[T]`, not for a struct of a
+package. That is the first thing to revisit (an `impl` block for foreign types), and it would sit next to this form.
+
+**A trait is a list of signatures.** `fn name(self, ...) -> type` without a body; no default methods, no generic methods, no
+default values, no type parameters on the trait, no associated types, no supertraits. `Self` stands for the implementing type
+and may be used only in a trait's signatures. An implementation has to define every method with the same parameter names
+(callers may use named arguments through the bound), the same parameter types and the same result, `Self` replaced by the type
+(`fn scale(self, by: float) -> Circle`). Whether a method modifies `self` is not part of the signature. Traits are checked where the
+struct is declared: a missing method, a wrong signature, a trait that is unknown or is really a struct, and a trait listed
+twice are errors at the declaration, so a type that fails is reported once and not at every generic that uses it.
+
+**A bound is a name in the bound list.** `T: Shape + Show` mixes traits and built-in bounds (a trait cannot be called
+`Eq`, `Show`, `Ord`, `Num` or `Key`). The linker rewrites a trait's name in a bound exactly as it does for a type, so the
+checker sees linked names. A `ParamT` keeps the traits among its `bounds`, and `satisfies(type, trait)` is "the struct or enum
+lists it": a type parameter satisfies the traits it is bounded by (so a generic can call another generic with the same
+bound), and `int`, lists and the like never do.
+
+**Calls on `T`.** Inside the template a method call on a `T` looks the name up in the traits that bound `T` and checks the
+call against the trait's signature with `Self` replaced by `T`; a name no bound declares is an error that names the trait to add
+when one declares it. If two bounds declare a method of the same name with different signatures the call is ambiguous and says so.
+In a copy `T` is a real type and the call is an ordinary method call on it, so *nothing about traits reaches the code generator
+or Rust*: no vtable, no dynamic dispatch, no `dyn`, the same speed as a hand-written copy. This also means trait objects
+(a `list[Shape]` of mixed types) do not exist, and are out of scope: a trait is only usable as a bound.
+
+**Traits and the rest.** A generic struct may implement a trait (`struct Team[T](Named)`; each instance is checked against it,
+the template is checked once with `T` opaque). Typed JSON does not see traits (a derived function reads fields). The editor
+treats a trait's method and the methods that implement it as one family: rename changes them together, hover and go to
+definition on a call through a bound lead to the trait's declaration, and completion after a dot on a `T` offers the bounds'
+methods. Renaming a parameter of such a method is refused (the names are part of the signature) rather than done in one place.
+`trait` is a keyword, so a variable or function called `trait` has to be renamed.
+
+Not done: trait objects, default methods, supertraits (`trait A(B)`), generic traits, `impl` for types the author does not own
+(including built-ins), associated types and constants.
 
 ## Known limitations
 
 - Values are still cloned when stored (assigned to another variable, put in a struct or a list) or returned.
 - `is` narrowing works on plain variables and field paths (`p.name`, `self.a.b`), with a single `is` condition per `if` (no `and` chains) and not on call results or indexed elements. A narrowed value is already unwrapped: calling `unwrap`, `unwrap_or` or `unwrap_err` on it is the error "already narrowed" (an error rather than a no-op, so a stray `.unwrap()` is not mistaken for a second check, and the message says what to drop). Closures do not see a field narrowing.
 - `match` has guards, or-patterns, nested patterns, integer ranges and tuple scrutinees (exhaustiveness is exact), but no struct patterns (`Point(x=0, y)`), no `x @ pattern` bindings and no bare-name catch-all at the top of an arm (use `_`).
-- Generics are monomorphized, with a fixed set of bounds (`Eq`, `Ord`, `Num`...): no user-defined bounds, no default type arguments, no float literals of type `T`, no generic `extern fn`.
+- Generics are monomorphized. The bounds are a fixed set (`Eq`, `Ord`, `Num`...) and the traits a program declares: no trait objects, default methods, supertraits or generic traits, no implementing a trait for a type you do not own (`int`, a package's struct), no float literals of type `T`, no generic `extern fn`.
 - Arguments are passed by value; a modified parameter whose changes nobody could see is an error (see above). The variable of a `for` loop is a copy as well, and modifying it without using it afterwards is not flagged.
-- Rust generics and traits are not exposed. Rust can call Zylo function values passed to an `extern fn` (see rust-interop.md).
+- Rust generics and traits are not exposed (Zylo's traits are checked in the compiler and leave no trace in the generated Rust). Rust can call Zylo function values passed to an `extern fn` (see rust-interop.md).
 - No list comprehensions yet; closures are limited (see above).
 - The language server's types and member lookups need the file to parse and link (a syntax error elsewhere removes them), and its rename refuses rather than guess. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
 - No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.

@@ -56,10 +56,13 @@ class TypeParam(Node):
 
     Attributes:
         name: The parameter's name.
-        bounds: Names of the bounds it must satisfy (`Eq`, `Ord`, `Num`, `Show`, `Key`), possibly none.
+        bounds: Names of the bounds it must satisfy: the built-in ones (`Eq`, `Ord`, `Num`, `Show`, `Key`) or traits
+            (`Shape`, `shapes.Shape`), possibly none. The linker rewrites a trait's name to its linked name.
+        default: The type used when nothing decides the parameter (`T = int`), or None.
     """
     name: str
     bounds: list[str] = field(default_factory=list)
+    default: "TypeRef | None" = None
 
 
 @dataclass
@@ -497,6 +500,7 @@ class StructDef(Node):
         doc_line: Source line of that description.
         tparams: The type parameters of a generic struct (`struct Box[T]`); empty for an ordinary one.
         instance: True for a copy of a generic struct made by the checker for one list of type arguments.
+        traits: The traits the struct implements (`struct Circle(Shape):`), as written; the linker rewrites their names.
     """
     name: str
     fields: list[Field]
@@ -506,6 +510,7 @@ class StructDef(Node):
     doc_line: int = 0
     tparams: list[TypeParam] = field(default_factory=list)
     instance: bool = False
+    traits: list[TypeRef] = field(default_factory=list)
 
 
 @dataclass
@@ -531,6 +536,7 @@ class EnumDef(Node):
         doc_line: Source line of that description.
         tparams: The type parameters of a generic enum (`enum Opt[T]`); empty for an ordinary one.
         instance: True for a copy of a generic enum made by the checker for one list of type arguments.
+        traits: The traits the enum implements (`enum Light(Describe):`), as written.
     """
     name: str
     variants: list[Variant]
@@ -540,6 +546,25 @@ class EnumDef(Node):
     doc_line: int = 0
     tparams: list[TypeParam] = field(default_factory=list)
     instance: bool = False
+    traits: list[TypeRef] = field(default_factory=list)
+
+
+@dataclass
+class TraitDef(Node):
+    """A trait: a named set of method signatures that structs and enums implement and generics use as a bound.
+
+    Attributes:
+        name: Trait name (mangled after linking).
+        methods: The required methods: each a `FnDef` with `self` and no body.
+        display: Original name to show to users when `name` was mangled.
+        doc: The description written as the first line of the body (a string literal), or None.
+        doc_line: Source line of that description.
+    """
+    name: str
+    methods: list[FnDef]
+    display: str | None = None
+    doc: str | None = None
+    doc_line: int = 0
 
 
 @dataclass
@@ -627,7 +652,7 @@ class FromImport(Node):
 
 
 Stmt = (ExprStmt | Assign | Unpack | If | While | For | Return | Break | Continue | Pass | FnDef | StructDef
-        | EnumDef | Match | Import | FromImport)
+        | EnumDef | TraitDef | Match | Import | FromImport)
 
 
 @dataclass

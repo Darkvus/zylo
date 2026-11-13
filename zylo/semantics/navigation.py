@@ -24,9 +24,10 @@ from pathlib import Path
 from zylo.domain import ast
 from zylo.domain.builtins import BUILTINS, METHODS, SHADOWABLE, receiver_kind
 from zylo.domain.errors import ZyloError
-from zylo.domain.types import EnumT, StructT, Type
+from zylo.domain.types import EnumT, ParamT, StructT, Type
 from zylo.packaging.stdlib import stdlib_dir
 from zylo.semantics.checker import check_all
+from zylo.semantics.generics import BOUNDS
 from zylo.semantics.linker import RESERVED_TYPES, Linker, Module
 from zylo.syntax.lexer import KEYWORDS, Token, tokenize
 from zylo.syntax.parser import parse_collect
@@ -35,7 +36,7 @@ BUILTIN_TYPES = {"int", "float", "bool", "str", "list", "set", "dict", "tuple", 
 EXPRESSIONS = (ast.Int, ast.Float, ast.Str, ast.Bool, ast.Name, ast.BinOp, ast.UnaryOp, ast.Call, ast.CallValue,
                ast.Lambda, ast.ListLit, ast.Index, ast.TupleLit, ast.DictLit, ast.SetLit, ast.Slice, ast.FString,
                ast.Attr, ast.MethodCall, ast.NoneLit, ast.IsCheck, ast.Try)
-RENAMEABLE = {"variable", "parameter", "function", "struct", "enum", "variant", "field", "method", "alias"}
+RENAMEABLE = {"variable", "parameter", "function", "struct", "enum", "trait", "variant", "field", "method", "alias"}
 SKIPPED_DIRS = {"node_modules", "target", "__pycache__", "venv"}
 NAME_SHAPE = re.compile(r"[^\W\d]\w*")
 
@@ -50,7 +51,7 @@ class Entity:
     """Something a name can denote.
 
     Attributes:
-        kind: "variable", "parameter", "self", "function", "struct", "enum", "variant", "field", "method", "module",
+        kind: "variable", "parameter", "self", "function", "struct", "enum", "trait", "variant", "field", "method", "module",
             "alias" (a name bound by `from m import x as y`), "builtin" (a built-in function) or "builtin_method" (a
             method of `str`, a list, a dict, a set, a `Cell`, an Option or a Result).
         name: The name as written where it is declared.
@@ -59,7 +60,7 @@ class Entity:
         line: 1-based line of its name where it is declared (0 when it has no place in a file).
         col: 1-based column of that name.
         node: The syntax node that defines it (a function, a struct, a parameter, a field...), when there is one.
-        owner: The struct or enum of a field, variant or method; the function of a parameter.
+        owner: The struct, enum or trait of a field, variant or method; the function of a parameter.
         target: What an alias stands for, or the type a `self` belongs to.
         module_path: For a module, the file it names.
         type_key: Where the checker keeps the type of a variable declared by a loop, a pattern or a parameter.
@@ -241,7 +242,7 @@ class Types:
     Attributes:
         expr: The type of each expression, by `(file, line, col)`.
         binders: The type of each parameter, loop variable and pattern variable, by `(file, kind, line, col, index)`.
-        owners: For every struct and enum of the linked program, the file and name that define it, by linked name.
+        owners: For every struct, enum and trait of the linked program, the file and name that define it, by linked name.
         templates: The generic definitions, by `(file, line, column)` of the definition.
     """
 
@@ -266,7 +267,7 @@ class Types:
         for m in linker.order:
             f = m.path.resolve()
             for name, kind in m.defs.items():
-                if kind in ("struct", "enum"):
+                if kind in ("struct", "enum", "trait"):
                     t.owners[m.mangled(name)] = (f, name)
             for n in ast.walk(m.program):
                 t.collect(f, n)
@@ -277,7 +278,7 @@ class Types:
         if isinstance(n, (ast.FnDef, ast.StructDef, ast.EnumDef)) and n.tparams and n.line:
             end = max((x.line for x in ast.walk(n) if x.line), default=n.line)
             self.templates[(f, n.line, n.col)] = Template(
-                show_name(n.name), [(p.name, list(p.bounds)) for p in n.tparams], getattr(n, "tinst", {}), n.line, end)
+                show_name(n.name), [(p.name, [show_name(b) for b in p.bounds]) for p in n.tparams], getattr(n, "tinst", {}), n.line, end)
         if isinstance(n, EXPRESSIONS) and n.ty is not None and n.line:
             self.expr[(f, n.line, n.col)] = n.ty
         elif isinstance(n, ast.Param) and n.info is not None:
@@ -362,7 +363,7 @@ class FromBinding:
 
 def doc_of(node: ast.Node | None) -> str | None:
     """The description of a definition: the string written right after it, or a function's leading string statement."""
-    if isinstance(node, (ast.StructDef, ast.EnumDef, ast.Field, ast.Variant)):
+    if isinstance(node, (ast.StructDef, ast.EnumDef, ast.TraitDef, ast.Field, ast.Variant)):
         return node.doc
     if isinstance(node, ast.FnDef) and node.body:
         first = node.body[0]
@@ -382,7 +383,7 @@ class FileIndex:
         tokens: Its tokens (empty when the text does not even lex).
         program: Whatever parsed.
         errors: The syntax errors found (the statements that failed are missing from `program`).
-        defs: Top-level functions, structs and enums by name.
+        defs: Top-level functions, structs, enums and traits by name.
         aliases: `import` bindings by the name they introduce.
         froms: `from ... import` bindings by the name they introduce.
         pubs: The names `pub from` re-exports.
@@ -405,7 +406,7 @@ class FileIndex:
             self.tokens = []
         self.tok_at = {(t.line, t.col): i for i, t in enumerate(self.tokens)}
         self.program, self.errors = parse_collect(source, str(path))
-        self.defs: dict[str, ast.FnDef | ast.StructDef | ast.EnumDef] = {}
+        self.defs: dict[str, ast.FnDef | ast.StructDef | ast.EnumDef | ast.TraitDef] = {}
         self.aliases: dict[str, ModuleBinding] = {}
         self.froms: dict[str, FromBinding] = {}
         self.pubs: set[str] = set()
@@ -444,7 +445,7 @@ class FileIndex:
     def collect(self) -> None:
         """Record the top-level definitions, imports and variables."""
         for s in self.program.body:
-            if isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef)):
+            if isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef, ast.TraitDef)):
                 self.defs.setdefault(s.name, s)
             elif isinstance(s, ast.Import):
                 i = self.tok_at.get((s.line, s.col))
@@ -491,7 +492,7 @@ class FileIndex:
     # ---- entities ----
 
     def def_entity(self, name: str) -> Entity | None:
-        """The entity of a top-level function, struct or enum."""
+        """The entity of a top-level function, struct, enum or trait."""
         node = self.defs.get(name)
         if node is None:
             return None
@@ -499,7 +500,7 @@ class FileIndex:
             kind = "function"
             line, col = self.name_pos(node, name) or (node.line, node.col)
         else:
-            kind = "struct" if isinstance(node, ast.StructDef) else "enum"
+            kind = "struct" if isinstance(node, ast.StructDef) else "enum" if isinstance(node, ast.EnumDef) else "trait"
             line, col = node.line, node.col
         return Entity(kind, name, (kind, self.path, name), self.path, line, col, node)
 
@@ -625,6 +626,8 @@ class Walker:
             self.struct(s)
         elif isinstance(s, ast.EnumDef):
             self.enum(s)
+        elif isinstance(s, ast.TraitDef):
+            self.trait(s)
         elif isinstance(s, ast.Import):
             self.import_(s)
         elif isinstance(s, ast.FromImport):
@@ -667,6 +670,7 @@ class Walker:
         pos = self.fx.name_pos(f, f.name)
         if pos:
             self.ref(pos[0], pos[1], f.name, ent, decl=True, space="member" if owner else "name")
+        self.type_params(f.tparams)
         saved, self.scope = self.scope, Scope()
         if owner is not None and f.has_self:
             self.scope.vars["self"] = Entity("self", "self", ("self", self.path, f.line, f.col), target=owner)
@@ -686,6 +690,9 @@ class Walker:
         """Resolve a struct: its name, fields and methods."""
         ent = self.fx.def_entity(s.name) if self.fx.defs.get(s.name) is s else None
         self.ref(s.line, s.col, s.name, ent, decl=True)
+        self.type_params(s.tparams)
+        for r in s.traits:
+            self.typeref(r)
         for f in s.fields:
             fe = self.project.member(ent, f.name) if ent else None
             self.ref(f.line, f.col, f.name, fe, decl=True, space="member")
@@ -699,6 +706,9 @@ class Walker:
         """Resolve an enum: its name, variants and methods."""
         ent = self.fx.def_entity(s.name) if self.fx.defs.get(s.name) is s else None
         self.ref(s.line, s.col, s.name, ent, decl=True)
+        self.type_params(s.tparams)
+        for r in s.traits:
+            self.typeref(r)
         for v in s.variants:
             ve = self.project.member(ent, v.name) if ent else None
             self.ref(v.line, v.col, v.name, ve, decl=True, space="member")
@@ -706,6 +716,30 @@ class Walker:
                 self.visit(t)
         for m in s.methods:
             self.function(m, self.project.member(ent, m.name) if ent else None, ent or Entity("enum", s.name, ("enum?", s.name)))
+
+    def trait(self, s: ast.TraitDef) -> None:
+        """Resolve a trait: its name and the signatures of its methods."""
+        ent = self.fx.def_entity(s.name) if self.fx.defs.get(s.name) is s else None
+        self.ref(s.line, s.col, s.name, ent, decl=True)
+        for m in s.methods:
+            self.function(m, self.project.member(ent, m.name) if ent else None, ent or Entity("trait", s.name, ("trait?", s.name)))
+
+    def type_params(self, params: list[ast.TypeParam]) -> None:
+        """Resolve the traits named as bounds (`T: Shape + shapes.Named`) and the default types of type parameters."""
+        for p in params:
+            i = self.fx.tok_at.get((p.line, p.col))
+            if i is None:
+                continue
+            nxt = self.fx.tok(i + 1)
+            if p.bounds and nxt is not None and nxt.kind == "OP" and nxt.value == ":":
+                j = i + 2
+                for _ in p.bounds:
+                    toks, j = self.fx.dotted(j)
+                    if toks and toks[0].value not in BOUNDS:
+                        self.qualified(toks)
+                    j += 1  # the `+`
+            if p.default is not None:
+                self.typeref(p.default)
 
     # ---- statements and expressions ----
 
@@ -971,6 +1005,15 @@ class Walker:
         t = self.types.at(self.path, e.value.line, e.value.col) if self.types else None
         if t is None:
             return None, True
+        if isinstance(t, ParamT):  # a method a trait bound declares
+            for b in sorted(t.bounds):
+                found = self.types.owners.get(b)
+                fx = self.project.file(found[0]) if found else None
+                ent = fx.def_entity(found[1]) if fx and found else None
+                member = self.project.member(ent, e.name) if ent else None
+                if member is not None:
+                    return member, False
+            return None, False
         owner = self.types.owner_of(t) if self.types else None
         if owner is None:
             kind = receiver_kind(t)
@@ -1107,16 +1150,17 @@ class Project:
         return None
 
     def member(self, owner: Entity | None, name: str) -> Entity | None:
-        """A field, variant or method of a struct or enum."""
+        """A field, variant or method of a struct or enum, or a method of a trait."""
         owner = deref(owner)
-        if owner is None or owner.kind not in ("struct", "enum") or not isinstance(owner.node, (ast.StructDef, ast.EnumDef)):
+        if owner is None or owner.kind not in ("struct", "enum", "trait") \
+                or not isinstance(owner.node, (ast.StructDef, ast.EnumDef, ast.TraitDef)):
             return None
         node, path = owner.node, owner.path
         if isinstance(node, ast.StructDef):
             for f in node.fields:
                 if f.name == name:
                     return Entity("field", name, ("field", path, owner.name, name), path, f.line, f.col, f, owner=owner)
-        else:
+        elif isinstance(node, ast.EnumDef):
             for v in node.variants:
                 if v.name == name:
                     return Entity("variant", name, ("variant", path, owner.name, name), path, v.line, v.col, v, owner=owner)
@@ -1127,6 +1171,58 @@ class Project:
                 return Entity("method", name, ("method", path, owner.name, name), path, line, col, m, owner=owner)
         return None
 
+    def written_entity(self, fx: FileIndex, name: str) -> Entity | None:
+        """What a written `name` or `module.name` in a file denotes."""
+        head, _, tail = name.rpartition(".")
+        if not head:
+            return deref(fx.module_level(name))
+        mod = deref(fx.module_level(head))
+        if mod is not None and mod.kind == "module" and mod.module_path is not None:
+            return deref(self.export_entity(mod.module_path, tail))
+        return None
+
+    def traits_of(self, owner: Entity) -> list[Entity]:
+        """The traits a struct or enum lists after its name."""
+        owner = deref(owner)
+        fx = self.file(owner.path) if owner is not None else None
+        if fx is None or not isinstance(owner.node, (ast.StructDef, ast.EnumDef)):
+            return []
+        found = (self.written_entity(fx, r.name) for r in owner.node.traits)
+        return [t for t in found if t is not None and t.kind == "trait"]
+
+    def implementers(self, trait: Entity) -> list[Entity]:
+        """The structs and enums of the workspace that list a trait."""
+        found: list[Entity] = []
+        for p in self.workspace_files():
+            fx = self.file(p)
+            for s in (fx.program.body if fx else []):
+                if isinstance(s, (ast.StructDef, ast.EnumDef)) and s.traits and fx.defs.get(s.name) is s:
+                    ent = fx.def_entity(s.name)
+                    if ent is not None and trait in self.traits_of(ent):
+                        found.append(ent)
+        return found
+
+    def family(self, entity: Entity) -> set[Entity]:
+        """The entities that must keep one name: a trait's method and the methods that implement it.
+
+        Renaming `area` in a trait renames it in every struct and enum that implements the trait (and in the calls
+        through a type parameter bounded by the trait), and the other way around.
+        """
+        owner = deref(entity.owner)
+        if entity.kind != "method" or owner is None:
+            return {entity}
+        traits = [owner] if owner.kind == "trait" else [t for t in self.traits_of(owner) if self.member(t, entity.name)]
+        out = {entity}
+        for t in traits:
+            declared = self.member(t, entity.name)
+            if declared is not None:
+                out.add(declared)
+            for impl in self.implementers(t):
+                m = self.member(impl, entity.name)
+                if m is not None:
+                    out.add(m)
+        return out
+
     def members(self, owner: Entity) -> set[str]:
         """Every name a struct or enum declares: fields, variants and methods."""
         node = owner.node
@@ -1135,6 +1231,8 @@ class Project:
             names |= {f.name for f in node.fields} | {m.name for m in node.methods}
         elif isinstance(node, ast.EnumDef):
             names |= {v.name for v in node.variants} | {m.name for m in node.methods}
+        elif isinstance(node, ast.TraitDef):
+            names |= {m.name for m in node.methods}
         return names
 
     # ---- resolution ----
@@ -1223,6 +1321,7 @@ class Project:
         local = entity.kind in ("variable", "parameter", "self") and not (entity.kind == "parameter" and entity.owner is not None)
         candidates = [entity.path] if local and entity.path else self.workspace_files()
         pattern = re.compile(rf"(?<!\w){re.escape(entity.name)}(?!\w)")
+        family = self.family(entity)
         out: list[tuple[Path, Ref]] = []
         for p in candidates:
             text = self.text_of(p) if p is not None else None
@@ -1242,7 +1341,7 @@ class Project:
                     raise RenameError(
                         f"cannot rename {entity.name!r} safely: the type of a value it is used on is unknown in "
                         f"{p.name}:{r.line}; fix the errors in the program first")
-                if r.entity == entity:
+                if r.entity in family:
                     out.append((p, r))
         return out
 
@@ -1272,7 +1371,9 @@ class Project:
             raise RenameError(f"{new!r} is a keyword")
         if new in ("self", "_"):
             raise RenameError(f"{new!r} has a special meaning and cannot be used as a name")
-        if entity.kind in ("function", "struct", "enum", "alias") and (new in BUILTINS or new in BUILTIN_TYPES or new in RESERVED_TYPES):
+        if entity.kind in ("function", "struct", "enum", "trait", "alias") and (new in BUILTINS or new in BUILTIN_TYPES or new in RESERVED_TYPES):
+            raise RenameError(f"{new!r} is a built-in name")
+        if entity.kind == "trait" and (new in BOUNDS or new == "Self"):
             raise RenameError(f"{new!r} is a built-in name")
         if entity.kind in ("variable", "parameter") and (new in BUILTINS - SHADOWABLE or new in RESERVED_TYPES):
             raise RenameError(f"{new!r} is a built-in name")
@@ -1296,15 +1397,20 @@ class Project:
             return []
         refs = self.references(entity)
         foreign = {p for p, _ in refs if p != entity.path}
-        if new.startswith("_") and foreign and entity.kind in ("function", "struct", "enum", "alias"):
+        if new.startswith("_") and foreign and entity.kind in ("function", "struct", "enum", "trait", "alias"):
             raise RenameError(f"{new!r} would be private to its module, but other files use {entity.name!r}")
         for p, _ in refs:
             if not self.in_workspace(p):
                 raise RenameError(f"{entity.name!r} is also used in {p.name}, which is not part of this workspace")
         if entity.kind in ("field", "method", "variant"):
-            if entity.owner is not None and new in self.members(entity.owner):
-                raise RenameError(f"{entity.owner.name!r} already has a member named {new!r}")
+            for part in self.family(entity):
+                if part.owner is not None and new in self.members(part.owner):
+                    raise RenameError(f"{part.owner.name!r} already has a member named {new!r}")
         elif entity.kind in ("variable", "parameter"):
+            owner = deref(entity.owner)
+            if owner is not None and owner.kind == "method" and len(self.family(owner)) > 1:
+                raise RenameError("parameter names are part of a trait's method signature: rename the parameter in the "
+                                  "trait and in every method that implements it by hand")
             self.check_variable(entity, new, refs)
         else:
             self.check_top_level(entity, new, refs)

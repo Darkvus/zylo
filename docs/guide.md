@@ -1025,7 +1025,32 @@ print(describe("a", "b"))                               # a differs from b
 ```
 
 Using a type that lacks the bound is reported where you call: `largest([Point(...)])` says that `Point` cannot be used
-for `T`, which is bound by `Ord`.
+for `T`, which is bound by `Ord`. Your own bounds are [traits](#traits).
+
+### Default type arguments
+
+A type parameter can name the type it takes when nothing else decides it, with `= type`. The parameters that have a default
+come last, and a default is a plain type (it cannot mention another parameter):
+
+```zylo
+struct Counter[T = int]:
+    items: list[T] = []
+
+    fn size(self) -> int:
+        return len(self.items)
+
+fn zero[T: Num = int]() -> T:
+    return 0
+
+a: Counter = Counter()                  # Counter[int]
+b = Counter(items=["x", "y"])           # the argument decides: Counter[str]
+c = Counter[float]()                    # written
+print(a.size(), b.size(), zero())       # 0 2 0
+```
+
+A bare `Counter` in a type, and a call that nothing decides, use the default; arguments and the expected type win over it.
+The default has to satisfy the parameter's bounds (`T: Num = str` is an error where it is declared). Methods' own type
+parameters take no defaults.
 
 ### Generic methods
 
@@ -1137,9 +1162,85 @@ across modules and re-exports. See [design.md](design.md#generics) for the reaso
   `g = first` is an error.
 - A generic that keeps instantiating itself with bigger types (`f[T]` calling `f[list[T]]`) is stopped with an error
   after 12 levels of nesting.
-- There are no user-defined bounds (traits) and no default type arguments. Float literals cannot be a `T`.
+- Float literals cannot be a `T`.
 - In the editor, hovering a name inside a generic body shows its type with the bounds of the parameters it mentions and
   the types the program instantiated them with.
+
+## Traits
+
+A **trait** names a set of methods. A struct or enum **implements** it by listing it after its name and defining those
+methods; generic code then asks for it as a **bound**, and may call the trait's methods on its `T`:
+
+```zylo
+trait Shape:
+    "Something with an area."
+    fn area(self) -> float
+    fn scale(self, by: float) -> Self
+
+struct Circle(Shape):
+    r: float
+
+    fn area(self) -> float:
+        return 3.0 * self.r * self.r
+
+    fn scale(self, by: float) -> Circle:
+        return Circle(r=self.r * by)
+
+enum Unit(Shape):
+    Square(float)
+
+    fn area(self) -> float:
+        match self:
+            Unit.Square(side):
+                return side * side
+
+    fn scale(self, by: float) -> Unit:
+        match self:
+            Unit.Square(side):
+                return Unit.Square(side * by)
+
+fn total[T: Shape](xs: list[T]) -> float:
+    acc = 0.0
+    for x in xs:
+        acc += x.area()
+    return acc
+
+fn grown_area[T: Shape + Show](x: T) -> str:
+    return f"{x} grows to {x.scale(2.0).area()}"
+
+print(total([Circle(r=1.0), Circle(r=2.0)]))       # 15.0
+print(grown_area(Unit.Square(3.0)))                # Square(3.0) grows to 36.0
+```
+
+- **Declaring.** `trait Name:` holds method signatures: `fn name(self, a: T) -> R` with no body. There are no default
+  methods, and a trait takes no type parameters and has no methods of its own type parameters. `Self` stands for the type
+  that implements the trait. A trait may start with a description string, like a struct.
+- **Implementing.** `struct Circle(Shape, Named):` (or `enum`) lists the traits, and the type has to define every method
+  with the same parameter names, parameter types and result, `Self` replaced by the type itself. Whether a method changes
+  `self` does not matter. A generic struct may implement a trait too (`struct Team[T](Named):`).
+- **Using.** A bound `T: Shape` can be combined with the built-in bounds (`T: Shape + Show`) and with other traits
+  (`T: Shape + Named`), and the trait can come from another module (`T: shapes.Shape`, or imported by name and
+  re-exported like a function or a struct). Inside the function the only methods a `T` has are the ones its bounds
+  declare, and the body is checked once for every type, like any generic. A type that does not implement the trait is
+  reported where you call: *`Sq does not implement trait Shape, which bounds T`*, with the line to add.
+- **Cost.** Traits cost nothing at run time: each use of a generic is compiled for its real types (see
+  [How generics compile](#how-generics-compile)), so `x.area()` is a plain method call, with no lookup table and no boxing.
+
+What a trait is not: a type. You cannot write `x: Shape` or keep a `list[Shape]` of mixed types (there are no trait
+objects); write `list[T]` with `T: Shape`, or an `enum` with one variant per type. A trait can only be implemented by
+structs and enums you write (not by `int` or `list`), has no default methods, no supertraits and no type parameters.
+`trait` is a keyword.
+
+The mistakes are reported where the trait is listed or implemented, and each says what to write:
+
+| Mistake | Message |
+|---|---|
+| A method is missing | `'Circle' implements trait 'Shape' but has no method 'scale'; add fn scale(self, by: float) -> Circle:` |
+| A signature differs | `method 'scale' of 'Circle' does not match trait 'Shape': expected fn scale(self, by: float) -> Circle, found ...` |
+| The trait does not exist, or is a struct | `unknown trait 'Shap' (declared: Shape)`, `'Sq' is a struct, not a trait` |
+| A trait is listed twice | `'Circle' implements trait 'Shape' twice` |
+| A bound that is neither built-in nor a trait | `unknown bound 'Nope' on type parameter 'T' (available: Eq, Ord, ...)` |
+| A method no bound declares | `type parameter T has no method 'area'; declare it with a bound: T: Shape` |
 
 ## Typed JSON
 
