@@ -606,6 +606,22 @@ class Parser:
     def parse_arm(self) -> ast.MatchArm:
         """Parse one arm and its block.
 
+        An arm is a pattern, optionally followed by more alternatives (`1 | 2`) and a guard (`if cond`), then a block.
+
+        Raises:
+            ZyloError: If the pattern is malformed.
+        """
+        arm = self.parse_pattern()
+        while self.match("OP", "|"):
+            arm.alts.append(self.parse_pattern())
+        if self.match("KW", "if"):
+            arm.guard = self.parse_expr()
+        arm.body = self.parse_block()
+        return arm
+
+    def parse_pattern(self) -> ast.MatchArm:
+        """Parse one pattern, as an arm with an empty body.
+
         The pattern is `_`, `Enum.Variant`, `Enum.Variant(a, b)`, a literal (`1`, `-1`, `"a"`, `true`), `none`, or
         `some(x)` / `ok(v)` / `err(e)`.
 
@@ -616,16 +632,16 @@ class Parser:
         pos = {"line": first.line, "col": first.col}
         if first.kind == "KW" and first.value == "none":
             self.advance()
-            return ast.MatchArm(None, "none", [], self.parse_block(), **pos)
+            return ast.MatchArm(None, "none", [], [], **pos)
         if first.kind in ("INT", "FLOAT", "STR") or (first.kind == "OP" and first.value == "-") \
                 or (first.kind == "KW" and first.value in ("true", "false")):
             lit = self.parse_unary()
             if not isinstance(lit, (ast.Int, ast.Float, ast.Str, ast.Bool, ast.UnaryOp)):
                 raise ZyloError("a `match` pattern must be a literal", first.line, first.col)
-            return ast.MatchArm(None, "literal", [], self.parse_block(), literal=lit, **pos)
+            return ast.MatchArm(None, "literal", [], [], literal=lit, **pos)
         self.expect("IDENT")
         if first.value == "_":
-            return ast.MatchArm(None, "_", [], self.parse_block(), **pos)
+            return ast.MatchArm(None, "_", [], [], **pos)
         parts = [first.value]
         while self.match("OP", "."):
             parts.append(self.expect("IDENT").value)
@@ -640,9 +656,9 @@ class Parser:
         if len(parts) == 1:  # some(x) / ok(v) / err(e)
             if len(binds) != 1:
                 raise ZyloError(f"`{first.value}(...)` binds exactly one name: write `{first.value}(x)`", first.line, first.col)
-            return ast.MatchArm(None, first.value, binds, self.parse_block(), **pos)
+            return ast.MatchArm(None, first.value, binds, [], **pos)
         typ = ast.TypeRef(".".join(parts[:-1]), [], line=first.line, col=first.col)
-        return ast.MatchArm(typ, parts[-1], binds, self.parse_block(), **pos)
+        return ast.MatchArm(typ, parts[-1], binds, [], **pos)
 
     def parse_param(self) -> ast.Param:
         """Parse one `name: type` or `name: type = default` parameter.

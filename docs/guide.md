@@ -594,6 +594,51 @@ print(describe(1), command("stop"), show(some(3)), unwrap_or_zero(err("x")), yes
 - `some(x)`, `ok(v)` and `err(e)` bind exactly one name (`_` ignores it). The bound names live inside the arm.
 - `is some` / `is ok` narrowing is unchanged and still the lighter way to test a single case.
 
+### Guards and or-patterns
+
+An arm can carry a guard, `Pattern if condition:`, which may use the names the pattern binds. Several patterns can
+share one arm with `|`.
+
+```zylo
+enum Color:
+    Red
+    Green
+    Blue
+    Rgb(int, int)
+    Gray(int)
+
+fn describe(c: Color) -> str:
+    match c:
+        Color.Red | Color.Green:
+            return "warm-ish"
+        Color.Rgb(a, b) if a > b:
+            return "a is bigger"
+        Color.Rgb(a, _) | Color.Gray(a):
+            return f"level {a}"
+        Color.Blue:
+            return "blue"
+
+fn size(n: int) -> str:
+    match n:
+        0 | 1:
+            return "tiny"
+        _ if n < 0:
+            return "negative"
+        _:
+            return "big"
+
+print(describe(Color.Red), describe(Color.Gray(4)), size(1), size(-3))
+```
+
+- A guard must be a `bool`. Guards work on every kind of pattern, including `_` and literals.
+- An arm with a guard does **not** count toward exhaustiveness, because the guard may reject the value: another arm
+  (or a final `_:`) must still cover the case. A `_ if cond:` arm is not a catch-all.
+- In an or-pattern every alternative must bind the same names with the same types (`Color.Rgb(a, _) | Color.Gray(a)`
+  is fine; `Color.Rgb(a, b) | Color.Gray(a)` is an error). Alternatives that bind nothing, such as literals and
+  data-less variants, combine freely. `_` cannot be an alternative, since it already matches everything.
+- Repeating a value or variant that an earlier unguarded arm (or alternative) already matched is an error.
+- With a guard, the whole arm is `Pattern | Pattern if cond:`: the guard applies to all alternatives.
+
 ## Option and Result
 
 Zylo has no exceptions. A value that may be missing is `T?`; an operation that may fail is

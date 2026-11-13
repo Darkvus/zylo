@@ -125,3 +125,10 @@ def test_the_client_starts_the_language_server_command():
     assert '"lsp"' in js and "LanguageClient" in js
     commands = build_parser()._subparsers._group_actions[0].choices
     assert "lsp" in commands and "fmt" in commands  # what the extension and the docs promise exists
+
+
+def test_the_package_ships_its_runtime_dependencies():
+    """`vscode-languageclient` is needed at run time, so `.vscodeignore` must not exclude `node_modules`."""
+    patterns = [ln.strip() for ln in (EXT / ".vscodeignore").read_text().splitlines() if ln.strip() and not ln.startswith("#")]
+    assert not any("node_modules" in p for p in patterns)
+    assert "vscode-languageclient" in json.loads((EXT / "package.json").read_text())["dependencies"]
