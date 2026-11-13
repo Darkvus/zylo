@@ -28,12 +28,12 @@ the ones listed below. `tests/test_architecture.py` enforces it on every change.
 |---|---|---|
 | `domain` | nothing | The **ubiquitous language**: `ast` (syntax nodes), `types`, `builtins` (the catalog of built-in functions) and `errors`. Pure: no input or output. |
 | `syntax` | domain | The lexer, the parser (with error recovery) and the formatter: text ⇄ syntax tree. |
-| `semantics` | domain, syntax, packaging | The type `checker`, the module `linker` and `derive` (the typed JSON functions the checker generates per type): what a program means. |
+| `semantics` | domain, syntax, packaging | The type `checker`, the module `linker`, `derive` (the typed JSON functions the checker generates per type) and `navigation` (which name refers to what, for hover, definition and rename): what a program means. |
 | `generation` | domain | The code generator: typed program → Rust source. |
 | `packaging` | domain | `manifest` (zylo.toml), `lock`, virtual `env`ironments, the `installer`, and `rust_deps` validation. |
 | `stdlib` (data) | nothing | Not a layer: the `.zy` modules shipped with the compiler (`import std.json`), found by `packaging/stdlib.py`. |
 | `infrastructure` | domain, packaging | Adapters to external programs: `git`, `rustc`, `cargo`. |
-| `application` | everything below | The use cases: `compile` (a program, end to end, and `diagnose_source` for every error), `format`, `editor` (symbols and completion) and `package_commands`. |
+| `application` | everything below | The use cases: `compile` (a program, end to end, and `diagnose_source` for every error), `format`, `editor` (symbols, completion, hover, definition, rename and signature help) and `package_commands`. |
 | `interface` | domain, application | The `cli`, the terminal `diagnostics` and the `lsp` server. |
 
 ## How a compilation flows

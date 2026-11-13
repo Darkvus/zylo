@@ -927,8 +927,10 @@ trust rules are in [rust-interop.md](rust-interop.md).
 - `zylo check file.zy` reports **every** mistake in a program, not only the first. After a syntax error the parser skips
   the bad statement and carries on; the type checker checks each statement on its own and does not repeat an error for
   a variable whose declaration already failed. The output ends with `error: aborting due to N previous errors`.
-- `zylo fmt` formats files in the canonical style and `zylo lsp` runs a language server. Both, and the Visual Studio
-  Code extension, are described in [editors.md](editors.md).
+- `zylo fmt` formats files in the canonical style and `zylo lsp` runs a language server (diagnostics, hover, go to
+  definition, rename, signature help). Both, and the Visual Studio Code extension, are described in
+  [editors.md](editors.md). A string literal as the first statement of a function is its description, shown on hover and in
+  signature help; it has no other effect.
 
 ## Built-in functions
 

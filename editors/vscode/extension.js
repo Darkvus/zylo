@@ -1,4 +1,5 @@
-// Starts `zylo lsp` and connects VS Code to it: live diagnostics, formatting, outline and completion.
+// Starts `zylo lsp` and connects VS Code to it: live diagnostics, formatting, outline, completion, hover,
+// go to definition, rename and signature help (the client needs no code for them: it follows the server's capabilities).
 const vscode = require("vscode");
 const { LanguageClient } = require("vscode-languageclient/node");
 
