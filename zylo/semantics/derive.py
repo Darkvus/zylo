@@ -1,8 +1,8 @@
 """Typed JSON: the conversion functions behind `to_json`, `from_json`, `json_schema` and `json_schema_defs`.
 
-Zylo has no generics, so these built-ins are expanded per type. For every type that is converted, `Deriver` writes the
-source of an ordinary Zylo function, parses it and hands it to the checker, which declares it, adds it to the program and
-checks it like user code. Calls of the built-in are rewritten into calls of these functions, so the borrow inference, the
+These built-ins are expanded per type (an instance of a generic struct, `Box[int]`, is a type like any other). For every
+type that is converted, `Deriver` writes the source of an ordinary Zylo function, parses it and hands it to the checker,
+which declares it, adds it to the program and checks it like user code. Calls of the built-in are rewritten into calls of these functions, so the borrow inference, the
 code generator and the module system need no special cases. See docs/design.md ("Typed JSON").
 
 Helpers are named after their type (`_zj_to_user_1a2b3c4d`), so asking twice for the same type finds the first one, also
@@ -169,6 +169,10 @@ class Deriver:
 
         It is the plain name, unless two types share it (from different modules): then the module is kept (`shapes.Point`).
         """
+        d = (self.structs.get(name) or self.enums[name]).defn
+        if d.instance:  # an instance of a generic: `Pair[int, Point]` becomes the valid component name `Pair_int_Point`
+            text = self.shown(name) + name[name.index("["):].replace("\u00b7", ".")
+            return re.sub(r"[^0-9A-Za-z_.\-]+", "_", text).strip("_")
         plain = self.shown(name)
         clash = [n for n in (*self.structs, *self.enums) if n != name and self.shown(n) == plain]
         return name.replace("\u00b7", ".") if clash else plain

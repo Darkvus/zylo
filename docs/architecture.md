@@ -28,7 +28,7 @@ the ones listed below. `tests/test_architecture.py` enforces it on every change.
 |---|---|---|
 | `domain` | nothing | The **ubiquitous language**: `ast` (syntax nodes), `types`, `builtins` (the catalog of built-in functions and methods, with the signatures and descriptions editors show) and `errors`. Pure: no input or output. |
 | `syntax` | domain | The lexer, the parser (with error recovery) and the formatter: text ⇄ syntax tree. |
-| `semantics` | domain, syntax, packaging | The type `checker`, the module `linker`, `derive` (the typed JSON functions the checker generates per type) and `navigation` (which name refers to what, for hover, definition and rename): what a program means. |
+| `semantics` | domain, syntax, packaging | The type `checker`, the module `linker`, `derive` (the typed JSON functions the checker generates per type), `generics` (templates, inference and the copies the checker makes per type) and `navigation` (which name refers to what, for hover, definition and rename): what a program means. |
 | `generation` | domain | The code generator: typed program → Rust source. |
 | `packaging` | domain | `manifest` (zylo.toml), `lock`, virtual `env`ironments, the `installer`, and `rust_deps` validation. |
 | `stdlib` (data) | nothing | Not a layer: the `.zy` modules shipped with the compiler (`import std.json`), found by `packaging/stdlib.py`. |
@@ -62,6 +62,7 @@ adapter's `fetch`. That keeps the installer testable without git and independent
 | **Program** | The statements of one module, or of every module after linking. |
 | **Module** | One `.zy` file. A *library module* has only imports, functions and structs. |
 | **Linking** | Resolving imports and renaming library definitions to `module·name` so everything becomes one program. |
+| **Generic / instance** | A function, struct or enum with type parameters (`Box[T]`), and the copy the checker makes for one list of type arguments (`Box[int]`). Only instances are compiled. |
 | **Narrowing** | After an `is` check, a variable has the narrower type inside the branch (or after an early exit). |
 | **Borrow** | A parameter the function never modifies is lent (`&T`) instead of cloned. |
 | **Package** | Zylo source installed from git into an environment. |

@@ -1,0 +1,89 @@
+# Generics: one Stack[T] serves a bracket checker (Stack[str]) and an RPN calculator (Stack[float]),
+# and one generic function reduces any list.
+
+struct Stack[T]:
+    items: list[T] = []
+
+    fn push(self, x: T):
+        append(self.items, x)
+
+    fn pop(self) -> T?:
+        if len(self.items) == 0:
+            return none
+        top = self.items[len(self.items) - 1]
+        self.items = self.items[0:len(self.items) - 1]
+        return some(top)
+
+    fn pop_or(self, fallback: T) -> T:
+        return self.pop().unwrap_or(fallback)
+
+    fn size(self) -> int:
+        return len(self.items)
+
+fn balanced(text: str) -> bool:
+    open_for = {")": "(", "]": "[", "}": "{"}
+    stack: Stack[str] = Stack()
+    for ch in text:
+        if ch == "(" or ch == "[" or ch == "{":
+            stack.push(ch)
+        elif ch in open_for:
+            match stack.pop():
+                some(top):
+                    if top != open_for[ch]:
+                        return false
+                none:
+                    return false
+    return stack.size() == 0
+
+fn rpn(expr: str) -> Result[float, str]:
+    stack: Stack[float] = Stack()
+    for word in expr.split(" "):
+        if word in ["+", "-", "*", "/"]:
+            if stack.size() < 2:
+                return err("not enough operands for " + word)
+            b = stack.pop_or(0.0)
+            a = stack.pop_or(0.0)
+            if word == "+":
+                stack.push(a + b)
+            elif word == "-":
+                stack.push(a - b)
+            elif word == "*":
+                stack.push(a * b)
+            else:
+                stack.push(a / b)
+        else:
+            n = parse_float(word)
+            if n is none:
+                return err("not a number: " + word)
+            stack.push(n)
+    if stack.size() != 1:
+        return err("expected one value left, found " + str(stack.size()))
+    return ok(stack.pop_or(0.0))
+
+fn fold_with[T, A](xs: list[T], start: A, step: fn(A, T) -> A) -> A:
+    acc = start
+    for x in xs:
+        acc = step(acc, x)
+    return acc
+
+fn largest[T: Ord](xs: list[T]) -> T:
+    best = xs[0]
+    for x in xs:
+        if x > best:
+            best = x
+    return best
+
+for text in ["([]{})", "(]", "((", "{[()]}"]:
+    print(text, balanced(text))
+
+for line in ["3 4 + 2 *", "10 4 /", "1 +", "2 x *"]:
+    r = rpn(line)
+    if r is ok:
+        print(line, "=", r)
+    else:
+        print(line, "->", r)
+
+print(fold_with([1, 2, 3, 4], 0, fn(acc: int, x: int) => acc + x * x))
+print(fold_with(["a", "bb", "ccc"], 0, fn(acc: int, s: str) => acc + len(s)))
+print(fold_with([3, 1, 2], "", fn(acc: str, x: int) => acc + str(x)))
+print(largest([3, 8, 5]), largest(["pear", "apple", "zebra"]), largest([2.5, -1.0]))

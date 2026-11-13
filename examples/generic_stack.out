@@ -1,0 +1,12 @@
+([]{}) true
+(] false
+(( false
+{[()]} true
+3 4 + 2 * = 14.0
+10 4 / = 2.5
+1 + -> not enough operands for +
+2 x * -> not a number: x
+30
+6
+312
+8 zebra 2.5

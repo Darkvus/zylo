@@ -158,7 +158,7 @@ methods, typed variables, fields). Multi-statement bodies are a local `fn name(.
 a variable assigned a block-bodied lambda, so there is a single closure mechanism. A call whose callee is not a plain name is
 a `CallValue`; `obj.field(x)` is a method call node that the checker marks as a field call when the field has a function type.
 
-**Typed JSON is expanded by the checker into ordinary Zylo.** With no generics, `to_json(x)`, `from_json(T, j)`,
+**Typed JSON is expanded by the checker into ordinary Zylo.** Rather than generic functions, `to_json(x)`, `from_json(T, j)`,
 `json_schema(T)` and `json_schema_defs(T)` are built-ins that the checker resolves per type (the parser reads the first
 argument of the last three as a type, so `list[int]`, `T?` and `mod.Struct` work and the linker mangles it like any type
 name). For each type it needs, the checker generates the source of a helper function (`_zj_to_*`, `_zj_from_*`,
@@ -184,12 +184,70 @@ is its description. It is a plain expression statement position that was otherwi
 program changes meaning, the lexer needs no new token (comments stay invisible), and the formatter, which prints the
 tree, keeps them for free.
 
+## Generics
+
+Syntax: `fn first[T](xs: list[T]) -> T`, `struct Box[T]`, `enum Opt[T]`, bounds as `[T: Ord + Show]`, explicit arguments as
+`first[int](xs)` and `Box[int]`. The square brackets are free: they were only used after the built-in container names.
+
+**Monomorphization in the checker, not Rust generics.** A generic definition is a template that is never emitted. Each
+list of type arguments a program uses makes a *copy* of the template (`first[int]`, `Box[str]`) in which every written `T` is
+replaced by that type (the copy's `TypeRef`s carry the resolved type in `fixed`). The copy is registered like any other
+function, struct or enum and appended to the program, so borrow inference, `derive`, the module system and the code
+generator see ordinary concrete code and needed no new cases beyond skipping templates and giving Rust-safe names to
+instances (`Box_5b_int_5d_`). Rust generics were rejected: they need trait bounds on every operation (`PartialEq`,
+`PartialOrd`, `Clone`, `Display`...), the inferred borrow decisions (a parameter is `&T` or `T` depending on how *this* function
+uses it) would have to be made once for all `T` instead of per type, and the generated `Debug`/`PartialEq` impls depend on the
+fields. The price is code size (one copy per instance) and compile time; speed is that of hand-specialised code. Instances
+are named by their arguments, so `Box[int]` written twice is one type (`StructT`/`EnumT` compare by name and also carry
+`args` and `base` so inference can take them apart).
+
+**The template is checked once, for all types.** Besides the copies, the checker checks the template with its parameters
+as opaque `ParamT` types, so a mistake in a generic is reported once at its own line and also when it is never used. A
+`ParamT` can be stored, passed and returned; every other operation asks for a capability the parameter must declare. The
+fixed set of bounds is `Eq` (`==`, `in`), `Show` (printing, f-strings), `Ord` (`<`, `min`, `sorted`), `Num` (arithmetic) and
+`Key` (dict keys, set elements); `Num` and `Key` imply `Ord`, `Eq` and `Show`. A bound is satisfied by an argument type with
+the same rules the operation uses on concrete types (`Ord` is exactly what `<` accepts: `int`, `float`, `str`). There are no
+user-defined bounds: they would need traits, whose design (method dispatch, associated types, coherence) is a language of
+its own. When the template has a mistake, its copies are not checked again (the same error would be repeated per type).
+
+**Inference is unification at the call.** The declared parameter types (in terms of `ParamT`) are unified with the argument
+types: the first occurrence binds `T`, later ones must agree. What no argument decides comes from the expected type
+(`e: Opt[str] = Opt.Empty`, `return Opt.Empty` in a function returning `Opt[T]`), which is only a hint: arguments win and the
+consumer reports a disagreement. Arguments that cannot be typed alone (`none`, `[]`, `{}`, anonymous functions) wait until the
+others are checked, so `or_default(none, 3)` and `map_all(xs, fn(x) => ...)` work; an anonymous function's result type binds
+the remaining parameters (`U`). Each argument is checked exactly once. There is no overloading and no subtyping, so one
+solution is the only solution. A parameter nobody determines is an error naming it, as is the wrong number of arguments.
+
+**Rerunning the checker.** The checker is rerun over the same tree until the set of mutating methods settles; copies are
+tagged (`instance=True`) and dropped at the start of every run, and calls remember their copy in an annotation (`Call.inst`,
+`MethodCall.variant`), never by rewriting the name, so a rerun starts from the templates and gets the same names again. The
+template's own nodes keep the types of the all-types check, which is what lets the language server hover inside a generic
+and rename fields of a generic struct; its copies are not part of any module's tree, so the editor never sees them.
+
+**Cost limits.** A generic that instantiates itself with ever bigger types (`f[T]` calling `f[list[T]]`) would never finish,
+so the type arguments' nesting is limited to 12 levels and a program to 500 instances; the error names the instance. Copies
+that fail are reported at the template's line (copies keep the source positions of the template).
+
+**Parsing `name[...]`.** `first[int](xs)` looks like indexing followed by a call. The parser reads the brackets as type
+arguments when they parse as types, are followed by `(` or `.`, and either the name is declared generic in the same file or
+every type in them cannot be a variable (a built-in type name or a capitalised name). So `table[key](x)` still calls an
+element, and `first[point](xs)` with a lowercase struct from another module needs inference instead. Parsing with scope
+knowledge would be exact but the parser knows nothing about imports.
+
+**Interactions.** Typed JSON works on instances (`to_json(Box(value=1))`, `from_json(Pair[int, Point], j)`) because an
+instance is an ordinary struct to `derive`; schema components are named `Pair_int_Point`. Re-exports keep one identity: the
+template's linked name is the base of every instance. `match` on a generic enum takes its type arguments from the value
+(`Opt.Some(x)` or `Opt[int].Some(x)`).
+
+Not done: generic methods (type parameters on a method), default type arguments, generic functions as values
+(`g = first`), numeric literals of type `T`, user-defined bounds.
+
 ## Known limitations
 
 - Values are still cloned when stored (assigned to another variable, put in a struct or a list) or returned.
 - `is` narrowing works on plain variables and a single condition (no `and` chains, no fields).
 - Rust generics and traits are not exposed. Rust can call Zylo function values passed to an `extern fn` (see rust-interop.md).
-- No generics or list comprehensions yet; closures are limited (see above). `match` has no guards, no or-patterns (`1 | 2`) and no nested patterns.
+- No list comprehensions yet; closures are limited (see above). Generics are limited to what the section above lists. `match` has no guards, no or-patterns (`1 | 2`) and no nested patterns.
 - The language server's types and member lookups need the file to parse and link (a syntax error elsewhere removes them), and its rename refuses rather than guess. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
 - No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.
 - Diagnostics are in English only.

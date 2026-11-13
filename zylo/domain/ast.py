@@ -37,16 +37,30 @@ class TypeRef(Node):
 
     Attributes:
         name: `int`, `list`, `Result`, a struct name, `mod.Struct`, or `?` for an optional type.
-        args: Type arguments (`list[int]` has one, `Result[T, E]` has two, `T?` has one). For a function type
-            (`fn(A, B) -> R`, name `fn`) they are the parameter types.
+        args: Type arguments (`list[int]` has one, `Result[T, E]` has two, `T?` has one, `Box[int]` has one). For a
+            function type (`fn(A, B) -> R`, name `fn`) they are the parameter types.
         ret: The return type of a function type, or None when it returns nothing (or for any other type).
+        fixed: Filled in by the checker on a copy of a generic definition: the type that a type parameter stands for there.
     """
     name: str  # int float bool str list
     args: list["TypeRef"]
     ret: "TypeRef | None" = None
+    fixed: Type | None = None  # set by the checker on a copy of a generic definition: the type this written type stands for
 
 
 # ---- expressions ---------------------------------------------------------------
+
+@dataclass
+class TypeParam(Node):
+    """A type parameter of a generic function, struct or enum: `T` or `T: Ord + Show`.
+
+    Attributes:
+        name: The parameter's name.
+        bounds: Names of the bounds it must satisfy (`Eq`, `Ord`, `Num`, `Show`, `Key`), possibly none.
+    """
+    name: str
+    bounds: list[str] = field(default_factory=list)
+
 
 @dataclass
 class Int(Node):
@@ -79,9 +93,11 @@ class Name(Node):
     Attributes:
         id: The variable's name.
         var: The variable this name refers to; filled in by the checker.
+        targs: Explicit type arguments written on a generic enum (`Opt[int].Some(1)`), otherwise empty.
     """
     id: str
     var: VarInfo | None = None  # filled in by the checker: the variable this name refers to
+    targs: list[TypeRef] = field(default_factory=list)
 
 
 @dataclass
@@ -132,12 +148,16 @@ class Call(Node):
         ctor_fields: Field names when the checker found this is a struct constructor, otherwise None.
         named: Named arguments as written; the checker moves them into `args` and empties this list.
         var: The variable of function type being called (`f(3)`), when the callee is a variable rather than a function.
+        targs: Explicit type arguments of a generic function or struct (`first[int](xs)`), otherwise empty.
+        inst: The instance the checker picked for a call of a generic function or struct (`first[int]`), or None.
     """
     func: str
     args: list["Expr"]
     ctor_fields: list[str] | None = None  # filled in by the checker if this is a struct constructor
     named: list[NamedArg] = field(default_factory=list)
     var: VarInfo | None = None  # filled in by the checker if the callee is a variable holding a function
+    targs: list[TypeRef] = field(default_factory=list)
+    inst: str | None = None  # filled in by the checker: the instance of a generic function or struct that is called
 
 
 @dataclass
@@ -244,11 +264,13 @@ class Attr(Node):
         name: The field or variant name.
         variant: `(enum, variant)` when the checker found a variant without data, otherwise None.
         unwrap: `"unwrap"` / `"unwrap_err"` when an `is` check narrowed this field path to the inner value.
+        targs: Explicit type arguments of a generic enum named through a module (`lib.Opt[int].Empty`), otherwise empty.
     """
     value: "Expr"
     name: str
     variant: tuple[str, str] | None = None
     unwrap: str | None = None
+    targs: list[TypeRef] = field(default_factory=list)
 
 
 @dataclass
@@ -262,6 +284,7 @@ class MethodCall(Node):
         variant: `(enum, variant)` when the checker found a variant constructor, otherwise None.
         named: Named arguments as written; the checker moves them into `args` and empties this list.
         field_call: True when the checker found that `name` is a field of function type, not a method.
+        targs: Explicit type arguments of a generic function named through a module (`lib.first[int](xs)`).
     """
     value: "Expr"
     name: str
@@ -269,6 +292,7 @@ class MethodCall(Node):
     variant: tuple[str, str] | None = None
     named: list[NamedArg] = field(default_factory=list)
     field_call: bool = False
+    targs: list[TypeRef] = field(default_factory=list)
 
 
 @dataclass
@@ -412,6 +436,8 @@ class FnDef(Node):
         body: Statements of the body.
         has_self: True for a method (its first parameter is `self`).
         self_mut: True when the checker found that the method modifies `self`.
+        tparams: The type parameters of a generic function (`fn first[T](...)`); empty for an ordinary one.
+        instance: True for a copy of a generic function made by the checker for one list of type arguments.
     """
     name: str
     params: list[Param]
@@ -419,6 +445,8 @@ class FnDef(Node):
     body: list["Stmt"]
     has_self: bool = False  # method (first parameter is `self`)
     self_mut: bool = False  # filled in by the checker: the method modifies `self`
+    tparams: list[TypeParam] = field(default_factory=list)
+    instance: bool = False  # a copy made by the checker for one list of type arguments
 
 
 @dataclass
@@ -448,6 +476,8 @@ class StructDef(Node):
         display: Original name to show to users when `name` was mangled.
         doc: The description written as the first line of the body (a string literal), or None.
         doc_line: Source line of that description.
+        tparams: The type parameters of a generic struct (`struct Box[T]`); empty for an ordinary one.
+        instance: True for a copy of a generic struct made by the checker for one list of type arguments.
     """
     name: str
     fields: list[Field]
@@ -455,6 +485,8 @@ class StructDef(Node):
     display: str | None = None  # original name when the linker has mangled `name`
     doc: str | None = None
     doc_line: int = 0
+    tparams: list[TypeParam] = field(default_factory=list)
+    instance: bool = False
 
 
 @dataclass
@@ -478,6 +510,8 @@ class EnumDef(Node):
         methods: Methods defined inside the enum; `self` is the enum value.
         doc: The description written as the first line of the body (a string literal), or None.
         doc_line: Source line of that description.
+        tparams: The type parameters of a generic enum (`enum Opt[T]`); empty for an ordinary one.
+        instance: True for a copy of a generic enum made by the checker for one list of type arguments.
     """
     name: str
     variants: list[Variant]
@@ -485,6 +519,8 @@ class EnumDef(Node):
     methods: list[FnDef] = field(default_factory=list)
     doc: str | None = None
     doc_line: int = 0
+    tparams: list[TypeParam] = field(default_factory=list)
+    instance: bool = False
 
 
 @dataclass
@@ -554,7 +590,7 @@ class Program(Node):
 
 # ---- generic traversal -----------------------------------------------------------------------
 
-_ANNOTATIONS = {"tys", "variant", "enum", "ty", "var", "vars", "info", "infos", "unwrap", "then_bind", "else_bind", "after_bind", "captures"}
+_ANNOTATIONS = {"tys", "variant", "enum", "ty", "var", "vars", "info", "infos", "unwrap", "then_bind", "else_bind", "after_bind", "captures", "inst", "fixed"}
 
 
 def children(node: Node) -> Iterator[Node]:

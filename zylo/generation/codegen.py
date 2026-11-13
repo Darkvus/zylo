@@ -193,6 +193,9 @@ METHOD_CLASHES = {
 }
 
 
+UNSAFE = re.compile(r"[^0-9A-Za-z_]")  # what a Rust identifier cannot hold, in the name of an instance of a generic
+
+
 def ident(name: str) -> str:
     """Make a Zylo name a valid Rust identifier.
 
@@ -205,6 +208,7 @@ def ident(name: str) -> str:
     if name == "self":
         return name
     name = name.replace("\u00b7", "__")  # linker-mangled `module·name`
+    name = UNSAFE.sub(lambda m: f"_{ord(m.group()):x}_", name)  # an instance of a generic: `first[int]`
     return name + "_" if name in RUST_KEYWORDS else name
 
 
@@ -222,7 +226,7 @@ def tname(name: str) -> str:
     Returns:
         The name, with a trailing `_` if it clashes with a Rust prelude type or keyword.
     """
-    name = name.replace("\u00b7", "__")
+    name = UNSAFE.sub(lambda m: f"_{ord(m.group()):x}_", name.replace("\u00b7", "__"))
     return name + "_" if name in RUST_TYPE_NAMES or name in RUST_KEYWORDS else name
 
 
@@ -386,10 +390,11 @@ class Gen:
             The Rust source: struct definitions, functions, then `main` holding the top-level statements.
         """
         self.out.append(PRELUDE)
-        structs = [s for s in prog.body if isinstance(s, ast.StructDef)]
-        fns = [s for s in prog.body if isinstance(s, ast.FnDef) and not isinstance(s, ast.ExternFn)]
-        enums = [s for s in prog.body if isinstance(s, ast.EnumDef)]
-        rest = [s for s in prog.body if not isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef))]
+        body = [s for s in prog.body if not getattr(s, "tparams", None)]  # a generic is only a template
+        structs = [s for s in body if isinstance(s, ast.StructDef)]
+        fns = [s for s in body if isinstance(s, ast.FnDef) and not isinstance(s, ast.ExternFn)]
+        enums = [s for s in body if isinstance(s, ast.EnumDef)]
+        rest = [s for s in body if not isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef))]
         self.opaque = fn_holders(structs, enums)
         for ed in enums:
             self.enum(ed)
@@ -1041,7 +1046,9 @@ def call(e: ast.Call) -> str:
         return f"({callee})({', '.join(emit(a) for a in args)})"
     if e.ctor_fields is not None:
         fields = ", ".join(f"{ident(n)}: {emit(a)}" for n, a in zip(e.ctor_fields, args))
-        return f"{tname(e.func)} {{ {fields} }}"
+        return f"{tname(e.inst or e.func)} {{ {fields} }}"
+    if e.inst:  # a call of one instance of a generic function
+        return f"{ident(e.inst)}({call_args(_FNS[e.inst].params, args)})"
     if e.func in _EXTERNS:
         return extern_call(_EXTERNS[e.func], args)
     if e.func in _FNS and e.func in BUILTIN_NAMES:  # a user function shadowing a builtin name
@@ -1165,8 +1172,8 @@ def generate(prog: ast.Program) -> str:
     _EXTERNS.clear()
     _EXTERNS.update({s.name: s for s in prog.body if isinstance(s, ast.ExternFn)})
     _FNS.clear()
-    _FNS.update({s.name: s for s in prog.body if isinstance(s, ast.FnDef)})
+    _FNS.update({s.name: s for s in prog.body if isinstance(s, ast.FnDef) and not s.tparams})
     for s in prog.body:
-        if isinstance(s, (ast.StructDef, ast.EnumDef)):
+        if isinstance(s, (ast.StructDef, ast.EnumDef)) and not s.tparams:
             _METHODS.update({(s.name, m.name): m for m in s.methods})
     return Gen().program(prog)

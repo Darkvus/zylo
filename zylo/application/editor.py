@@ -14,7 +14,7 @@ from zylo.domain.errors import PackageError, ZyloError
 from zylo.domain.types import Type
 from zylo.packaging.manifest import find_manifest
 from zylo.semantics.navigation import Entity, Project, Ref, RenameError, Resolution, deref, doc_of, show_type
-from zylo.syntax.formatter import expr_text, type_text
+from zylo.syntax.formatter import expr_text, tparams_text, type_text
 from zylo.syntax.lexer import Token, tokenize
 from zylo.syntax.parser import parse_collect
 
@@ -48,7 +48,7 @@ def signature_text(f: ast.FnDef) -> str:
         f"{p.name}: {type_text(p.type)}" + (f" = {expr_text(p.default)}" if p.default is not None else "")
         for p in f.params
     ]
-    return f"fn {f.name}({', '.join(params)})" + (f" -> {type_text(f.ret)}" if f.ret else "")
+    return f"fn {f.name}{tparams_text(f.tparams)}({', '.join(params)})" + (f" -> {type_text(f.ret)}" if f.ret else "")
 
 
 def _name_col(line_text: str, name: str, fallback: int) -> int:
@@ -244,11 +244,11 @@ def _describe(project: Project, ent: Entity, ref: Ref, res: Resolution) -> str:
     if ent.kind == "struct" and isinstance(node, ast.StructDef):
         fields = "".join(f"\n    {f.name}: {type_text(f.type)}" + (f" = {expr_text(f.default)}" if f.default is not None else "")
                          for f in node.fields)
-        return f"```zylo\nstruct {ent.name}{fields}\n```{_doc_block(node)}"
+        return f"```zylo\nstruct {ent.name}{tparams_text(node.tparams)}{fields}\n```{_doc_block(node)}"
     if ent.kind == "enum" and isinstance(node, ast.EnumDef):
         variants = "".join(f"\n    {v.name}" + (f"({', '.join(type_text(t) for t in v.fields)})" if v.fields else "")
                            for v in node.variants)
-        return f"```zylo\nenum {ent.name}{variants}\n```{_doc_block(node)}"
+        return f"```zylo\nenum {ent.name}{tparams_text(node.tparams)}{variants}\n```{_doc_block(node)}"
     if ent.kind == "variant" and isinstance(node, ast.Variant):
         data = f"({', '.join(type_text(t) for t in node.fields)})" if node.fields else ""
         return f"```zylo\n{owner}.{ent.name}{data}\n```{_doc_block(node)}"
@@ -514,13 +514,13 @@ def signature_of(ent: Entity) -> tuple[str, list[tuple[int, int]], list[str], st
     if ent.kind in ("function", "method") and isinstance(node, ast.FnDef):
         parts = [f"{p.name}: {type_text(p.type)}" + (f" = {expr_text(p.default)}" if p.default is not None else "")
                  for p in node.params if p.type is not None]
-        head = f"fn {ent.owner.name}.{ent.name}" if ent.owner is not None else f"fn {ent.name}"
+        head = f"fn {ent.owner.name}.{ent.name}" if ent.owner is not None else f"fn {ent.name}{tparams_text(node.tparams)}"
         label, spans = _label(head, parts, f" -> {type_text(node.ret)}" if node.ret else "")
         return label, spans, [p.name for p in node.params], doc_of(node)
     if ent.kind == "struct" and isinstance(node, ast.StructDef):
         parts = [f"{f.name}: {type_text(f.type)}" + (f" = {expr_text(f.default)}" if f.default is not None else "")
                  for f in node.fields]
-        label, spans = _label(ent.name, parts)
+        label, spans = _label(ent.name + tparams_text(node.tparams), parts)
         return label, spans, [f.name for f in node.fields], doc_of(node)
     if ent.kind == "variant" and isinstance(node, ast.Variant) and node.fields:
         label, spans = _label(f"{ent.owner.name}.{ent.name}" if ent.owner else ent.name, [type_text(t) for t in node.fields])

@@ -277,7 +277,7 @@ class Types:
     def owner_of(self, t: Type | None) -> tuple[Path, str] | None:
         """The file and name that define a struct or enum type, or None for any other type."""
         if isinstance(t, (StructT, EnumT)):
-            return self.owners.get(t.name)
+            return self.owners.get(t.base or t.name)  # an instance of a generic belongs to its generic
         return None
 
 
@@ -760,6 +760,19 @@ class Walker:
         parts, j = self.fx.dotted(i)
         binds: list[Token] = []
         nxt = self.fx.tok(j)
+        if nxt is not None and nxt.kind == "OP" and nxt.value == "[":  # `Opt[int].Some(x)`: skip the type arguments
+            depth = 0
+            while (nxt := self.fx.tok(j)) is not None:
+                depth += (nxt.value == "[") - (nxt.value == "]") if nxt.kind == "OP" else 0
+                j += 1
+                if depth == 0:
+                    break
+            nxt = self.fx.tok(j)
+            variant = self.fx.tok(j + 1)
+            if nxt is not None and nxt.value == "." and variant is not None and variant.kind == "IDENT":
+                parts.append(variant)
+                j += 2
+                nxt = self.fx.tok(j)
         if nxt is not None and nxt.kind == "OP" and nxt.value == "(":
             j += 1
             while (b := self.fx.tok(j)) is not None and b.kind == "IDENT":
@@ -774,6 +787,9 @@ class Walker:
                 self.visit(arm.literal)
             return []
         parts, binds = self.pattern_tokens(arm)
+        if arm.type is not None:
+            for a in arm.type.args:
+                self.typeref(a)
         if arm.type is not None and len(parts) >= 2:
             enum = deref(self.qualified(parts[:-1]))
             self.tok_ref(parts[-1], self.project.member(enum, arm.variant) if enum else None, space="member")
@@ -839,6 +855,8 @@ class Walker:
         if isinstance(e, ast.Name):
             ent = self.lookup(e.id)
             self.ref(e.line, e.col, e.id, ent)
+            for t in e.targs:
+                self.typeref(t)
             return ent
         if isinstance(e, ast.Call):
             self.call(e)
@@ -872,6 +890,8 @@ class Walker:
         """Resolve a call of a function, a struct constructor or a variable holding a function."""
         ent = self.lookup(e.func)
         self.ref(e.line, e.col, e.func, ent)
+        for t in e.targs:
+            self.typeref(t)
         for a in e.args:
             self.visit(a)
         self.named(e.named, deref(ent))
@@ -928,6 +948,8 @@ class Walker:
         if not static:
             ent, missing = self.instance_member(e)
         self.ref(e.line, e.col, e.name, ent, space="member", needs_type=missing)
+        for t in e.targs:
+            self.typeref(t)
         return ent if static else None
 
     def method_call(self, e: ast.MethodCall) -> None:
@@ -938,6 +960,8 @@ class Walker:
         if not static:
             ent, missing = self.instance_member(e)
         self.ref(e.line, e.col, e.name, ent, space="member", needs_type=missing)
+        for t in e.targs:
+            self.typeref(t)
         for a in e.args:
             self.visit(a)
         self.named(e.named, deref(ent))
