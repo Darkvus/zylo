@@ -133,6 +133,20 @@ Nineteen programs in [examples/](examples/) — FizzBuzz, primes, Collatz, sorti
 matrices, a bank account, an inventory, vectors, number parsing with `Option`/`Result`, and more.
 Every one is compiled and checked in the test suite.
 
+## Code signing policy
+
+Free code signing for the Windows installer is provided by [SignPath.io](https://signpath.io),
+with a certificate from the [SignPath Foundation](https://signpath.org).
+
+- **Scope:** only `zylo-setup-x86_64.exe`, built from this repository by the
+  [release workflow](.github/workflows/release.yml) on GitHub Actions. Nothing is signed from a
+  developer machine.
+- **Roles:** committer, reviewer and approver: [Darkvus](https://github.com/Darkvus), the project
+  owner. Every change reaches `main` through a pull request that must pass CI.
+- **Privacy:** Zylo does not transfer any information to other networked systems unless the user
+  asks for it, for example with `zylo add` (which clones a package from the git URL you give it)
+  or a program that makes HTTP requests.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/architecture.md](docs/architecture.md) for how the code is organised. Zylo is licensed under the MIT license.
