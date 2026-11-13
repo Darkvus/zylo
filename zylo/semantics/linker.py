@@ -158,7 +158,7 @@ class Linker:
         """Load `std.json` when a program uses the typed JSON built-ins: the code generated for them needs its `Json`."""
         if any(m.id == f"{STD}.json" for m in self.order):
             return
-        names = TYPE_ARG_BUILTINS | {"to_json"}
+        names = (TYPE_ARG_BUILTINS - {"type_name"}) | {"to_json"}
         if any(isinstance(n, ast.Call) and n.func in names for m in self.order for n in ast.walk(m.program)):
             found = stdlib_module([STD, "json"])
             if found is not None:

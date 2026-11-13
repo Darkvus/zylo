@@ -9,12 +9,12 @@ from dataclasses import dataclass
 from zylo.domain.errors import ZyloError
 
 KEYWORDS = {
-    "fn", "if", "elif", "else", "while", "for", "in", "return", "break", "continue",
+    "fn", "if", "elif", "else", "while", "for", "in", "return", "break", "continue", "pass",
     "and", "or", "not", "true", "false", "struct", "enum", "match", "is", "none", "import", "from", "as", "extern", "pub",
 }
 THREE_CHAR = {"..="}
 TWO_CHAR = {"..", "==", "!=", "<=", ">=", "->", "=>", "+=", "-=", "*=", "/=", "%="}
-ONE_CHAR = set("+-*/%<>=(),:[].?{}|")
+ONE_CHAR = set("+-*/%<>=(),:[].?{}|;")
 ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "\\": "\\", '"': '"', "'": "'"}
 
 
@@ -66,6 +66,7 @@ def tokenize(src: str) -> list[Token]:
         if depth > 0:  # continuation line: no indentation or NEWLINE tokens
             before = len(tokens)
             _lex_line(line, width, lineno, tokens)
+            _split_statements(tokens, before, depth)
             depth += _bracket_delta(tokens[before:])
             if depth <= 0:
                 depth = 0
@@ -84,6 +85,7 @@ def tokenize(src: str) -> list[Token]:
             raise ZyloError("inconsistent indentation", lineno, width + 1)
         before = len(tokens)
         _lex_line(line, width, lineno, tokens)
+        _split_statements(tokens, before, 0)
         depth = max(0, _bracket_delta(tokens[before:]))
         opener = width
         if depth == 0:
@@ -96,6 +98,38 @@ def tokenize(src: str) -> list[Token]:
         tokens.append(Token("DEDENT", "", *end))
     tokens.append(Token("EOF", "", *end))
     return tokens
+
+
+def _split_statements(tokens: list[Token], start: int, depth: int) -> None:
+    """Turn the `;` separators of one line into NEWLINE tokens, so `a = 1; b = 2` is two statements.
+
+    A `;` that ends the line is dropped. The tokens are changed in place.
+
+    Args:
+        tokens: All tokens so far.
+        start: Index of the first token of this line.
+        depth: How many brackets are open where the line starts.
+
+    Raises:
+        ZyloError: On a `;` inside brackets, or an empty statement (`;` first on the line or twice in a row).
+    """
+    out: list[Token] = []
+    for t in tokens[start:]:
+        if t.kind == "OP" and t.value in "([{":
+            depth += 1
+        elif t.kind == "OP" and t.value in ")]}":
+            depth -= 1
+        elif t.kind == "OP" and t.value == ";":
+            if depth > 0:
+                raise ZyloError("`;` separates statements; it cannot appear inside brackets", t.line, t.col)
+            if not out or out[-1].kind == "NEWLINE":
+                raise ZyloError("empty statement before `;`", t.line, t.col)
+            out.append(Token("NEWLINE", "", t.line, t.col))
+            continue
+        out.append(t)
+    if out and out[-1].kind == "NEWLINE":
+        out.pop()  # a `;` at the end of the line
+    tokens[start:] = out
 
 
 def _bracket_delta(toks: list[Token]) -> int:

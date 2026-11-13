@@ -289,6 +289,10 @@ class Parser:
                     self.expect("NEWLINE")
                     cls = ast.Break if tok.value == "break" else ast.Continue
                     return cls(line=tok.line, col=tok.col)
+                case "pass":
+                    self.advance()
+                    self.expect("NEWLINE")
+                    return ast.Pass(line=tok.line, col=tok.col)
                 case "else" | "elif":
                     raise ZyloError(f"{tok.value!r} without a preceding 'if'", tok.line, tok.col)
         return self.parse_simple()

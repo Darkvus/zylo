@@ -43,6 +43,20 @@ parts of `self`, which cannot be lent while `self` is borrowed mutably), and `fo
 when `xs` is never modified anywhere, and over a snapshot otherwise (like Python, the body may modify the list).
 Before this, calling a function in a loop with a large list was slower than Python (see `benchmarks/listsum.zy`).
 
+**A modified parameter nobody sees is an error, not a silent loss.** The guide promises that arguments are passed by
+value, so a function that modifies a list, dict, set or struct parameter modifies its own copy. Making that copy
+by-reference would break the promise (and `Cell` exists for shared state), so the decision (v0.26) is to keep value
+semantics and make the one useless case loud: `fn add(a: A, k: str): a.names[k] = "v"` changed a copy that was then
+thrown away, which is never what the author meant. The checker records, per variable, the syntax nodes that mention it
+(`VarInfo.uses`) and those that only name it as the root of a modified place (`mut_roots`, filled by `mark_mutable`:
+`a.f = v`, `a[i] = v`, `append(a, v)`, a method that modifies `self`). After checking a function or an anonymous function,
+a non-`Copy` parameter that was modified in place and has no other mention is rejected with "parameter 'a' is modified but
+the changes are not visible to the caller". A parameter that is also read, returned or passed on is a deliberate local
+copy and stays legal (`fn sorted_copy(xs) -> list: xs.sort(); return xs`). Plain reassignment (`xs = [1]`) is not
+flagged: it rebinds a local name, which nobody expects to reach the caller. Generic functions are checked through their
+copies, and closures cannot modify captured variables at all (an older error), so the rule covers every callable.
+Not covered: the variable of a `for` loop (`for q in ps: q.x = 1` changes the iteration's copy, which is documented).
+
 **Declaration vs reassignment is inferred.** `x = 1` declares the first time and reassigns after,
 like Python. The checker marks variables that are reassigned or mutated (`append`, `xs[i] = v`,
 `p.x = v`, mutating method calls) and the generator emits `let mut` only for those.
@@ -287,9 +301,12 @@ whose own type parameters appear only in a result that the context does not name
 ## Known limitations
 
 - Values are still cloned when stored (assigned to another variable, put in a struct or a list) or returned.
-- `is` narrowing works on plain variables and a single condition (no `and` chains, no fields).
+- `is` narrowing works on plain variables and field paths (`p.name`, `self.a.b`), with a single `is` condition per `if` (no `and` chains) and not on call results or indexed elements. A narrowed value is already unwrapped: calling `unwrap`, `unwrap_or` or `unwrap_err` on it is the error "already narrowed" (an error rather than a no-op, so a stray `.unwrap()` is not mistaken for a second check, and the message says what to drop). Closures do not see a field narrowing.
+- `match` has guards, or-patterns, nested patterns, integer ranges and tuple scrutinees (exhaustiveness is exact), but no struct patterns (`Point(x=0, y)`), no `x @ pattern` bindings and no bare-name catch-all at the top of an arm (use `_`).
+- Generics are monomorphized, with a fixed set of bounds (`Eq`, `Ord`, `Num`...): no user-defined bounds, no default type arguments, no float literals of type `T`, no generic `extern fn`.
+- Arguments are passed by value; a modified parameter whose changes nobody could see is an error (see above). The variable of a `for` loop is a copy as well, and modifying it without using it afterwards is not flagged.
 - Rust generics and traits are not exposed. Rust can call Zylo function values passed to an `extern fn` (see rust-interop.md).
-- No list comprehensions yet; closures are limited (see above). Generics are limited to what the section above lists. `match` has no struct patterns (`Point(x=0, y)`), no `x @ pattern` bindings and no bare-name catch-all at the top of an arm (use `_`).
+- No list comprehensions yet; closures are limited (see above).
 - The language server's types and member lookups need the file to parse and link (a syntax error elsewhere removes them), and its rename refuses rather than guess. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
 - No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.
 - Diagnostics are in English only.

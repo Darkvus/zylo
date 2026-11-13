@@ -219,6 +219,9 @@ class VarInfo:
         narrowed: True for a variable rebound with a narrower type by an `is` check; it cannot be reassigned.
         by_ref: True for a parameter its function never modifies: it is lent to the function instead of cloned.
         captured: True for a read-only copy of an outer variable inside a closure; it cannot be modified there.
+        place_mut: True if a part of the variable is modified in place (`x.f = v`, `x[i] = v`, `x.push(v)`).
+        uses: Ids of the syntax nodes that mention the variable.
+        mut_roots: Ids of the nodes that only name the variable as the root of a modified place.
     """
     name: str
     ty: Type
@@ -226,6 +229,9 @@ class VarInfo:
     narrowed: bool = False  # rebound by `is` narrowing; cannot be reassigned
     by_ref: bool = False  # a parameter the function never modifies: passed by reference, not cloned
     captured: bool = False  # a copy of an outer variable inside a closure: read-only
+    place_mut: bool = False  # a part of it is modified in place
+    uses: set[int] = field(default_factory=set)  # nodes that mention it
+    mut_roots: set[int] = field(default_factory=set)  # nodes that mention it only to modify a part of it
 
 
 def is_copy_type(t: Type) -> bool:

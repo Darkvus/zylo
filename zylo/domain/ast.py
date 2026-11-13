@@ -423,6 +423,12 @@ class Continue(Node):
 
 
 @dataclass
+class Pass(Node):
+    """A `pass` statement: does nothing, for a block (such as a `match` arm) that has nothing to do."""
+    pass
+
+
+@dataclass
 class Param(Node):
     """A function parameter.
 
@@ -620,7 +626,7 @@ class FromImport(Node):
     pub: bool = False
 
 
-Stmt = (ExprStmt | Assign | Unpack | If | While | For | Return | Break | Continue | FnDef | StructDef
+Stmt = (ExprStmt | Assign | Unpack | If | While | For | Return | Break | Continue | Pass | FnDef | StructDef
         | EnumDef | Match | Import | FromImport)
 
 

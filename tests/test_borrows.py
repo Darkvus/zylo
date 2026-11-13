@@ -37,17 +37,17 @@ def test_copy_types_are_never_borrowed():
 
 
 def test_modified_parameters_are_taken_by_value():
-    assert params("fn f(xs: list[int]):\n    append(xs, 1)\n") == {"xs": False}
-    assert params("fn f(xs: list[int]):\n    xs[0] = 1\n") == {"xs": False}
+    assert params("fn f(xs: list[int]) -> list[int]:\n    append(xs, 1)\n    return xs\n") == {"xs": False}
+    assert params("fn f(xs: list[int]) -> list[int]:\n    xs[0] = 1\n    return xs\n") == {"xs": False}
     assert params("fn f(xs: list[int]):\n    xs = [1]\n") == {"xs": False}
-    assert params("fn f(xs: list[int]):\n    xs.sort()\n") == {"xs": False}
-    assert params("fn f(d: dict[str, int]):\n    d[\"a\"] = 1\n") == {"d": False}
-    assert params("struct P:\n    n: int\nfn f(p: P):\n    p.n = 1\n") == {"p": False}
-    assert params("struct P:\n    n: int\n\n    fn bump(self):\n        self.n += 1\nfn f(p: P):\n    p.bump()\n") == {"p": False}
+    assert params("fn f(xs: list[int]) -> list[int]:\n    xs.sort()\n    return xs\n") == {"xs": False}
+    assert params("fn f(d: dict[str, int]) -> int:\n    d[\"a\"] = 1\n    return len(d)\n") == {"d": False}
+    assert params("struct P:\n    n: int\nfn f(p: P) -> int:\n    p.n = 1\n    return p.n\n") == {"p": False}
+    assert params("struct P:\n    n: int\n\n    fn bump(self):\n        self.n += 1\nfn f(p: P) -> P:\n    p.bump()\n    return p\n") == {"p": False}
 
 
 def test_only_the_modified_parameter_is_by_value():
-    assert params("fn f(a: list[int], b: list[int]):\n    append(b, len(a))\n") == {"a": True, "b": False}
+    assert params("fn f(a: list[int], b: list[int]) -> list[int]:\n    append(b, len(a))\n    return b\n") == {"a": True, "b": False}
 
 
 def test_struct_and_option_parameters():
@@ -70,7 +70,7 @@ def test_signatures_and_calls_use_references():
 
 
 def test_modified_parameter_is_still_cloned_at_the_call():
-    rs = transpile_source("fn grow(xs: list[int]):\n    append(xs, 1)\ndata = [1]\ngrow(data)\n")
+    rs = transpile_source("fn grow(xs: list[int]) -> list[int]:\n    append(xs, 1)\n    return xs\ndata = [1]\ngrow(data)\n")
     assert "fn grow(mut xs: Vec<i64>)" in rs and "grow(data.clone())" in rs
 
 
