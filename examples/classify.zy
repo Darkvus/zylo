@@ -1,0 +1,38 @@
+# Guards and or-patterns in `match`.
+
+enum Token:
+    Num(int)
+    Word(str)
+    Plus
+    Minus
+    Eof
+
+fn describe(t: Token) -> str:
+    match t:
+        Token.Plus | Token.Minus:
+            return "operator"
+        Token.Num(n) if n < 0:
+            return f"negative {n}"
+        Token.Num(n):
+            return f"number {n}"
+        Token.Word(w) if w == "let" or w == "fn":
+            return f"keyword {w}"
+        Token.Word(w):
+            return f"word {w}"
+        Token.Eof:
+            return "end"
+
+fn grade(score: int) -> str:
+    match score:
+        100:
+            return "perfect"
+        _ if score >= 90:
+            return "A"
+        _ if score >= 80:
+            return "B"
+        _:
+            return "keep trying"
+
+for t in [Token.Plus, Token.Num(-3), Token.Num(7), Token.Word("let"), Token.Word("x"), Token.Eof]:
+    print(describe(t))
+print(grade(100), grade(95), grade(81), grade(10))

@@ -440,7 +440,9 @@ class Gen:
         self.line(f"match {scrutinee} {{")
         self.depth += 1
         for arm in s.arms:
-            self.line(f"{self.arm_pattern(s, arm)} => {{")
+            pattern = " | ".join(self.arm_pattern(s, a, arm) for a in [arm, *arm.alts])
+            guard = f" if {emit_ref(arm.guard)}" if arm.guard is not None else ""
+            self.line(f"{pattern}{guard} => {{")
             self.block(arm.body)
             self.line("}")
         self.depth -= 1
@@ -448,8 +450,14 @@ class Gen:
 
     ARM_WRAPPERS = {"some": "Some", "ok": "Ok", "err": "Err"}
 
-    def arm_pattern(self, s: ast.Match, arm: ast.MatchArm) -> str:
-        """Return the Rust pattern of one `match` arm."""
+    def arm_pattern(self, s: ast.Match, arm: ast.MatchArm, owner: ast.MatchArm) -> str:
+        """Return the Rust pattern of one alternative of a `match` arm.
+
+        Args:
+            s: The `match`.
+            arm: The alternative (the arm itself or one of its `alts`).
+            owner: The arm, whose checked variables every alternative's bindings share.
+        """
         if arm.variant == "_":
             return "_"
         if arm.variant == "none":
@@ -463,7 +471,8 @@ class Gen:
             return emit_ref(lit)
         if not arm.binds:
             return f"{tname(s.enum)}::{arm.variant}"
-        binds = ", ".join("_" if v is None else f"{'mut ' if v.mutable else ''}{ident(v.name)}" for v in arm.vars)
+        shared = {v.name: v for v in owner.vars if v is not None}
+        binds = ", ".join("_" if b == "_" else f"{'mut ' if shared[b].mutable else ''}{ident(b)}" for b in arm.binds)
         head = self.ARM_WRAPPERS.get(arm.variant) if arm.type is None else f"{tname(s.enum)}::{arm.variant}"
         return f"{head}({binds})"
 

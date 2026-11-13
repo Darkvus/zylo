@@ -393,22 +393,25 @@ class Checker:
             raise err(f"`match` needs an enum, int, str, bool, Option or Result value, not {t}", s.value)
         seen: set = set()
         wildcard = False
+        before = len(self.errors)
         for arm in s.arms:
             try:
                 if wildcard:
                     raise err("this arm can never run: `_` already covers every case", arm)
-                if arm.variant == "_":
-                    wildcard = True
+                if arm.variant == "_" and not arm.alts:
+                    wildcard = wildcard or arm.guard is None
                     arm.vars = []
                     self.arm_body(arm, [])
                 else:
                     self.check_arm(arm, t, info, seen)
             except ZyloError as ex:
                 self.errors.append(ex)
+        if len(self.errors) > before:  # a broken arm would only add misleading coverage errors
+            return
         universe = self.match_cases(t, info)
         missing = [c for c in universe if c not in seen] if universe is not None else []
         if universe is None and not wildcard:
-            raise err(f"`match` on {t} needs a final `_` arm for every other value", s)
+            raise err(f"`match` on {t} needs a final `_` arm (without a guard) for every other value", s)
         if wildcard and universe is not None and not missing:
             raise err("the `_` arm can never run: every case is already matched", s.arms[-1])
         if missing and not wildcard:
@@ -417,7 +420,7 @@ class Checker:
             else:
                 names = ", ".join({"some": "some(_)", "ok": "ok(_)", "err": "err(_)", True: "true", False: "false"}.get(c, str(c))
                                   for c in missing)
-            raise err(f"`match` on {t} does not cover {names}; add arms or a final `_` arm", s)
+            raise err(f"`match` on {t} does not cover {names}; add arms or a final `_` arm; an arm with a guard does not count", s)
 
     def match_cases(self, t: Type, info: EnumInfo | None) -> list | None:
         """The cases a `match` on `t` must cover, or None for a type with too many values (`int`, `str`)."""
@@ -432,7 +435,35 @@ class Checker:
         return None
 
     def check_arm(self, arm: ast.MatchArm, t: Type, info: EnumInfo | None, seen: set) -> None:
-        """Check one arm: its pattern against the matched value's type, then its body."""
+        """Check one arm: its pattern (and alternatives) against the matched value's type, then guard and body.
+
+        Cases of an arm with a guard are not added to `seen`, because the guard may reject them.
+        """
+        local: set = set()
+        first: dict[str, Type] | None = None
+        first_tys: list[Type] = []
+        for pat in [arm, *arm.alts]:
+            if pat.variant == "_":
+                raise err("`_` cannot be part of an or-pattern: it already matches every value", pat)
+            key, tys = self.check_pattern(pat, t, info)
+            if key in seen or key in local:
+                shown = f"variant {t}.{key}" if info is not None else f"`{key}`" if pat.literal is None else "this value"
+                raise err(f"{shown} is matched twice", pat)
+            local.add(key)
+            names = [b for b in pat.binds if b != "_"]
+            if len(set(names)) != len(names):
+                raise err("a pattern cannot bind the same name twice", pat)
+            bound = {b: ty for b, ty in zip(pat.binds, tys) if b != "_"}
+            if first is None:
+                first, first_tys = bound, tys
+            elif bound != first:
+                raise err("every alternative of an or-pattern must bind the same names with the same types", pat)
+        if arm.guard is None:
+            seen |= local
+        self.arm_body(arm, first_tys)
+
+    def check_pattern(self, arm: ast.MatchArm, t: Type, info: EnumInfo | None) -> tuple:
+        """Check one pattern against the matched type; return its case key and the types it binds."""
         if arm.literal is not None:
             key, tys = self.literal_pattern(arm, t), []
         elif arm.type is not None:
@@ -458,14 +489,7 @@ class Checker:
                 if not isinstance(t, ResultT):
                     raise err(f"`{key}` can only match a Result, not {t}", arm)
                 tys = [t.ok if key == "ok" else t.err]
-        if key in seen:
-            shown = f"variant {t}.{key}" if info is not None else f"`{key}`" if arm.literal is None else "this value"
-            raise err(f"{shown} is matched twice", arm)
-        seen.add(key)
-        names = [b for b in arm.binds if b != "_"]
-        if len(set(names)) != len(names):
-            raise err("a pattern cannot bind the same name twice", arm)
-        self.arm_body(arm, tys)
+        return key, tys
 
     def literal_pattern(self, arm: ast.MatchArm, t: Type):
         """Check a literal pattern against the matched type and return its value."""
@@ -484,6 +508,8 @@ class Checker:
         self.scopes.push()
         try:
             arm.vars = [None if b == "_" else self.scopes.declare(b, ty) for b, ty in zip(arm.binds, tys)]
+            if arm.guard is not None:
+                self.expect_bool(arm.guard, "a `match` guard")
             for st in arm.body:
                 self.stmt(st)
         finally:

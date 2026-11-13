@@ -501,6 +501,9 @@ class MatchArm(Node):
         body: Statements of the arm.
         vars: The variables for `binds` (set by the checker).
         literal: The literal expression of a literal pattern, otherwise None.
+        alts: The further alternatives of an or-pattern (`1 | 2 | 3`); each is a pattern-only arm with an empty
+            body. The arm itself holds the first alternative.
+        guard: The condition of `Pattern if cond:`, otherwise None.
     """
     type: TypeRef | None
     variant: str
@@ -508,11 +511,17 @@ class MatchArm(Node):
     body: list["Stmt"]
     vars: list = field(default_factory=list)
     literal: "Expr | None" = None
+    alts: list["MatchArm"] = field(default_factory=list)
+    guard: "Expr | None" = None
 
 
 @dataclass
 class Match(Node):
-    """`match value:` on an enum, `int`, `str`, `bool`, `Option` or `Result`; it must be exhaustive."""
+    """`match value:` on an enum, `int`, `str`, `bool`, `Option` or `Result`; it must be exhaustive.
+
+    Arms may carry a guard (`Pattern if cond:`) and or-patterns (`1 | 2:`); a guarded arm does not count toward
+    exhaustiveness.
+    """
     value: "Expr"
     arms: list[MatchArm]
     enum: str | None = None  # the enum matched on, set by the checker

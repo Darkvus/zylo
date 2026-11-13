@@ -13,7 +13,7 @@ KEYWORDS = {
     "and", "or", "not", "true", "false", "struct", "enum", "match", "is", "none", "import", "from", "as", "extern", "pub",
 }
 TWO_CHAR = {"==", "!=", "<=", ">=", "->", "=>", "+=", "-=", "*=", "/=", "%="}
-ONE_CHAR = set("+-*/%<>=(),:[].?{}")
+ONE_CHAR = set("+-*/%<>=(),:[].?{}|")
 ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "\\": "\\", '"': '"', "'": "'"}
 
 

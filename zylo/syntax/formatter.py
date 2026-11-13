@@ -323,7 +323,9 @@ class _Formatter:
             case ast.Match():
                 self.header(s, indent, f"match {expr_text(s.value)}", first_in_block)
                 for n, arm in enumerate(s.arms):
-                    head = self.pattern_text(arm)
+                    head = " | ".join(self.pattern_text(a) for a in [arm, *arm.alts])
+                    if arm.guard is not None:
+                        head += f" if {expr_text(arm.guard)}"
                     self.header(arm, indent + 1, head, first_in_block=n == 0)
                     self.block(arm.body, indent + 2)
             case ast.Import():

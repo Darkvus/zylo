@@ -1,2 +1,4 @@
+# The package must ship node_modules (vscode-languageclient is a runtime dependency): never ignore it.
 *.vsix
-.vscode/
+.vscode/**
+.vscodeignore
