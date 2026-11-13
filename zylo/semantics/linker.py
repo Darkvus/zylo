@@ -393,6 +393,15 @@ class Linker:
         Returns:
             The node, or its replacement.
         """
+        if isinstance(node, ast.CallValue) and isinstance(node.callee, ast.Index):
+            named = self.instantiation(node.callee, mod)  # `first[point](xs)`: type arguments after all, not an index
+            if named is not None:
+                args = [self.rw(a, mod) for a in node.args]
+                return ast.Call(named.id, args, targs=named.targs, line=node.line, col=node.col, file=node.file)
+        if isinstance(node, ast.Index):
+            named = self.instantiation(node, mod)  # `g = first[point]`
+            if named is not None:
+                return named
         if isinstance(node, ast.MethodCall) and isinstance(node.value, ast.Name) and node.value.id in mod.aliases:
             dep = mod.aliases[node.value.id]
             target = self.export(dep, node.name, node, mod)
@@ -406,7 +415,8 @@ class Linker:
                 return ast.Name(self.export(dep, node.name, node, mod, kind="enum"), targs=[self.rw(t, mod) for t in node.targs],
                                 line=node.line, col=node.col, file=node.file)
             if self.kind_of(dep, node.name) == "fn":  # `module.function` used as a value
-                return ast.Name(self.export(dep, node.name, node, mod, kind="fn"), line=node.line, col=node.col, file=node.file)
+                return ast.Name(self.export(dep, node.name, node, mod, kind="fn"), targs=[self.rw(t, mod) for t in node.targs],
+                                line=node.line, col=node.col, file=node.file)
             raise err(f"module {node.value.id!r} has no values; call a function: {node.value.id}.name(...)", node, mod.path)
         if isinstance(node, ast.Name) and node.id in mod.aliases:
             raise err(f"{node.id!r} is a module, not a value", node, mod.path)
@@ -441,6 +451,54 @@ class Linker:
         elif isinstance(node, ast.TypeRef):
             self.rw_type(node, mod)
         return node
+
+    def instantiation(self, node: ast.Index, mod: Module) -> ast.Name | None:
+        """Read `fn_name[type, ...]` as a generic function with written type arguments, when `fn_name` is a function.
+
+        The parser cannot tell `first[point]` from an index (it knows nothing about imports); here the name is known. A
+        function cannot be indexed, so whenever the name is a function the brackets are type arguments.
+
+        Returns:
+            A name carrying the type arguments (already rewritten), or None when this is an ordinary index.
+        """
+        base = node.value
+        if isinstance(base, ast.Name) and base.id not in self.locals:
+            if mod.defs.get(base.id) == "fn":
+                target = mod.mangled(base.id)
+            elif base.id in mod.froms and self.kind_of(*mod.froms[base.id]) == "fn":
+                dep, orig = mod.froms[base.id]
+                target = self.export(dep, orig, base, mod, kind="fn")
+            else:
+                return None
+        elif (isinstance(base, ast.Attr) and isinstance(base.value, ast.Name) and base.value.id in mod.aliases
+              and base.value.id not in self.locals and self.kind_of(mod.aliases[base.value.id], base.name) == "fn"):
+            target = self.export(mod.aliases[base.value.id], base.name, base, mod, kind="fn")
+        else:
+            return None
+        targs = [self.rw(t, mod) for t in self.type_args_of(node.index, mod)]
+        return ast.Name(target, targs=targs, line=node.line, col=node.col, file=node.file)
+
+    def type_args_of(self, e: ast.Expr, mod: Module) -> list[ast.TypeRef]:
+        """Read the expression between brackets as a list of types (`point`, `list[point]`, `mod.point`, `a, b`)."""
+        if isinstance(e, ast.TupleLit) and e.bare:
+            return [self.type_of(x, mod) for x in e.items]
+        return [self.type_of(e, mod)]
+
+    def type_of(self, e: ast.Expr, mod: Module) -> ast.TypeRef:
+        """Read an expression as a written type, or fail with a message that says what a type argument looks like."""
+        pos = {"line": e.line, "col": e.col, "file": e.file}
+        if isinstance(e, ast.Name) and not e.targs:
+            return ast.TypeRef(e.id, [], **pos)
+        if isinstance(e, ast.Attr) and isinstance(e.value, ast.Name) and not e.targs:
+            return ast.TypeRef(f"{e.value.id}.{e.name}", [], **pos)
+        if isinstance(e, ast.Index):
+            base = self.type_of(e.value, mod)
+            if not base.args:
+                return ast.TypeRef(base.name, self.type_args_of(e.index, mod), **pos)
+        if isinstance(e, ast.Try):
+            return ast.TypeRef("?", [self.type_of(e.value, mod)], **pos)
+        raise err("these brackets name a function, so they must hold type arguments (`first[int]`, `first[list[Point]]`)",
+                  e, mod.path)
 
     def rw_type(self, t: ast.TypeRef, mod: Module) -> None:
         """Rewrite a type name that refers to a struct of this or an imported module."""

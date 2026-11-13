@@ -239,8 +239,40 @@ instance is an ordinary struct to `derive`; schema components are named `Pair_in
 template's linked name is the base of every instance. `match` on a generic enum takes its type arguments from the value
 (`Opt.Some(x)` or `Opt[int].Some(x)`).
 
-Not done: generic methods (type parameters on a method), default type arguments, generic functions as values
-(`g = first`), numeric literals of type `T`, user-defined bounds.
+**Generic methods are templates inside the struct.** `fn map[U](self, f: fn(T) -> U) -> Box[U]` is kept in the struct's
+`gmethods` and never emitted. A call infers its parameters like a generic function's, with one difference: the signature
+used is the one of the *template* (in terms of the struct's own `T` and the method's `U`) with the struct's parameters
+bound up front to the receiver's type arguments. Substituting the receiver first would leave an outer parameter that
+happens to be called `U` (`fn f[U](b: Box[U])` calling `b.map(...)`) indistinguishable from the method's own `U`. The call
+then makes a copy of the method (named `map[str]`) and appends it to the struct instance's `methods`; copies are checked
+from a queue that the main loop drains, and dropped at the start of every rerun like the other copies (`MethodCall.inst`
+remembers the copy). The template is checked once for all types, so a mistake in it is reported once and its copies are not
+checked when it fails. Rust sees ordinary methods whose names are made Rust-safe (`map_5b_str_5d_`).
+
+**Generic functions as values reuse the call machinery.** A `Name` that refers to a generic function and is not a call gets
+its type arguments from the written ones (`first[int]`) or by unifying the function's signature with the expected function
+type (or just its parameter types when an argument of a generic call or a built-in method is checked, since the result may be
+what that call is about to learn). The instance is recorded in `Name.inst` and the code generator wraps it like any
+top-level function value. A parameter that nothing decides is an error naming it.
+
+**A literal takes its type from the other operand.** In a template an integer literal checked against an expected `T` with
+the `Num` bound has type `T`; `1 + a` looks at `a` first. In the copy for `float` the same literal sees `float` expected, and
+that is only accepted while checking a copy (a template with a plain `float` that met an `int` literal would already have
+been rejected, so copies of working templates never hide a mistake). The code generator writes it as `1.0`. Float literals
+cannot be a `T` (they would be wrong for `int`), and `Ord` or no bound does not give the literal a type: the error says so.
+
+**`first[point](xs)`.** The parser still only decides when it can (the name is generic in the same file, or every type
+argument is built in or capitalised); otherwise `first[point]` stays an index and the *linker*, which knows what each name is,
+turns an index of a function (`first[...]`, `util.first[...]`, with a comma list for several types) into type arguments. A
+function cannot be indexed, so this never takes anything away; if the brackets hold something that is not a type, the error
+says so. A local variable named like the function still wins (`first[0](5)` calls an element).
+
+**Hover.** The checker leaves on each template the types its parameters were instantiated with (`tinst`, plain bookkeeping
+like `origin`). The editor, which only sees the original tree, shows for a name whose type mentions a type parameter the
+parameter with its bounds and those types, or says it is not instantiated.
+
+Not done: default type arguments, user-defined bounds, float literals of type `T`, and inferring a generic function value
+whose own type parameters appear only in a result that the context does not name.
 
 ## Known limitations
 

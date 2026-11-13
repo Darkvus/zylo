@@ -213,7 +213,8 @@ def ident(name: str) -> str:
 
 
 def mident(name: str) -> str:
-    """Method name: besides keywords, avoid shadowing trait methods (`clone`, `eq`...)."""
+    """Method name: besides keywords, avoid shadowing trait methods (`clone`, `eq`...); a copy of a generic method is `map[str]`."""
+    name = UNSAFE.sub(lambda m: f"_{ord(m.group()):x}_", name)
     return name + "_" if name in RUST_KEYWORDS or name in METHOD_CLASHES else name
 
 
@@ -425,11 +426,11 @@ class Gen:
             self.line(f'        write!(f, "{ed.display or ed.name}(..)")')
             self.line("    }")
             self.line("}")
-        if ed.methods:
+        if any(not m.tparams for m in ed.methods):
             self.out.append("")
             self.line(f"impl {tname(ed.name)} {{")
             self.depth += 1
-            for i, m in enumerate(ed.methods):
+            for i, m in enumerate(m for m in ed.methods if not m.tparams):
                 if i:
                     self.out.append("")
                 self.fn(m)
@@ -501,11 +502,11 @@ class Gen:
             self.line(f'        write!(f, "{sd.display or sd.name}({shown})", {args})')
         self.line("    }")
         self.line("}")
-        if sd.methods:
+        if any(not m.tparams for m in sd.methods):
             self.out.append("")
             self.line(f"impl {name} {{")
             self.depth += 1
-            for i, m in enumerate(sd.methods):
+            for i, m in enumerate(m for m in sd.methods if not m.tparams):
                 if i:
                     self.out.append("")
                 self.fn(m)
@@ -740,6 +741,8 @@ def emit_mut(e: ast.Expr) -> str:
 def emit_ref(e: ast.Expr) -> str:
     """Expression without cloning: reads without consuming (or an assignable place)."""
     match e:
+        case ast.Int(v) if e.ty == FLOAT:  # a literal that stands for a `T` which is `float` in this copy of a generic
+            return f"{v}.0f64"
         case ast.Int(v):
             return f"{v}i64"
         case ast.Float(v):
@@ -749,7 +752,7 @@ def emit_ref(e: ast.Expr) -> str:
         case ast.Bool(v):
             return "true" if v else "false"
         case ast.Name(i) if e.var is None and isinstance(e.ty, FnT):
-            return fn_value(i)
+            return fn_value(e.inst or i)
         case ast.Name(i):
             return f"(*{ident(i)})" if e.var is not None and e.var.by_ref else ident(i)
         case ast.Lambda():
@@ -808,6 +811,7 @@ def emit_ref(e: ast.Expr) -> str:
         case ast.MethodCall(v, name, args) if v.ty == STR or isinstance(v.ty, (ListT, DictT, SetT, CellT)):
             return type_method(e)
         case ast.MethodCall(v, name, args):
+            name = e.inst or name  # a copy of a generic method is called by its own name
             target = _METHODS.get((v.ty.name, name))
             recv = emit_mut(v) if target is not None and target.self_mut else emit_ref(v)
             # a method that borrows `self` mutably cannot also lend out parts of it: pass those arguments by value
@@ -1175,5 +1179,5 @@ def generate(prog: ast.Program) -> str:
     _FNS.update({s.name: s for s in prog.body if isinstance(s, ast.FnDef) and not s.tparams})
     for s in prog.body:
         if isinstance(s, (ast.StructDef, ast.EnumDef)) and not s.tparams:
-            _METHODS.update({(s.name, m.name): m for m in s.methods})
+            _METHODS.update({(s.name, m.name): m for m in s.methods if not m.tparams})
     return Gen().program(prog)

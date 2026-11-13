@@ -13,6 +13,7 @@ Type arguments are inferred at calls by unifying the declared parameter types wi
 context expects), or written explicitly (`first[int](xs)`). See docs/design.md ("Generics").
 """
 import copy
+import re
 from dataclasses import dataclass
 
 from zylo.domain import ast
@@ -132,6 +133,21 @@ def pattern_params(t: Type) -> set[str]:
     return {n for x in parts(t) for n in pattern_params(x)}
 
 
+def param_types(t: Type) -> dict[str, ParamT]:
+    """The type parameters a declared (template) type mentions, by name."""
+    if isinstance(t, ParamT):
+        return {t.name: t}
+    found: dict[str, ParamT] = {}
+    for x in parts(t):
+        found.update(param_types(x))
+    return found
+
+
+def int_literal(e: ast.Expr) -> bool:
+    """Whether an expression is an integer literal, possibly negated: the only literals a `Num` type parameter can take."""
+    return isinstance(e, ast.Int) or (isinstance(e, ast.UnaryOp) and e.op == "-" and isinstance(e.operand, ast.Int))
+
+
 def type_depth(t: Type) -> int:
     """How deeply a type is nested (`int` is 0, `list[int]` 1, `Box[list[int]]` 2)."""
     inner = parts(t)
@@ -208,6 +224,10 @@ class GenericMixin:
             for b in p.bounds:
                 if b not in BOUNDS:
                     raise _err(f"unknown bound {b!r} on type parameter {p.name!r} (available: {', '.join(BOUNDS)})", p)
+        if kind != "fn":
+            for m in d.methods:
+                if m.tparams:
+                    self.check_method_params(m, d.tparams)
         own = tuple(ParamT(p.name, frozenset(p.bounds)) for p in d.tparams)
         self.generics[d.name] = Generic(d.name, kind, d, d.tparams, own)
 
@@ -217,6 +237,38 @@ class GenericMixin:
         if found is not None:
             return found
         return EnumT(name) if name in self.enums else StructT(name)
+
+    def check_method_params(self, m: ast.FnDef, owner_params: list[ast.TypeParam]) -> None:
+        """Reject unknown bounds on a method's type parameters, and names the struct or enum already uses."""
+        for p in m.tparams:
+            if any(q.name == p.name for q in owner_params):
+                raise _err(f"type parameter {p.name!r} of method {m.name!r} hides the one of the same name on the "
+                           f"struct or enum; use another name", p)
+            for b in p.bounds:
+                if b not in BOUNDS:
+                    raise _err(f"unknown bound {b!r} on type parameter {p.name!r} (available: {', '.join(BOUNDS)})", p)
+
+    def fix_method_params(self, m: ast.FnDef) -> tuple[ParamT, ...]:
+        """Make a generic method's own type parameters opaque types in its template, and return them."""
+        own = tuple(ParamT(p.name, frozenset(p.bounds)) for p in m.tparams)
+        by_name = {p.name: t for p, t in zip(m.tparams, own)}
+        for n in ast.walk(m):
+            if isinstance(n, ast.TypeRef) and n.name in by_name and not n.args and n.ret is None:
+                n.fixed = by_name[n.name]
+        return own
+
+    def declare_generic_method(self, d: "ast.StructDef | ast.EnumDef", info, m: ast.FnDef) -> None:
+        """Record a generic method of a struct or enum (or of one instance of a generic struct) as a template.
+
+        Its signature is written with its own type parameters as opaque types; copies for each list of type arguments are
+        made at the calls (`instantiate_method`) and added to the struct, so only they are emitted.
+        """
+        if not d.instance:
+            self.check_method_params(m, d.tparams)
+        self.fix_method_params(m)
+        m.ty = self.signature(m)
+        info.gmethods[m.name] = m
+        self.specs[f"{d.name}.{m.name}"] = m.params
 
     # ---- making copies ----------------------------------------------------------------------------
 
@@ -313,6 +365,8 @@ class GenericMixin:
         else:
             t = self.instance_type(g, g.own, g.defn)
             for m, made in zip(g.defn.methods, self.idefs[t.name].methods):
+                if m.tparams:
+                    self.fix_method_params(m)
                 m.ty = made.ty
             self.abstract.append((g, g.defn, t.name))
 
@@ -324,6 +378,7 @@ class GenericMixin:
         self.check_limits(g, args, node)
         d = self.copy_for(g, args, name)
         d.ty = self.fns[name] = self.signature(d)
+        self.fn_insts[(g.name, args)] = name
         self.specs[name] = d.params
         if not g.broken:
             self.program.body.append(d)  # the statement loop checks it, like the functions generated for typed JSON
@@ -334,11 +389,15 @@ class GenericMixin:
         for g, d, owner in self.abstract:
             before = len(self.errors)
             for f in [d] if isinstance(d, ast.FnDef) else d.methods:
+                mark = len(self.errors)
                 try:
                     self.check_fn(f, owner or None)
                 except ZyloError as e:
                     self.errors.append(e)
-            g.broken = len(self.errors) > before
+                if f.tparams and owner:
+                    self.mbroken[(g.name if g else owner, f.name)] = len(self.errors) > mark
+            if g is not None:
+                g.broken = len(self.errors) > before
 
     # ---- substitution -------------------------------------------------------------------------------
 
@@ -394,7 +453,8 @@ class GenericMixin:
     # ---- inference -------------------------------------------------------------------------------------
 
     def infer(self, e: ast.Node, label: str, g: Generic, params: list[Type], ret: Type, args: list[ast.Expr],
-              specs: list | None, expected: Type | None, written: list[ast.TypeRef]) -> dict[str, Type]:
+              specs: list | None, expected: Type | None, written: list[ast.TypeRef],
+              known: dict[str, Type] | None = None) -> dict[str, Type]:
         """Work out the type arguments of a call of a generic function, struct constructor or enum variant.
 
         Explicit arguments come first; then each argument's type is unified with its declared type (so the first argument
@@ -411,15 +471,16 @@ class GenericMixin:
             specs: The parameters or fields with their names and defaults, if named arguments are allowed.
             expected: The type the context expects, if any.
             written: Type arguments written by the user (`first[int](...)`).
+            known: Type parameters that are already decided: those of the struct or enum around a generic method.
 
         Returns:
-            Each type parameter's type.
+            Each type parameter's type (and the `known` ones).
 
         Raises:
             ZyloError: On the wrong number of arguments or type arguments, a mismatched argument, a parameter that no
                 argument or context determines, or a type that breaks a bound.
         """
-        bind: dict[str, Type] = {}
+        bind: dict[str, Type] = dict(known or {})
         if written:
             if len(written) != len(g.params):
                 raise _err(f"{label} takes {len(g.params)} type argument(s) ({', '.join(p.name for p in g.params)}), "
@@ -438,10 +499,12 @@ class GenericMixin:
             unify(ret, expected, hint)
         later = []  # arguments that cannot be typed alone (`none`, `[]`, anonymous functions) wait for the others
         for i, (a, pt) in enumerate(zip(args, params), start=1):
-            if isinstance(a, (ast.Lambda, ast.NoneLit)) or (isinstance(a, (ast.ListLit, ast.DictLit)) and not parts_of(a)):
+            if (isinstance(a, (ast.Lambda, ast.NoneLit)) or (isinstance(a, (ast.ListLit, ast.DictLit)) and not parts_of(a))
+                    or int_literal(a) or self.generic_fn_ref(a)):
                 later.append((i, a, pt))
                 continue
             self.generic_arg(label, i, a, pt, bind, hint)
+        later.sort(key=lambda x: not int_literal(x[1]))  # a literal takes its type from the others, so it goes first
         for i, a, pt in later:
             if isinstance(a, ast.Lambda):
                 self.generic_lambda(label, i, a, pt, bind)
@@ -461,7 +524,12 @@ class GenericMixin:
         """Check one argument of a generic call and learn from its type what the type parameters are."""
         known = {**hint, **bind}
         want = self.subst(pt, known) if pattern_params(pt) <= known.keys() else None
-        t = self.expr(a, want)
+        if want is None and isinstance(pt, FnT) and self.generic_fn_ref(a) and not a.targs \
+                and all(pattern_params(x) <= known.keys() for x in pt.params):
+            ret = self.subst(pt.ret, known) if pattern_params(pt.ret) <= known.keys() else None
+            t = a.ty = self.fn_value(a, None, [self.subst(x, known) for x in pt.params], ret)
+        else:
+            t = self.expr(a, want)
         if not unify(pt, t, bind):
             raise _err(f"argument {i} of {label}: expected {self.subst(pt, bind)}, got {t}", a)
 
@@ -537,3 +605,142 @@ class GenericMixin:
             want = ", ".join(p.name for p in g.params)
             raise _err(f"{shown} takes {len(g.params)} type argument(s) ({shown}[{want}]), got {len(t.args)}", t)
         return self.instance_type(g, tuple(self.resolve(a) for a in t.args), t)
+
+    # ---- generic methods -------------------------------------------------------------------------------
+
+    def generic_method_call(self, e: ast.MethodCall, rt: Type, info, expected: Type | None) -> Type:
+        """Type `b.map(f)` / `b.map[str](f)` where `map` is a generic method, and pick the copy it uses.
+
+        The signature is the one of the template (in terms of the struct's own parameters and the method's), with the
+        struct's parameters already bound to what the receiver's type says, so a receiver `Box[U]` inside a generic
+        function that has its own `U` cannot be confused with the method's `U`.
+        """
+        m = info.gmethods[e.name]
+        outer: dict[str, Type] = {}
+        tinfo = info
+        if rt.base:
+            gs = self.generics[rt.base]
+            own_t = self.instance_type(gs, gs.own, gs.defn)
+            tinfo = self.structs[own_t.name] if isinstance(own_t, StructT) else self.enums[own_t.name]
+            outer = {p.name: a for p, a in zip(gs.params, rt.args)}
+        tm = tinfo.gmethods[e.name]
+        shown = f"{str(rt).rsplit('·', 1)[-1]}.{e.name}"
+        own = tuple(ParamT(p.name, frozenset(p.bounds)) for p in m.tparams)
+        g = Generic(f"{rt.name}.{e.name}", "method", m, m.tparams, own, tm.ty)
+        bind = self.infer(e, shown, g, list(tm.ty.params), tm.ty.ret, e.args, self.specs.get(f"{rt.name}.{e.name}"), expected,
+                          e.targs, outer)
+        targs = tuple(bind[p.name] for p in m.tparams)
+        e.inst = None
+        if not has_param(rt) and not any(has_param(t) for t in targs):
+            e.inst = self.instantiate_method(rt, info, m, targs, e)
+            if (rt.name, e.inst) in self.mutating:
+                self.mark_mutable(e.value)
+        elif (rt.name, e.name) in self.mutating:
+            self.mark_mutable(e.value)
+        return self.subst(tm.ty.ret, bind)
+
+    def instantiate_method(self, rt: Type, info, m: ast.FnDef, targs: tuple[Type, ...], node: ast.Node) -> str:
+        """The name of the copy of a generic method for one list of type arguments, creating it the first time.
+
+        The copy is an ordinary method of the struct or enum (named `map[str]`), checked from the queue like the
+        functions generated for typed JSON.
+        """
+        name = f"{m.name}[{', '.join(map(str, targs))}]"
+        if name in info.methods:
+            return name
+        g = Generic(f"{rt.name}.{m.name}", "method", m, m.tparams, (), m.ty)
+        self.check_limits(g, targs, node)
+        d = self.copy_for(g, targs, name)
+        d.has_self = m.has_self
+        d.ty = info.methods[name] = self.signature(d)
+        self.specs[f"{rt.name}.{name}"] = d.params
+        d.instance = True
+        self.minsts.append((rt.base or rt.name, m.name, targs))
+        if not self.mbroken.get((rt.base or rt.name, m.name)):
+            info.defn.methods.append(d)
+            self.pending.append((d, rt.name))
+        return name
+
+    # ---- generic functions as values -------------------------------------------------------------------
+
+    def generic_fn_ref(self, e: ast.Expr) -> bool:
+        """Whether an expression names a generic function (not shadowed by a variable) rather than calling or reading one."""
+        return (isinstance(e, ast.Name) and e.id in self.generics and self.generics[e.id].kind == "fn"
+                and self.scopes.lookup(e.id) is None)
+
+    def fn_value(self, e: ast.Name, expected: Type | None, params: list[Type] | None = None, ret: Type | None = None) -> Type:
+        """Type a generic function used as a value, and pick the instance it stands for.
+
+        The type arguments are written (`first[int]`), or follow from the function type the context expects, or from the
+        parameter types (and result) the receiver of the value is known to need.
+
+        Args:
+            e: The name.
+            expected: The function type the context expects, if any.
+            params: Parameter types the value must accept (when the whole expected type is not known yet).
+            ret: The result type it must return, if known.
+
+        Returns:
+            The function type of the instance.
+
+        Raises:
+            ZyloError: When the type arguments cannot be worked out, or the function does not fit what is expected.
+        """
+        g = self.generics[e.id]
+        shown = e.id.rsplit("\u00b7", 1)[-1]
+        bind: dict[str, Type] = {}
+        if e.targs:
+            if len(e.targs) != len(g.params):
+                raise _err(f"{shown} takes {len(g.params)} type argument(s) ({', '.join(p.name for p in g.params)}), "
+                           f"got {len(e.targs)}", e)
+            for p, w in zip(g.params, e.targs):
+                bind[p.name] = self.resolve(w)
+        else:
+            if isinstance(expected, FnT) and params is None:
+                params, ret = list(expected.params), expected.ret
+            if params is not None:
+                ok = len(params) == len(g.sig.params) and all(unify(p, a, bind) for p, a in zip(g.sig.params, params))
+                ok = ok and (ret is None or unify(g.sig.ret, ret, bind))
+                if not ok:
+                    want = expected if expected is not None else f"fn({', '.join(map(str, params))})"
+                    raise _err(f"generic function {shown} has type {g.sig}, which does not fit {want}", e)
+        for p in g.params:
+            if p.name not in bind:
+                raise _err(f"cannot infer type parameter {p.name} of {shown} used as a value: write the type arguments "
+                           f"({shown}[...]) or use it where a function type is expected", e)
+        self.check_bounds(g, shown, bind, e)
+        targs = tuple(bind[p.name] for p in g.params)
+        e.inst = None
+        if not any(has_param(t) for t in targs):
+            e.inst = self.instantiate_fn(g, targs, e)
+        return self.subst(g.sig, bind)
+
+    # ---- what the editor shows ---------------------------------------------------------------------------
+
+    def note_instances(self) -> None:
+        """Leave on each template the types its parameters were instantiated with (`tinst`), for hover in the editor."""
+        for g in self.generics.values():
+            found: dict[str, list[str]] = {p.name: [] for p in g.params}
+            for base, args in [*self.insts, *self.fn_insts]:
+                if base == g.name:
+                    self.note_args(found, g.params, args)
+            g.defn.tinst = found
+        for s in self.program.body:
+            if isinstance(s, (ast.StructDef, ast.EnumDef)) and not s.instance:
+                for m in s.methods:
+                    if m.tparams:
+                        found = {p.name: [] for p in m.tparams}
+                        for base, name, args in self.minsts:
+                            if base == s.name and name == m.name:
+                                self.note_args(found, m.tparams, args)
+                        m.tinst = found
+
+    @staticmethod
+    def note_args(found: dict[str, list[str]], params: list[ast.TypeParam], args: tuple[Type, ...]) -> None:
+        """Add one instance's type arguments to what each parameter was instantiated with, unless it has a parameter."""
+        if any(has_param(a) for a in args):
+            return
+        for p, a in zip(params, args):
+            text = re.sub(r"(?:\w+\u00b7)+", "", str(a))
+            if text not in found[p.name]:
+                found[p.name].append(text)

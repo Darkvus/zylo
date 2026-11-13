@@ -28,9 +28,10 @@ and is built vertically (lexer → parser → checker → codegen → tests).
 | **v0.20 Formatter line wrapping** | `zylo fmt` wraps lines longer than 88 columns (`--line-length N` or `[format] line-length` in `zylo.toml`): calls, literals and struct constructors one item per line, long boolean / arithmetic expressions and method chains inside parentheses, signatures, imports and `match` or-patterns; trailing commas in parameter lists, parenthesized `from ... import (...)` and `(A \| B):` patterns | done |
 | **v0.21 Language server completion** | Completion that knows types (fields and methods after a dot, module exports, enum variants, named arguments, imports, types, names in scope, built-in methods), hover and signature help for built-in functions and methods, quick fixes (add a missing import, add the missing `match` arms), and semantic features that keep working around syntax errors; see [docs/editors.md](docs/editors.md) | done |
 | **v0.22 Generics** | Type parameters on functions, structs and enums (`fn first[T]`, `struct Box[T]`, `enum Opt[T]`), inferred at calls or written (`first[int](xs)`), a fixed set of bounds (`Eq`, `Show`, `Ord`, `Num`, `Key`), generic bodies checked once for every type, monomorphized to plain Rust, working across modules, re-exports, typed JSON and the language server; see [docs/guide.md](docs/guide.md#generics) | done |
+| **v0.24 Generics follow-ups** | Generic methods (`fn map[U](self, f: fn(T) -> U) -> Box[U]`, on generic and ordinary structs and enums), generic functions as values (`g = first[int]`, or `first` passed where `fn(list[int]) -> int` is expected), integer literals of a `Num`-bounded parameter (`a + 1`), type arguments that are lowercase structs of another module (`first[point](xs)`), and hover inside generic bodies with the bounds and the instantiations; see [docs/guide.md](docs/guide.md#generic-methods) | done |
 | **Community** | Documentation translations (the docs are English-only for now) and localized diagnostics | |
 
-Later: generic methods and user-defined bounds, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
+Later: user-defined bounds and default type arguments, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
 
 ## Open questions
 

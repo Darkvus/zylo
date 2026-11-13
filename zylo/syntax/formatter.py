@@ -153,6 +153,8 @@ def _expr(e: ast.Expr, q: str) -> tuple[str, int]:
             return f"{expr_text(v, ATOM, q)}.{name}{targs_text(targs)}({_args(args, q, named)})", ATOM
         case ast.Attr(v, name, targs=targs):
             return f"{expr_text(v, ATOM, q)}.{name}{targs_text(targs)}", ATOM
+        case ast.Index(v, ast.TupleLit(items, bare=True)):
+            return f"{expr_text(v, ATOM, q)}[{_args(items, q)}]", ATOM
         case ast.Index(v, i):
             return f"{expr_text(v, ATOM, q)}[{expr_text(i, 0, q)}]", ATOM
         case ast.Slice(v, lo, hi):

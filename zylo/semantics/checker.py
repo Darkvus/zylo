@@ -46,6 +46,7 @@ from zylo.semantics.generics import (
     GenericMixin,
     allows,
     has_param,
+    int_literal,
     is_num,
     is_ord,
     key_ok,
@@ -140,11 +141,13 @@ class StructInfo:
         defn: Its definition node.
         fields: Field types by name, in declaration order.
         methods: Method signatures by name.
+        gmethods: The generic methods (`fn map[U](self, ...)`), which are templates: their copies are in `methods`.
     """
     name: str
     defn: ast.StructDef
     fields: dict[str, Type] = field(default_factory=dict)
     methods: dict[str, FnT] = field(default_factory=dict)
+    gmethods: dict[str, ast.FnDef] = field(default_factory=dict)
 
 
 @dataclass
@@ -156,11 +159,13 @@ class EnumInfo:
         defn: Its definition node.
         variants: The types of each variant's data, by variant name, in declaration order.
         methods: Method signatures by name.
+        gmethods: The generic methods, which are templates: their copies are in `methods`.
     """
     name: str
     defn: ast.EnumDef
     variants: dict[str, list[Type]] = field(default_factory=dict)
     methods: dict[str, FnT] = field(default_factory=dict)
+    gmethods: dict[str, ast.FnDef] = field(default_factory=dict)
 
 
 class Checker(GenericMixin):
@@ -208,6 +213,11 @@ class Checker(GenericMixin):
         self.deferred: list | None = []  # instances made before enums are resolved: finished later (None once they can be)
         self.abstract: list[tuple[Generic, ast.Node, str]] = []  # templates to check once, for every type
         self.ninst = 0  # instances made so far, for the expansion limit
+        self.pending: list[tuple[ast.FnDef, str]] = []  # copies of generic methods still to check, with their owner
+        self.mbroken: dict[tuple[str, str], bool] = {}  # (struct or template, generic method) -> its template has a mistake
+        self.fn_insts: dict[tuple, str] = {}  # (generic function, type arguments) -> instance name
+        self.minsts: list[tuple[str, str, tuple]] = []  # (struct or template, generic method, type arguments) in use
+        self.in_copy = False  # checking the copy of a generic definition (its integer literals may stand for a float `T`)
 
     # ---- entry point ---------------------------------------------------------------------
 
@@ -222,6 +232,9 @@ class Checker(GenericMixin):
         """
         self.program = prog
         prog.body[:] = [s for s in prog.body if not getattr(s, "instance", False)]  # copies of generics are made again
+        for s in prog.body:
+            if isinstance(s, (ast.StructDef, ast.EnumDef)):
+                s.methods[:] = [m for m in s.methods if not m.instance]  # and so are those of generic methods
         try:
             gens = [s for s in prog.body if getattr(s, "tparams", None)]
             defs = [s for s in prog.body if isinstance(s, ast.StructDef) and not s.tparams]
@@ -250,6 +263,9 @@ class Checker(GenericMixin):
                     self.declare_fn(s)
             for d in [*defs, *enums]:
                 self.declare_methods(d)
+                for m in d.methods:
+                    if m.tparams:  # a generic method of an ordinary struct: checked once, for every type
+                        self.abstract.append((None, m, d.name))
             for g in self.generics.values():
                 if g.kind == "fn":
                     self.declare_generic(g)
@@ -257,7 +273,17 @@ class Checker(GenericMixin):
             self.errors.append(e)
             return
         self.check_abstract()
-        for s in prog.body:
+        done = 0
+        while done < len(prog.body) or self.pending:  # checking can add copies of generics: check those too
+            if self.pending:
+                m, owner = self.pending.pop(0)
+                try:
+                    self.check_fn(m, owner)
+                except ZyloError as e:
+                    self.errors.append(e)
+                continue
+            s = prog.body[done]
+            done += 1
             if getattr(s, "tparams", None) or (getattr(s, "origin", None) and self.generics[s.origin].broken):
                 continue  # a template (checked once above, emitted never), or a copy of one that has a mistake
             try:
@@ -267,6 +293,8 @@ class Checker(GenericMixin):
                     self.check_fn(s)
                 elif isinstance(s, (ast.StructDef, ast.EnumDef)):  # enum variants were checked with the declarations
                     for m in s.methods:
+                        if m.tparams or m.instance:  # a template, or a copy of one (checked from the queue)
+                            continue
                         try:
                             self.check_fn(m, s.name)
                         except ZyloError as e:
@@ -275,6 +303,7 @@ class Checker(GenericMixin):
                     self.stmt(s)
             except ZyloError as e:
                 self.errors.append(e)
+        self.note_instances()
 
     # ---- written types ------------------------------------------------------------
 
@@ -576,8 +605,11 @@ class Checker(GenericMixin):
                 raise err(f"method {m.name!r} must take `self` as its first parameter", m)
             if m.name in clash:
                 raise err(f"{m.name!r} is both a {what} and a method of {d.name!r}", m)
-            if m.name in info.methods:
+            if m.name in info.methods or m.name in info.gmethods:
                 raise err(f"method {m.name!r} is already defined in {d.name!r}", m)
+            if m.tparams:
+                self.declare_generic_method(d, info, m)
+                continue
             m.ty = info.methods[m.name] = self.signature(m)
             self.specs[f"{d.name}.{m.name}"] = m.params
 
@@ -692,6 +724,9 @@ class Checker(GenericMixin):
         top, saved_poison = self.scopes, self.poisoned
         self.scopes, self.ret, self.loops, self.owner, self.poisoned = Scopes(), sig.ret, 0, owner, set()
         self.closures = []
+        saved_copy = self.in_copy
+        owner_t = self.itypes.get(owner) if owner else None
+        self.in_copy = f.instance or (owner_t is not None and not has_param(owner_t))
         try:
             self_info = self.scopes.declare("self", self.named(owner)) if owner else None
             for p, pt in zip(f.params, sig.params):
@@ -711,6 +746,7 @@ class Checker(GenericMixin):
                 p.info.by_ref = not p.info.mutable and not is_copy_type(p.info.ty) and not f.self_mut
         finally:
             self.scopes, self.ret, self.owner, self.poisoned = top, None, None, saved_poison
+            self.in_copy = saved_copy
 
     # ---- statements ------------------------------------------------------------------
 
@@ -1123,6 +1159,10 @@ class Checker(GenericMixin):
     def _expr(self, e: ast.Expr, expected: Type | None) -> Type:
         match e:
             case ast.Int():
+                if isinstance(expected, ParamT) and allows(expected, "Num"):
+                    return expected  # `a + 1` in a generic: the literal is a `T`
+                if expected == FLOAT and self.in_copy:
+                    return FLOAT  # ... and in the copy for `float` it is written `1.0`
                 return INT
             case ast.Float():
                 return FLOAT
@@ -1138,8 +1178,9 @@ class Checker(GenericMixin):
                     if id in self.enums:
                         raise err(f"{id!r} is an enum; name one of its variants: {id}.Variant", e)
                     if id in self.generics and self.generics[id].kind == "fn":
-                        raise err(f"{id!r} is a generic function and cannot be used as a value; call it, or wrap it: "
-                                  f"fn(x: int) => {id}(x)", e)
+                        return self.fn_value(e, expected)
+                    if e.targs:
+                        raise err(f"{id!r} is not a generic function, so it takes no type arguments", e)
                     if id in self.generics:
                         raise err(f"{id!r} is generic; write {id}[...] (a type) or {id}.Variant(...) (an enum)", e)
                     if id in self.fns and id in self.externs:
@@ -1151,10 +1192,12 @@ class Checker(GenericMixin):
                     if id in self.poisoned:
                         raise _Poisoned
                     raise err(f"undefined variable {id!r}", e)
+                if e.targs:
+                    raise err(f"{id!r} is a variable, so it takes no type arguments", e)
                 e.var = info
                 return info.ty
             case ast.UnaryOp(op, x):
-                return self.unary(e, op, x)
+                return self.unary(e, op, x, expected)
             case ast.BinOp(op, l, r):
                 return self.binop(e, op, l, r)
             case ast.Call():
@@ -1236,9 +1279,9 @@ class Checker(GenericMixin):
                 return vt.elem
         raise err(f"unsupported expression: {type(e).__name__}", e)
 
-    def unary(self, e: ast.UnaryOp, op: str, x: ast.Expr) -> Type:
+    def unary(self, e: ast.UnaryOp, op: str, x: ast.Expr, expected: Type | None = None) -> Type:
         """Type a prefix `-` or `not`."""
-        t = self.expr(x)
+        t = self.expr(x, expected if op == "-" else None)
         if op == "not":
             if t != BOOL:
                 raise err(f"`not` expects bool, not {t}", e)
@@ -1267,6 +1310,9 @@ class Checker(GenericMixin):
         if isinstance(left, ast.NoneLit):  # `none == x`: the other side gives the type
             rt = self.expr(right)
             lt = self.expr(left, rt)
+        elif int_literal(left) and not int_literal(right):  # `1 + a`: the other side gives the literal its type
+            rt = self.expr(right)
+            lt = self.expr(left, rt)
         else:
             lt = self.expr(left)
             rt = self.expr(right, lt)
@@ -1278,6 +1324,11 @@ class Checker(GenericMixin):
             hint = " (use float(x) or int(x) to convert)" if {lt, rt} == {INT, FLOAT} else ""
             if isinstance(lt, ParamT) or isinstance(rt, ParamT):
                 hint = " (a value of a type parameter can only be combined with values of that same type)"
+                lit = right if isinstance(lt, ParamT) else left
+                if int_literal(lit):
+                    hint = " (an integer literal can only be combined with a type parameter bounded by `Num`: `T: Num`)"
+                elif isinstance(lit, ast.Float):
+                    hint = " (a float literal is a float but the type parameter may be int; compute in float: float(a) * 1.5)"
             raise err(f"`{op}` between {lt} and {rt}: types must match{hint}", e)
         if op in ARITH:
             if is_num(lt) or (op == "+" and lt == STR):
@@ -1691,6 +1742,11 @@ class Checker(GenericMixin):
             return self.type_method(e, rt)
         info = self.enums[rt.name] if isinstance(rt, EnumT) else self.struct_of(rt, e, "methods")
         sig = info.methods.get(e.name)
+        if sig is None and e.name in info.gmethods:
+            return self.generic_method_call(e, rt, info, expected)
+        if e.targs and sig is not None:
+            raise err(f"method {e.name!r} is not generic, so it takes no type arguments", e)
+        e.inst = None
         if sig is None:
             ft = info.fields.get(e.name) if isinstance(rt, StructT) else None
             if isinstance(ft, FnT):  # `self.handler(req)`: calling a field that holds a function
@@ -1731,7 +1787,10 @@ class Checker(GenericMixin):
         Raises:
             ZyloError: If the argument is not a function of that shape.
         """
-        t = self.lambda_expr(a, None, params, ret) if isinstance(a, ast.Lambda) else self.expr(a)
+        if self.generic_fn_ref(a) and not a.targs:  # a generic function passed as is: its type arguments follow from `params`
+            t = a.ty = self.fn_value(a, None, params, ret)
+        else:
+            t = self.lambda_expr(a, None, params, ret) if isinstance(a, ast.Lambda) else self.expr(a)
         if isinstance(a, ast.Lambda):
             a.ty = t
         want = FnT(tuple(params), ret if ret is not None else (t.ret if isinstance(t, FnT) else UNIT))

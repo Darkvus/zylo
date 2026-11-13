@@ -93,11 +93,14 @@ class Name(Node):
     Attributes:
         id: The variable's name.
         var: The variable this name refers to; filled in by the checker.
-        targs: Explicit type arguments written on a generic enum (`Opt[int].Some(1)`), otherwise empty.
+        targs: Explicit type arguments written on a generic enum (`Opt[int].Some(1)`) or on a generic function used as a
+            value (`first[int]`), otherwise empty.
+        inst: The instance of a generic function this name stands for when it is used as a value, or None.
     """
     id: str
     var: VarInfo | None = None  # filled in by the checker: the variable this name refers to
     targs: list[TypeRef] = field(default_factory=list)
+    inst: str | None = None  # filled in by the checker: the instance of the generic function used as a value
 
 
 @dataclass
@@ -212,8 +215,15 @@ class Index(Node):
 
 @dataclass
 class TupleLit(Node):
-    """A tuple literal such as `(1, "a")`; always has at least two items."""
+    """A tuple literal such as `(1, "a")`; always has at least two items.
+
+    Attributes:
+        items: The elements.
+        bare: True for the list in `pick[point, int](xs)`, which is written without parentheses and which the linker
+            turns into type arguments.
+    """
     items: list["Expr"]
+    bare: bool = False
 
 
 @dataclass
@@ -284,7 +294,9 @@ class MethodCall(Node):
         variant: `(enum, variant)` when the checker found a variant constructor, otherwise None.
         named: Named arguments as written; the checker moves them into `args` and empties this list.
         field_call: True when the checker found that `name` is a field of function type, not a method.
-        targs: Explicit type arguments of a generic function named through a module (`lib.first[int](xs)`).
+        targs: Explicit type arguments of a generic method (`b.map[str](f)`) or of a generic function named through a
+            module (`lib.first[int](xs)`).
+        inst: The instance of a generic method this call uses (`map[str]`), or None.
     """
     value: "Expr"
     name: str
@@ -293,6 +305,7 @@ class MethodCall(Node):
     named: list[NamedArg] = field(default_factory=list)
     field_call: bool = False
     targs: list[TypeRef] = field(default_factory=list)
+    inst: str | None = None  # filled in by the checker: the copy of a generic method that is called
 
 
 @dataclass
@@ -436,8 +449,8 @@ class FnDef(Node):
         body: Statements of the body.
         has_self: True for a method (its first parameter is `self`).
         self_mut: True when the checker found that the method modifies `self`.
-        tparams: The type parameters of a generic function (`fn first[T](...)`); empty for an ordinary one.
-        instance: True for a copy of a generic function made by the checker for one list of type arguments.
+        tparams: The type parameters of a generic function or method (`fn first[T](...)`); empty for an ordinary one.
+        instance: True for a copy of a generic function or method made by the checker for one list of type arguments.
     """
     name: str
     params: list[Param]
