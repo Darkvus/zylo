@@ -42,7 +42,9 @@ fn show_bool(x: bool?) -> str:
     return "some " + str(x)
 
 fn accessors() -> str:
-    doc = json.parse("{\"name\": \"Ada\", \"age\": 42, \"pi\": 4.5, \"on\": true, \"nil\": null, \"xs\": [10, 20, 30]}").unwrap()
+    doc = json.parse(
+        "{\"name\": \"Ada\", \"age\": 42, \"pi\": 4.5, \"on\": true, \"nil\": null, \"xs\": [10, 20, 30]}",
+    ).unwrap()
     xs = json.get(doc, "xs").unwrap()
     name = json.get(doc, "name").unwrap()
     age = json.get(doc, "age").unwrap()
@@ -66,8 +68,18 @@ fn accessors() -> str:
     lines.append("as_bool: " + show_bool(json.as_bool(json.get(doc, "on").unwrap())))
     lines.append("as_bool of null: " + show_bool(json.as_bool(nil)))
     lines.append("is_null: " + str(json.is_null(nil)) + " " + str(json.is_null(age)))
-    lines.append("as_list: " + str(len(json.as_list(xs).unwrap())) + " " + str(json.as_list(doc) is none))
-    lines.append("as_dict: " + str(len(json.as_dict(doc).unwrap())) + " " + str(json.as_dict(xs) is none))
+    lines.append(
+        "as_list: "
+        + str(len(json.as_list(xs).unwrap()))
+        + " "
+        + str(json.as_list(doc) is none),
+    )
+    lines.append(
+        "as_dict: "
+        + str(len(json.as_dict(doc).unwrap()))
+        + " "
+        + str(json.as_dict(xs) is none),
+    )
     return "\n".join(lines)
 
 # Reads documents separated by a line holding "@@@@" and prints one result per document, separated the same way.

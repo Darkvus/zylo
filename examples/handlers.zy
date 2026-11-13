@@ -31,8 +31,14 @@ fn find_route(routes: list[Route], req: Request) -> Route?:
 
 fn main_():
     routes = [Route("GET", "/", logged("home", home)), Route("GET", "/health", health)]
-    routes.append(Route("POST", "/reset", only_admin(logged("reset", fn(r) => "state cleared"))))
-    requests = [Request("GET", "/", "ana"), Request("GET", "/health", "bob"), Request("POST", "/reset", "bob")]
+    routes.append(
+        Route("POST", "/reset", only_admin(logged("reset", fn(r) => "state cleared"))),
+    )
+    requests = [
+        Request("GET", "/", "ana"),
+        Request("GET", "/health", "bob"),
+        Request("POST", "/reset", "bob"),
+    ]
     requests.append(Request("POST", "/reset", "admin"))
     requests.append(Request("GET", "/missing", "ana"))
     for req in requests:

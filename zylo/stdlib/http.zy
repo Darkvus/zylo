@@ -1,9 +1,21 @@
 # std.http: a blocking HTTP/1.1 server and a simple client. See docs/stdlib.md.
 # The Rust side lives in http.rs and its crates in http.toml; both are added to a program that imports this module.
 
-extern fn _serve(host: str, port: int, max_requests: int, max_body: int, handler: fn(str, str, dict[str, str], dict[str, str], str) -> tuple[int, dict[str, str], str]) -> Result[int, str] = "zylo_http::serve({0}, {1}, {2}, {3}, {4})"
+extern fn _serve(
+    host: str,
+    port: int,
+    max_requests: int,
+    max_body: int,
+    handler: fn(str, str, dict[str, str], dict[str, str], str) -> tuple[int, dict[str, str], str],
+) -> Result[int, str] = "zylo_http::serve({0}, {1}, {2}, {3}, {4})"
 
-extern fn _request(method: str, url: str, body: str, headers: dict[str, str], timeout: int) -> Result[tuple[int, dict[str, str], str], str] = "zylo_http::request({0}, {1}, {2}, {3}, {4})"
+extern fn _request(
+    method: str,
+    url: str,
+    body: str,
+    headers: dict[str, str],
+    timeout: int,
+) -> Result[tuple[int, dict[str, str], str], str] = "zylo_http::request({0}, {1}, {2}, {3}, {4})"
 
 # What a handler receives. Header names are lower-case; `path` is percent-decoded and has no query string;
 # `path_params` is empty until a router fills it in.
@@ -54,8 +66,20 @@ fn header(headers: dict[str, str], name: str) -> str?:
 # Answer every request with `handler`, forever (or until the port cannot be used). `max_requests` stops after that
 # many requests (0 means no limit); `max_body` is the largest accepted body in bytes. Returns the number of requests
 # served, or an error such as "cannot listen on ...".
-fn serve_with(host: str, port: int, handler: fn(Request) -> Response, max_requests: int, max_body: int) -> Result[int, str]:
-    fn dispatch(method: str, path: str, query: dict[str, str], headers: dict[str, str], body: str) -> tuple[int, dict[str, str], str]:
+fn serve_with(
+    host: str,
+    port: int,
+    handler: fn(Request) -> Response,
+    max_requests: int,
+    max_body: int,
+) -> Result[int, str]:
+    fn dispatch(
+        method: str,
+        path: str,
+        query: dict[str, str],
+        headers: dict[str, str],
+        body: str,
+    ) -> tuple[int, dict[str, str], str]:
         no_params: dict[str, str] = {}
         resp = handler(Request(method, path, query, headers, body, no_params))
         return resp.status, resp.headers, resp.body
@@ -66,12 +90,22 @@ fn serve(host: str, port: int, handler: fn(Request) -> Response) -> Result[int, 
     return serve_with(host, port, handler, 0, default_max_body())
 
 # Serve exactly `max_requests` requests, then return (for tests and scripts).
-fn serve_n(host: str, port: int, handler: fn(Request) -> Response, max_requests: int) -> Result[int, str]:
+fn serve_n(
+    host: str,
+    port: int,
+    handler: fn(Request) -> Response,
+    max_requests: int,
+) -> Result[int, str]:
     return serve_with(host, port, handler, max_requests, default_max_body())
 
 # Send one request. Any HTTP status, including 404 and 500, is an `ok` response; an `err` means no response arrived
 # (connection refused, a bad URL, a timeout). Redirects are not followed and only `http://` URLs work.
-fn send(method: str, url: str, body: str, headers: dict[str, str]) -> Result[Response, str]:
+fn send(
+    method: str,
+    url: str,
+    body: str,
+    headers: dict[str, str],
+) -> Result[Response, str]:
     r = _request(method.upper(), url, body, headers, 30)
     match r:
         ok(parts):

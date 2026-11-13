@@ -112,6 +112,7 @@ class Manifest:
         path: Where it was loaded from.
         rust_dependencies: Cargo-style crate requirements.
         trusted_packages: Packages allowed to call Rust.
+        line_length: `[format] line-length` for `zylo fmt`, or None for the default (kept when the file is rewritten).
     """
     name: str
     version: str = "0.1.0"
@@ -120,6 +121,7 @@ class Manifest:
     path: Path | None = None  # where it was loaded from
     rust_dependencies: dict[str, object] = field(default_factory=dict)  # Cargo-style, see docs/rust-interop.md
     trusted_packages: list[str] = field(default_factory=list)  # packages allowed to call Rust
+    line_length: int | None = None  # `[format] line-length`; validated by `zylo fmt`
 
     @property
     def root(self) -> Path:
@@ -151,7 +153,9 @@ def load_manifest(path: Path) -> Manifest:
     deps = {n: parse_dependency(n, v) for n, v in (data.get("dependencies") or {}).items()}
     rust = {n: validate_rust_dep(n, v) for n, v in (data.get("rust-dependencies") or {}).items()}
     trusted = [check_name(str(t), "trusted package name") for t in (data.get("rust") or {}).get("trusted-packages", [])]
-    return Manifest(check_name(str(pkg["name"])), str(pkg.get("version", "0.1.0")), pkg.get("entry"), deps, path, rust, trusted)
+    width = (data.get("format") or {}).get("line-length")
+    return Manifest(check_name(str(pkg["name"])), str(pkg.get("version", "0.1.0")), pkg.get("entry"), deps, path, rust, trusted,
+                    width if isinstance(width, int) and not isinstance(width, bool) else None)
 
 
 def dump_manifest(m: Manifest) -> str:
@@ -173,6 +177,8 @@ def dump_manifest(m: Manifest) -> str:
         lines += ["", "[rust-dependencies]"] + [f"{n} = {toml_value(v)}" for n, v in sorted(m.rust_dependencies.items())]
     if m.trusted_packages:
         lines += ["", "[rust]", f"trusted-packages = {toml_value(sorted(m.trusted_packages))}"]
+    if m.line_length is not None:
+        lines += ["", "[format]", f"line-length = {m.line_length}"]
     return "\n".join(lines) + "\n"
 
 

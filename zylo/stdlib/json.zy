@@ -2,11 +2,17 @@
 
 # Helpers written in Rust, kept private: text as Unicode code points (so positions are O(1)), one code point back to
 # text, and a number written the shortest way that reads back as the same float.
-extern fn _codes(s: str) -> list[int] = "{0}.chars().map(|c| c as i64).collect::<Vec<i64>>()"
+extern fn _codes(
+    s: str,
+) -> list[int] = "{0}.chars().map(|c| c as i64).collect::<Vec<i64>>()"
 
-extern fn _chr(c: int) -> str = "char::from_u32({0} as u32).map(|c| c.to_string()).unwrap_or_default()"
+extern fn _chr(
+    c: int,
+) -> str = "char::from_u32({0} as u32).map(|c| c.to_string()).unwrap_or_default()"
 
-extern fn _num(x: float) -> str = "if {0}.is_finite() { format!(\"{}\", {0}) } else { String::from(\"null\") }"
+extern fn _num(
+    x: float,
+) -> str = "if {0}.is_finite() { format!(\"{}\", {0}) } else { String::from(\"null\") }"
 
 enum Json:
     Null
@@ -87,13 +93,19 @@ struct _Parser:
         if self.peek() == 46:
             self.pos += 1
             if self.digits() == 0:
-                return err(self.fail(f"expected a digit after '.' but found {self.found()}"))
+                return err(
+                    self.fail(f"expected a digit after '.' but found {self.found()}"),
+                )
         if self.peek() == 101 or self.peek() == 69:
             self.pos += 1
             if self.peek() == 43 or self.peek() == 45:
                 self.pos += 1
             if self.digits() == 0:
-                return err(self.fail(f"expected a digit in the exponent but found {self.found()}"))
+                return err(
+                    self.fail(
+                        f"expected a digit in the exponent but found {self.found()}",
+                    ),
+                )
         text = ""
         for i in range(start, self.pos):
             text += _chr(self.cs[i])
@@ -128,12 +140,18 @@ struct _Parser:
         while true:
             c = self.peek()
             if c < 0:
-                return err(self.fail("unterminated string, expected '\"' but found end of input"))
+                return err(
+                    self.fail(
+                        "unterminated string, expected '\"' but found end of input",
+                    ),
+                )
             if c == 34:
                 self.pos += 1
                 return ok(out)
             if c < 32:
-                return err(self.fail(f"unescaped control character U+{c:04X} in string"))
+                return err(
+                    self.fail(f"unescaped control character U+{c:04X} in string"),
+                )
             if c != 92:
                 out += _chr(c)
                 self.pos += 1
@@ -156,10 +174,16 @@ struct _Parser:
                 self.pos += 1
                 u = self.hex4()
                 if u < 0:
-                    return err(self.fail("invalid \\u escape, expected four hex digits"))
+                    return err(
+                        self.fail("invalid \\u escape, expected four hex digits"),
+                    )
                 if u >= 55296 and u <= 56319:
                     # a high surrogate must be followed by \uDC00-\uDFFF; together they are one code point
-                    if self.peek() != 92 or self.pos + 1 >= len(self.cs) or self.cs[self.pos + 1] != 117:
+                    if (
+                        self.peek() != 92
+                        or self.pos + 1 >= len(self.cs)
+                        or self.cs[self.pos + 1] != 117
+                    ):
                         return err(self.fail("unpaired surrogate in \\u escape"))
                     self.pos += 2
                     lo = self.hex4()

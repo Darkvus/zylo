@@ -67,10 +67,24 @@ r = Patch(name=some("multi"), age=some(1), ratio=ok(1), inner=none)
 print(describe(r))
 
 # std.json accessors.
-doc = json.parse("{\"name\": \"Ada\", \"age\": 36, \"pi\": 3.5, \"ok\": true, \"tags\": [\"a\", \"b\"], \"meta\": {\"x\": 1}}").unwrap()
-print(json.get_str(doc, "name"), json.get_int(doc, "age"), json.get_float(doc, "pi"), json.get_bool(doc, "ok"))
-print(json.get_str(doc, "age"), json.get_int(doc, "missing"), json.get_str(json.Json.Null, "name"))
-print(len(json.get_array(doc, "tags").unwrap()), len(json.get_object(doc, "meta").unwrap()))
+doc = json.parse(
+    "{\"name\": \"Ada\", \"age\": 36, \"pi\": 3.5, \"ok\": true, \"tags\": [\"a\", \"b\"], \"meta\": {\"x\": 1}}",
+).unwrap()
+print(
+    json.get_str(doc, "name"),
+    json.get_int(doc, "age"),
+    json.get_float(doc, "pi"),
+    json.get_bool(doc, "ok"),
+)
+print(
+    json.get_str(doc, "age"),
+    json.get_int(doc, "missing"),
+    json.get_str(json.Json.Null, "name"),
+)
+print(
+    len(json.get_array(doc, "tags").unwrap()),
+    len(json.get_object(doc, "meta").unwrap()),
+)
 tags = json.as_array(json.get(doc, "tags").unwrap()).unwrap()
 print(json.as_str(json.at(json.Json.Arr(tags), -1).unwrap()))
 print(json.as_object(doc) is some, json.as_object(json.Json.Null) is none)

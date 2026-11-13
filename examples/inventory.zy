@@ -16,7 +16,11 @@ fn total_value(products: list[Product]) -> int:
         total += p.value()
     return total
 
-products = [Product("tornillos", 100, 5), Product("clavos", 8, 3), Product("tuercas", 3, 12)]
+products = [
+    Product("tornillos", 100, 5),
+    Product("clavos", 8, 3),
+    Product("tuercas", 3, 12),
+]
 print(total_value(products))
 for p in products:
     if p.quantity < 10:

@@ -29,7 +29,7 @@ from zylo.application.editor import (
     rename,
     signature_help,
 )
-from zylo.application.format import format_text
+from zylo.application.format import configured_line_length, format_text
 from zylo.domain.errors import ZyloError
 
 ERROR = 1  # DiagnosticSeverity
@@ -311,10 +311,11 @@ class Server:
 
     def on_formatting(self, params: dict) -> list[dict]:
         """Format the whole document; nothing is returned for a document with a syntax error."""
-        text = self.documents.get(params["textDocument"]["uri"], "")
+        uri = params["textDocument"]["uri"]
+        text = self.documents.get(uri, "")
         try:
-            formatted = format_text(text)
-        except ZyloError:
+            formatted = format_text(text, configured_line_length(uri_to_path(uri)))
+        except (ZyloError, OSError):
             return []
         if formatted == text:
             return []

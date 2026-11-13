@@ -25,6 +25,7 @@ and is built vertically (lexer → parser → checker → codegen → tests).
 | **v0.17 Ergonomics** | Narrowing on field paths (`if p.name is some:` uses `p.name` as the plain value), multi-line list / dict / tuple literals with trailing commas, `std.json` `get_*` / `as_array` / `as_object` / `at` accessors | done |
 | **v0.18 Richer `match`** | Guards (`Pattern if cond:`, never counted toward exhaustiveness) and or-patterns (`1 \| 2`, `Color.Red \| Color.Blue`, variants that bind the same names with the same types) | done |
 | **v0.19 Language server navigation** | Hover (types, signatures, descriptions), go to definition (across modules, imports and re-exports), rename (scope-correct for locals, project-wide for top-level items, fields, variants, methods and named arguments, with `prepareRename`) and signature help (active parameter, defaults, named arguments); see [docs/editors.md](docs/editors.md) | done |
+| **v0.20 Formatter line wrapping** | `zylo fmt` wraps lines longer than 88 columns (`--line-length N` or `[format] line-length` in `zylo.toml`): calls, literals and struct constructors one item per line, long boolean / arithmetic expressions and method chains inside parentheses, signatures, imports and `match` or-patterns; trailing commas in parameter lists, parenthesized `from ... import (...)` and `(A \| B):` patterns | done |
 | **Community** | Documentation translations (the docs are English-only for now) and localized diagnostics | |
 
 Later: generics, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
@@ -32,7 +33,6 @@ Later: generics, concurrency, a central package registry with `zylo publish`, se
 ## Open questions
 
 - Language server: completion that knows types (members after a dot) and code actions.
-- Formatter: wrapping of very long lines.
 
 - Narrowing beyond plain variables and field paths: `and` chains, indexed elements and closures.
 - Nested patterns and integer ranges in `match`; non-constant default values.

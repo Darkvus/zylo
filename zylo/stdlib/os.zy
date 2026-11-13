@@ -13,9 +13,16 @@ extern fn platform() -> str = "std::env::consts::OS.to_string"
 extern fn is_dir(path: str) -> bool = "std::path::Path::new(&{0}).is_dir()"
 
 # Create a directory and its missing parents. A `Result` like `write_file`: the error says what went wrong.
-extern fn make_dirs(path: str) -> Result[int, str] = "std::fs::create_dir_all(&{0}).map(|_| 0i64).map_err(|e| format!(\"{}: {}\", {0}, e))"
+extern fn make_dirs(
+    path: str,
+) -> Result[int, str] = "std::fs::create_dir_all(&{0}).map(|_| 0i64).map_err(|e| format!(\"{}: {}\", {0}, e))"
 
-extern fn remove_file(path: str) -> Result[int, str] = "std::fs::remove_file(&{0}).map(|_| 0i64).map_err(|e| format!(\"{}: {}\", {0}, e))"
+extern fn remove_file(
+    path: str,
+) -> Result[int, str] = "std::fs::remove_file(&{0}).map(|_| 0i64).map_err(|e| format!(\"{}: {}\", {0}, e))"
 
 # Join two path pieces with the system's separator (an absolute `b` replaces `a`).
-extern fn join_path(a: str, b: str) -> str = "std::path::Path::new(&{0}).join(&{1}).to_string_lossy().to_string()"
+extern fn join_path(
+    a: str,
+    b: str,
+) -> str = "std::path::Path::new(&{0}).join(&{1}).to_string_lossy().to_string()"
