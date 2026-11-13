@@ -610,6 +610,8 @@ class _Formatter:
                 self.line(s.line, indent, "break", first_in_block)
             case ast.Continue():
                 self.line(s.line, indent, "continue", first_in_block)
+            case ast.Pass():
+                self.line(s.line, indent, "pass", first_in_block)
             case ast.ExternFn():
                 tail = f" = {quote(s.template)}"
                 self.line(s.line, indent, "extern " + self.signature(s, indent, len(tail), 7) + tail, first_in_block)

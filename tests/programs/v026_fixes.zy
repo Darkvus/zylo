@@ -1,0 +1,56 @@
+struct A:
+    names: dict[str, str]
+
+    fn add(self, k: str):
+        self.names[k] = "v"
+
+enum Event:
+    Click
+    Key(str)
+
+struct Counter:
+    hits: Cell[int]
+
+fn with_name(a: A, k: str) -> A:
+    a.names[k] = "w"
+    return a
+
+fn bump(c: Counter):
+    c.hits.set(c.hits.get() + 1)
+
+fn describe[T](x: T) -> str:
+    return "value of " + type_name(T)
+
+fn on_event(e: Event) -> str:
+    out = "none"
+    match e:
+        Event.Click:
+            pass
+        Event.Key(k):
+            out = "key " + k
+    return out
+
+struct Op:
+    field: str?
+
+fn show(op: Op) -> str:
+    if op.field is some:
+        return op.field + "!"
+    return "empty"
+
+a = A({})
+a.add("x")
+a = with_name(a, "y")
+print(len(a.names), a.names["x"], a.names["y"])
+c = Counter(cell(0))
+bump(c)
+bump(c)
+print(c.hits.get())
+print(describe(3), describe("s"), describe([1.5]))
+print(type_name(int), type_name(dict[str, list[int]]))
+print(on_event(Event.Click), on_event(Event.Key("q")))
+x = 1
+y = 2
+z = x + y
+print(x, y, z)
+print(show(Op(some("hi"))), show(Op(none)))

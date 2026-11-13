@@ -789,6 +789,7 @@ class Checker(GenericMixin):
                 f.self_mut = (owner, f.name) in self.mutating
             # A parameter that is never modified is lent instead of cloned. A method that modifies `self` takes its
             # arguments by value: they may be parts of `self`, which cannot be lent while `self` is borrowed mutably.
+            self.lost_mutation(f.params, f)
             for p in f.params:
                 p.info.by_ref = not p.info.mutable and not is_copy_type(p.info.ty) and not f.self_mut
         finally:
@@ -951,6 +952,8 @@ class Checker(GenericMixin):
                 self.for_loop(s)
             case ast.Return(value):
                 self.return_(s, value)
+            case ast.Pass():
+                pass
             case ast.Break() | ast.Continue():
                 if not self.loops:
                     kw = "break" if isinstance(s, ast.Break) else "continue"
@@ -1139,6 +1142,30 @@ class Checker(GenericMixin):
             if info.captured:
                 raise self.captured_error(e.id, e)
             info.mutable = True
+            info.place_mut = True
+            info.mut_roots.add(id(e))
+
+    def lost_mutation(self, params: list[ast.Param], node: ast.Node) -> None:
+        """Reject a parameter whose in-place changes nothing can observe.
+
+        Arguments are passed by value, so a function that modifies a part of a parameter (`a.names[k] = v`,
+        `append(xs, 1)`, `p.bump()`) only changes its own copy. That is fine when the function then uses the copy (reads
+        it, returns it, passes it on); when it never does, the change is silently lost, which is almost certainly a
+        mistake.
+
+        Args:
+            params: The parameters of the function or closure just checked.
+            node: The function, for the location of the error when a parameter has none.
+
+        Raises:
+            ZyloError: On a modified parameter that the function never uses afterwards.
+        """
+        for p in params:
+            info = p.info
+            if info is not None and info.place_mut and not is_copy_type(info.ty) and info.uses <= info.mut_roots:
+                raise err(f"parameter {p.name!r} is modified but the changes are not visible to the caller: arguments are "
+                          f"passed by value; return it (`-> {info.ty}`), make the function a method of its struct, or share "
+                          f"the state with a `Cell`", p if p.line else node)
 
     def captured_error(self, name: str, node: ast.Node) -> ZyloError:
         """The error for modifying a variable that a closure captured."""
@@ -1165,6 +1192,7 @@ class Checker(GenericMixin):
                 break
         if info is None:
             return None
+        info.uses.add(id(node))
         for frame in self.closures:  # outermost first, so a nested closure copies the outer closure's copy
             if frame.base > found:
                 if name == "self":
@@ -1772,6 +1800,12 @@ class Checker(GenericMixin):
             return inner
         raise err(f"{rt} has no method {e.name!r} (available: unwrap, unwrap_or)", e)
 
+    def is_narrowed(self, e: ast.Expr) -> bool:
+        """Whether an expression is a variable or field path an `is` check has narrowed in the current scope."""
+        key = field_path(e)
+        info = self.scopes.lookup(key) if key else None
+        return info is not None and info.narrowed
+
     def method_call(self, e: ast.MethodCall, expected: Type | None = None) -> Type:
         """Type a method call on a struct, a string, a list, a dict, a set, an Option or a Result, or `Enum.Variant(...)`."""
         generic = self.generic_enum_of(e.value)
@@ -1781,6 +1815,11 @@ class Checker(GenericMixin):
         if enum:
             return self.variant_ctor(e, enum, e.name, e.args)
         rt = self.expr(e.value)
+        if e.name in ("unwrap", "unwrap_or", "unwrap_err") and not isinstance(rt, (OptionT, ResultT)) and self.is_narrowed(e.value):
+            what = "an Option" if e.name != "unwrap_err" else "a Result"
+            call = "(...)" if e.name == "unwrap_or" else "()"
+            raise err(f"already narrowed: the `is` check has already unwrapped {what} here, so {field_path(e.value)!r} is "
+                      f"{rt}; drop `.{e.name}{call}`", e)
         if e.named and (isinstance(rt, (OptionT, ResultT, ListT, DictT, SetT, CellT)) or rt == STR):
             raise err(f"{rt}.{e.name} takes positional arguments only", e.named[0])
         if isinstance(rt, (OptionT, ResultT)):
@@ -1903,6 +1942,7 @@ class Checker(GenericMixin):
                 got = declared
                 if len(self.errors) == before and got != UNIT and not always_returns(e.body):
                     raise err(f"function {e.name or '(anonymous)'!r} can finish without a `return`", e)
+                self.lost_mutation(e.params, e)
         finally:
             self.closures.pop()
             self.scopes.pop()
@@ -2049,6 +2089,35 @@ class Checker(GenericMixin):
         e.func = helper
         return self.fns[helper].ret
 
+    def type_name(self, e: ast.Call) -> Type:
+        """Type `type_name(T)`: the call becomes a string literal holding the type as written.
+
+        Inside a generic template the name is not known yet, so the call stays as it is; each copy of the template has
+        the real type and gets its own name.
+
+        Args:
+            e: The call.
+
+        Returns:
+            Always `str`.
+
+        Raises:
+            ZyloError: If the call does not have exactly one type as its argument.
+        """
+        if len(e.args) != 1:
+            raise err(f"type_name takes 1 argument, a type, got {len(e.args)}", e)
+        arg = e.args[0]
+        if isinstance(arg, ast.Str):  # already rewritten by an earlier round of checking
+            return STR
+        if not isinstance(arg, ast.TypeRef):
+            raise err("the argument of type_name must be a type", arg)
+        ty = self.resolve(arg)
+        if not has_param(ty):
+            name = ast.Str(re.sub(r"(?:\w+\u00b7)+", "", str(ty)), line=e.line, col=e.col, file=e.file)
+            name.ty = STR
+            e.args = [name]
+        return STR
+
     def builtin(self, e: ast.Call, expected: Type | None = None) -> Type:
         """Type a call of a built-in function such as `print`, `len`, `sum` or `read_file`."""
         name, args = e.func, e.args
@@ -2060,6 +2129,8 @@ class Checker(GenericMixin):
         match name:
             case "to_json" | "from_json" | "json_schema" | "json_schema_defs":
                 return self.typed_json(e)
+            case "type_name":
+                return self.type_name(e)
             case "print":  # any number of values, separated by spaces
                 for a in args:
                     self.printable(a)

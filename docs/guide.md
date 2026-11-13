@@ -90,6 +90,24 @@ for x in [10, 20]:
 
 `range(n)` and `range(a, b)` can only appear as the iterable of a `for`.
 
+`pass` is a statement that does nothing, for a block that has nothing to do, such as a `match` arm:
+
+```zylo
+enum Event:
+    Click
+    Key(str)
+
+fn on_event(e: Event):
+    match e:
+        Event.Click:
+            pass                     # nothing to do for a click
+        Event.Key(k):
+            print("key", k)
+```
+
+Several statements can share a line when separated by `;`: `a = 1; b = 2`. A `;` at the end of a line is allowed and
+ignored; `zylo fmt` puts every statement on its own line. A `;` cannot appear inside brackets.
+
 ## Functions
 
 Parameters need types; the return type is optional (omit it for no value). A function with a
@@ -106,8 +124,34 @@ fn gcd(a: int, b: int) -> int:
 print(gcd(48, 18))
 ```
 
-Arguments are passed **by value**: a function that changes a list or struct parameter changes its
-own copy, never the caller's.
+Arguments are passed **by value**: a function that changes a list, dict, set or struct parameter changes its
+own copy, never the caller's. When a function modifies a parameter in place (`a.names[k] = v`, `append(xs, 1)`,
+`p.bump()`) and then never uses it, the change can only be lost, so the checker rejects it:
+
+```text
+error: parameter 'a' is modified but the changes are not visible to the caller: arguments are passed by value;
+return it (`-> A`), make the function a method of its struct, or share the state with a `Cell`
+```
+
+Use the modified copy (return it, read it, pass it on), make the function a method (`self` is modified in place), or
+keep the state in a [`Cell`](#shared-state-with-cell). The same rule applies to the parameters of anonymous functions.
+
+```zylo
+struct A:
+    names: dict[str, str]
+
+    fn add(self, k: str):
+        self.names[k] = "v"          # a method modifies the value it is called on
+
+fn with_name(a: A, k: str) -> A:
+    a.names[k] = "v"                 # fine: the changed copy is returned
+    return a
+
+a = A({})
+a.add("x")
+a = with_name(a, "y")
+print(a.names)
+```
 
 ### Default and named arguments
 
@@ -810,6 +854,9 @@ Narrowing rules and limits:
   (`p.items.append(1)`, `p.n = 2`) is fine.
 - Closures and local functions do not see a field narrowing: copy the field to a local first.
 - For a `Result`, the `ok` branch sees the value and the `err` branch sees the error.
+- The narrowed value is already unwrapped: `op.field.unwrap()` or `x.unwrap_or(0)` inside the branch is an error
+  that says *already narrowed* (it is not silently accepted, so a stray `.unwrap()` is never mistaken for a second check).
+  Drop the call and use the value directly.
 
 ### Multi-line literals
 
@@ -1255,6 +1302,7 @@ trust rules are in [rust-interop.md](rust-interop.md).
 
 | Function | Description |
 |---|---|
+| `type_name(T)` | the name of a type as a `str` (`int`, `list[str]`, `Box[int]`); inside a generic function it is the type argument of each copy, e.g. `type_name(T)` is `"int"` in `first[int]` |
 | `print(a, b, ...)` | print any values separated by spaces (`print()` prints an empty line) |
 | `len(x)` | length of a `str` (characters), `list`, `dict` or `set` |
 | `append(xs, v)` | same as `xs.append(v)` |

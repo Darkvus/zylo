@@ -10,11 +10,11 @@ BUILTINS = {"print", "range", "len", "int", "float", "str", "append", "exit",
             "sqrt", "pow", "round", "floor", "ceil",
             "argv", "input", "read_line", "read_stdin", "read_file", "write_file", "append_file",
             "file_exists", "list_dir", "env", "eprint", "time", "sleep",
-            "cell", "to_json", "from_json", "json_schema", "json_schema_defs"}
+            "cell", "to_json", "from_json", "json_schema", "json_schema_defs", "type_name"}
 # Built-ins whose first argument is a type, written like any type (`from_json(list[int], j)`).
-TYPE_ARG_BUILTINS = {"from_json", "json_schema", "json_schema_defs"}
+TYPE_ARG_BUILTINS = {"from_json", "json_schema", "json_schema_defs", "type_name"}
 # Builtins a program may redefine with its own function (the core ones may not).
-SHADOWABLE = BUILTINS - {"cell", "to_json", "from_json", "json_schema", "json_schema_defs", "print", "range", "len", "int", "float", "str", "append", "exit", "some", "ok", "err"}
+SHADOWABLE = BUILTINS - {"cell", "to_json", "from_json", "json_schema", "json_schema_defs", "type_name", "print", "range", "len", "int", "float", "str", "append", "exit", "some", "ok", "err"}
 
 
 @dataclass(frozen=True)
@@ -85,6 +85,7 @@ FUNCTIONS: dict[str, Builtin] = {b.name: b for b in [
     _b("cell", "value: T", "Cell[T]", "A new shared mutable box holding a value."),
     _b("to_json", "value: T", "Json", "Converts a struct, enum or collection to a `Json` value."),
     _b("from_json", "type, json: Json", "Result[T, str]", "Reads a value of the given type from a `Json` value; the error names the JSON path."),
+    _b("type_name", "type", "str", "The name of a type as written (`int`, `list[str]`, `Box[int]`); inside a generic function, the name of the type argument of each copy."),
     _b("json_schema", "type", "Json", "The JSON Schema of a type."),
     _b("json_schema_defs", "type", "Json", "The JSON Schema of a type, with the `$defs` of the types it uses."),
 ]}

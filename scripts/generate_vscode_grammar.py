@@ -14,7 +14,7 @@ from zylo.syntax.lexer import KEYWORDS
 
 OUTPUT = Path(__file__).parent.parent / "editors" / "vscode" / "syntaxes" / "zylo.tmLanguage.json"
 
-CONTROL = {"if", "elif", "else", "while", "for", "in", "return", "break", "continue", "import", "from", "as", "match"}
+CONTROL = {"if", "elif", "else", "while", "for", "in", "return", "break", "continue", "pass", "import", "from", "as", "match"}
 WORD_OPERATORS = {"and", "or", "not", "is"}
 STORAGE = {"fn", "struct", "enum", "extern", "pub"}
 CONSTANTS = {"true", "false", "none"}

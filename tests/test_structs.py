@@ -257,7 +257,7 @@ def test_mutating_method_through_index_and_field_marks_root():
 
 
 def test_field_assignment_marks_variable_and_param_mutable():
-    p = checked(POINT + "p = Point(1.0, 2.0)\np.x = 5.0\nfn f(q: Point):\n    q.y = 1.0\n")
+    p = checked(POINT + "p = Point(1.0, 2.0)\np.x = 5.0\nfn f(q: Point) -> Point:\n    q.y = 1.0\n    return q\n")
     assert p.body[1].var.mutable is True
     assert p.body[3].params[0].info.mutable is True
 

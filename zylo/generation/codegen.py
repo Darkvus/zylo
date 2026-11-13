@@ -623,6 +623,8 @@ class Gen:
                 self.line("break;")
             case ast.Continue():
                 self.line("continue;")
+            case ast.Pass():
+                pass
             case _:
                 raise ZyloError(f"{type(s).__name__} is not supported by codegen", s.line, s.col)
 
@@ -1125,6 +1127,8 @@ def call(e: ast.Call) -> str:
             fmts = ["{:?}" if a.ty == FLOAT or isinstance(a.ty, (ListT, StructT, EnumT, OptionT, ResultT, TupleT, DictT, SetT, CellT)) else "{}"
                     for a in args]
             return f'println!("{" ".join(fmts)}", {", ".join(emit_ref(a) for a in args)})'
+        case "type_name":
+            return emit(args[0])
         case "cell":
             return f"__ZyCell::new({emit(args[0])})"
         case "len":
