@@ -82,8 +82,8 @@ def local_names(stmt: ast.Stmt) -> set[str]:
             names.add(n.target.id)
         elif isinstance(n, ast.Unpack):
             names.update(t.id for t in n.targets)
-        elif isinstance(n, ast.MatchArm):
-            names.update(n.binds)
+        elif isinstance(n, ast.Pattern) and n.kind == "bind":
+            names.add(n.name)
     return names
 
 

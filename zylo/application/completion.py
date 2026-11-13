@@ -242,17 +242,18 @@ def visible_locals(res: Resolution, line: int, indent: int) -> list[tuple[Entity
         ent = r.entity
         if not r.decl or ent is None or ent.kind not in ("variable", "parameter") or r.line >= line:
             continue
+        origin = ent.type_key[1] if ent.kind == "variable" and ent.type_key else r.line  # a wrapped pattern spans lines: its block follows the header
         if ent.kind == "parameter" and ent.owner is None:
             continue  # a closure's parameter: only its own body sees it
         if ent.kind == "parameter":
             floor = code_lines.get(ent.owner.line, 0) + 1
         elif ent.type_key is not None:  # a loop or pattern variable: visible in the block under its line
-            floor = code_lines.get(r.line, 0) + 1
+            floor = code_lines.get(origin, 0) + 1
         else:
             floor = code_lines.get(r.line, 0)
             if floor == 0 and in_def:
                 continue  # a variable of the top level is not seen from a function
-        if indent < floor or any(code_lines[n] < floor for n in range(r.line + 1, line) if n in code_lines):
+        if indent < floor or any(code_lines[n] < floor for n in range(origin + 1, line) if n in code_lines and not lines[n - 1].lstrip().startswith((")", "]", "}"))):
             continue
         found[ent.name] = (ent, variable_type(ent, r, res) or "")
     return list(found.values())

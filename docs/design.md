@@ -86,7 +86,17 @@ scrutinee. Literal and wrapper patterns reuse the enum machinery (arms bind name
 must be exhaustive and an unreachable arm is an error). Integers and strings are open sets, so they always need
 `_`; `bool` is closed and is complete with `true` and `false`. Floats are rejected because matching on float equality
 is almost always a bug. It is generated as a Rust `match` on an owned copy (a `&str` for strings), so bindings are
-plain values just like the enum case. `is` narrowing is untouched: `match` is for choosing between cases, `is` for
+plain values just like the enum case.
+
+**Patterns are a tree, and coverage is decided by one algorithm.** Since v0.25 a pattern is a `Pattern` node whose
+children are patterns: variant data, the content of `some` / `ok` / `err`, tuple elements, or-alternatives, with names,
+`_`, literals and integer ranges at the leaves. Exhaustiveness and unreachable arms come from Maranget's usefulness
+algorithm (`semantics/exhaustive.py`) instead of a set of seen variant names; guarded arms are left out of the matrix.
+Integers are handled as intervals cut at the ends of the ranges written, so `..0`, `0..=9`, `10..` is complete and the
+error for a gap names it. Rust cannot match a string literal inside an owned `String`, so a string nested in a pattern
+is generated as a fresh binding plus a comparison in the arm's guard (an or-pattern with such a string becomes one Rust
+arm per alternative); Rust only sees those arms as guarded, which is sound because a string column can never be
+completed by a literal. Ranges are always emitted as inclusive Rust ranges. `is` narrowing is untouched: `match` is for choosing between cases, `is` for
 guarding a single one.
 
 **Enum methods mirror struct methods.** `fn` with `self` inside an `enum` body is emitted in an `impl` block. Enum
@@ -279,7 +289,7 @@ whose own type parameters appear only in a result that the context does not name
 - Values are still cloned when stored (assigned to another variable, put in a struct or a list) or returned.
 - `is` narrowing works on plain variables and a single condition (no `and` chains, no fields).
 - Rust generics and traits are not exposed. Rust can call Zylo function values passed to an `extern fn` (see rust-interop.md).
-- No list comprehensions yet; closures are limited (see above). Generics are limited to what the section above lists. `match` has no guards, no or-patterns (`1 | 2`) and no nested patterns.
+- No list comprehensions yet; closures are limited (see above). Generics are limited to what the section above lists. `match` has no struct patterns (`Point(x=0, y)`), no `x @ pattern` bindings and no bare-name catch-all at the top of an arm (use `_`).
 - The language server's types and member lookups need the file to parse and link (a syntax error elsewhere removes them), and its rename refuses rather than guess. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
 - No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.
 - Diagnostics are in English only.

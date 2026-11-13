@@ -49,7 +49,7 @@ Place the cursor on the name (or on the `match`) and open the quick fix menu (`C
   line the file already has. In front of a dot (`json.parse(...)`), a module with that name is offered instead:
   `Import the module 'std.json'`. Private names (`_name`) and names the file already binds are never offered.
 - **Add the missing `match` arms.** On a `match` over an enum that does not cover every variant (an arm with a guard does not
-  count, a `_` arm covers everything), the missing variants are added after the last arm, spelled the way the other arms spell
+  count, and neither does an arm that matches only some of what a variant carries, such as `Shape.Circle(some(r))`; a `_` arm covers everything), the missing variants are added after the last arm, spelled the way the other arms spell
   the enum (`Shape.Circle` or `shapes.Shape.Circle`), with `_` for each piece of data and a `print("TODO: ...")` body to replace.
   In a function that returns a value, the placeholder still leaves the function without a `return`, which the compiler then points out.
 
@@ -79,7 +79,7 @@ the same thing:
 
 | What | Where it is renamed |
 |---|---|
-| A local variable, loop variable, pattern variable or closure parameter | Its own scope only: another function's `n` is untouched. |
+| A local variable, loop variable, pattern variable (at any depth of a nested pattern; one name bound by every alternative of an or-pattern is a single variable) or closure parameter | Its own scope only: another function's `n` is untouched. |
 | A function or struct parameter | Its body and every `name=value` argument that sets it, in any file. |
 | A function, struct or enum | Its definition, every use, the type annotations, and the `import`, `from ... import` and `pub from` lines of every file of the workspace that mentions it. |
 | A name imported with `as` | Only the importing file; the original keeps its name. |
@@ -182,7 +182,7 @@ and each part is tried on one line again, so only as much is wrapped as needed:
   breaks the arguments of the long call instead.
 - Function and method signatures, `extern fn` signatures and `from ... import` lists go one parameter or name per line;
   an import list is written inside `(...)`.
-- A long `match` or-pattern is written inside parentheses, one alternative per line: `(A | B | C) if guard:`.
+- A long `match` or-pattern is written inside parentheses, one alternative per line: `(A | B | C) if guard:`. A long nested pattern is broken one part per line inside its brackets (`Shape.Rect(` ... `):`), and its names stay visible in the arm's body.
 - A tuple after `=` or `return` gets parentheses when it has to wrap. Strings and f-strings are never split.
 
 ```zylo

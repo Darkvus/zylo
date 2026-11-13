@@ -41,6 +41,7 @@ from zylo.domain.types import (
     is_copy_type,
 )
 from zylo.semantics.derive import JSON_T, Deriver
+from zylo.semantics.exhaustive import Pat, Space, lower
 from zylo.semantics.generics import (
     Generic,
     GenericMixin,
@@ -52,6 +53,7 @@ from zylo.semantics.generics import (
     key_ok,
     sortable,
 )
+from zylo.syntax.formatter import pattern_text
 
 ARITH = {"+", "-", "*", "/", "%"}
 EQ = {"==", "!="}
@@ -452,142 +454,187 @@ class Checker(GenericMixin):
         return self.named(info.name)
 
     def match_stmt(self, s: ast.Match) -> None:
-        """Check a `match` on an enum, `int`, `str`, `bool`, `Option` or `Result`.
+        """Check a `match` on an enum, `int`, `str`, `bool`, `Option`, `Result` or tuple.
 
-        Every arm must fit the value's type, bind its data, and together the arms must cover every case (or end with
-        a `_` arm); an arm that could never run is an error.
+        Every pattern must fit the value's type and bind its data. Reachability and exhaustiveness are decided by
+        `semantics/exhaustive.py`: an arm that could never run is an error, and so is a `match` that leaves some value
+        unmatched (guarded arms never count).
         """
         t = self.expr(s.value)
-        info: EnumInfo | None = None
         if isinstance(t, EnumT):
-            info = self.enums[t.name]
             s.enum = t.name
         elif t == FLOAT:
             raise err("`match` cannot be used on a float: floats are not matched exactly; use `if` and comparisons", s.value)
-        elif not isinstance(t, (OptionT, ResultT)) and t not in (INT, STR, BOOL):
-            raise err(f"`match` needs an enum, int, str, bool, Option or Result value, not {t}", s.value)
-        seen: set = set()
-        wildcard = False
+        elif not isinstance(t, (OptionT, ResultT, TupleT)) and t not in (INT, STR, BOOL):
+            raise err(f"`match` needs an enum, int, str, bool, Option, Result or tuple value, not {t}", s.value)
+        space = Space(lambda ty: self.enums[ty.name].variants)
+        rows: list[list[Pat]] = []
         before = len(self.errors)
         for arm in s.arms:
             try:
-                if wildcard:
-                    raise err("this arm can never run: `_` already covers every case", arm)
-                if arm.variant == "_" and not arm.alts:
-                    wildcard = wildcard or arm.guard is None
-                    arm.vars = []
-                    self.arm_body(arm, [])
-                else:
-                    self.check_arm(arm, t, info, seen)
+                self.check_arm(arm, t, space, rows)
             except ZyloError as ex:
                 self.errors.append(ex)
         if len(self.errors) > before:  # a broken arm would only add misleading coverage errors
             return
-        universe = self.match_cases(t, info)
-        missing = [c for c in universe if c not in seen] if universe is not None else []
-        if universe is None and not wildcard:
+        uncovered = space.missing(rows, [t])
+        if uncovered is None:
+            return
+        shown = [w[0] for w in uncovered]
+        ranged = any(n.kind == "range" for arm in s.arms for n in self.pattern_nodes(arm.pattern))
+        if t in (INT, STR) and not ranged:
             raise err(f"`match` on {t} needs a final `_` arm (without a guard) for every other value", s)
-        if wildcard and universe is not None and not missing:
-            raise err("the `_` arm can never run: every case is already matched", s.arms[-1])
-        if missing and not wildcard:
-            if info is not None:
-                names = ", ".join(f"{t}.{v}" for v in missing)
-            else:
-                names = ", ".join({"some": "some(_)", "ok": "ok(_)", "err": "err(_)", True: "true", False: "false"}.get(c, str(c))
-                                  for c in missing)
-            raise err(f"`match` on {t} does not cover {names}; add arms or a final `_` arm; an arm with a guard does not count", s)
+        names = ", ".join(shown[:5]) + (", ..." if len(shown) > 5 else "")
+        raise err(f"`match` on {t} does not cover {names}; add arms or a final `_` arm; an arm with a guard does not count", s)
 
-    def match_cases(self, t: Type, info: EnumInfo | None) -> list | None:
-        """The cases a `match` on `t` must cover, or None for a type with too many values (`int`, `str`)."""
-        if info is not None:
-            return list(info.variants)
-        if isinstance(t, OptionT):
-            return ["some", "none"]
-        if isinstance(t, ResultT):
-            return ["ok", "err"]
-        if t == BOOL:
-            return [True, False]
-        return None
+    @staticmethod
+    def pattern_nodes(p: ast.Pattern):
+        """The pattern and every pattern inside it."""
+        yield p
+        for sub in p.subs:
+            yield from Checker.pattern_nodes(sub)
 
-    def check_arm(self, arm: ast.MatchArm, t: Type, info: EnumInfo | None, seen: set) -> None:
-        """Check one arm: its pattern (and alternatives) against the matched value's type, then guard and body.
+    def check_arm(self, arm: ast.MatchArm, t: Type, space: Space, rows: list[list[Pat]]) -> None:
+        """Check one arm: its pattern against the matched value's type, its reachability, then guard and body.
 
-        Cases of an arm with a guard are not added to `seen`, because the guard may reject them.
+        The arm's patterns are added to `rows` (what the next arms are compared with) unless it has a guard, because
+        the guard may reject the value.
         """
-        local: set = set()
-        first: dict[str, Type] | None = None
-        first_tys: list[Type] = []
-        for pat in [arm, *arm.alts]:
-            if pat.variant == "_":
-                raise err("`_` cannot be part of an or-pattern: it already matches every value", pat)
-            key, tys = self.check_pattern(pat, t, info)
-            if key in seen or key in local:
-                shown = f"variant {t}.{key}" if info is not None else f"`{key}`" if pat.literal is None else "this value"
-                raise err(f"{shown} is matched twice", pat)
-            local.add(key)
-            names = [b for b in pat.binds if b != "_"]
-            if len(set(names)) != len(names):
-                raise err("a pattern cannot bind the same name twice", pat)
-            bound = {b: ty for b, ty in zip(pat.binds, tys) if b != "_"}
-            if first is None:
-                first, first_tys = bound, tys
-            elif bound != first:
-                raise err("every alternative of an or-pattern must bind the same names with the same types", pat)
+        binds: dict[str, Type] = {}
+        self.check_pattern(arm.pattern, t, binds, top=True)
+        alts = arm.pattern.subs if arm.pattern.kind == "or" else [arm.pattern]
+        local: list[list[Pat]] = []
+        dead: ZyloError | None = None
+        for alt in alts:
+            row = [lower(alt)]
+            if dead is None and not space.useful(rows + local, row, [t]):
+                noun = "alternative" if len(alts) > 1 else "arm"
+                if row in rows + local:
+                    dead = err(f"`{pattern_text(alt)}` is matched twice: an earlier pattern is the same", alt)
+                else:
+                    dead = err(f"this {noun} can never run: the patterns before it already match every value it matches", alt)
+            local.append(row)
+        arm.binds = list(binds)
+        self.arm_body(arm, list(binds.values()))
+        if dead is not None:
+            raise dead
         if arm.guard is None:
-            seen |= local
-        self.arm_body(arm, first_tys)
+            rows.extend(local)
 
-    def check_pattern(self, arm: ast.MatchArm, t: Type, info: EnumInfo | None) -> tuple:
-        """Check one pattern against the matched type; return its case key and the types it binds."""
-        if arm.literal is not None:
-            key, tys = self.literal_pattern(arm, t), []
-        elif arm.type is not None:
-            if info is None:
-                raise err(f"`{arm.type.name}.{arm.variant}` is a variant pattern, but the value is {t}", arm)
-            if arm.type.name in self.generics and not arm.type.args:  # `Opt.Some(x)`: the type arguments come from the value
-                if not (isinstance(t, EnumT) and t.base == arm.type.name):
-                    raise err(f"this `match` is on {t}, not {arm.type.name.rsplit(chr(183), 1)[-1]}", arm)
-                named = t
-            else:
-                named = self.resolve(arm.type)
-            if named != t:
-                raise err(f"this `match` is on {t}, not {named}", arm)
-            tys = info.variants.get(arm.variant)
-            if tys is None:
-                raise err(f"enum {t} has no variant {arm.variant!r} (has: {', '.join(info.variants)})", arm)
-            if len(arm.binds) != len(tys):
-                want = f"{len(tys)} name(s)" if tys else "no names"
-                raise err(f"{t}.{arm.variant} carries {len(tys)} value(s): write {want} in the pattern", arm)
-            key = arm.variant
+    def check_pattern(self, p: ast.Pattern, t: Type, binds: dict[str, Type], top: bool = False) -> None:
+        """Check a pattern against the type of the value it matches, collecting the names it binds.
+
+        Args:
+            p: The pattern; each node gets the type it matches in `ty`.
+            t: The type of the value.
+            binds: The names bound so far, with their types, in order; this pattern adds its own.
+            top: Whether this is the whole pattern of an arm (it only changes the wording of some errors).
+        """
+        p.ty = t
+        match p.kind:
+            case "wild":
+                pass
+            case "bind":
+                if p.name in binds:
+                    raise err("a pattern cannot bind the same name twice", p)
+                if isinstance(t, EnumT) and p.name in self.enums[t.name].variants:
+                    raise err(f"`{p.name}` is a variant of {t}: write `{t}.{p.name}` to match it, or choose another name", p)
+                binds[p.name] = t
+            case "lit":
+                self.literal_pattern(p, t, top)
+            case "range":
+                self.range_pattern(p, t)
+            case "or":
+                first: dict[str, Type] | None = None
+                for alt in p.subs:
+                    if alt.kind == "wild":
+                        raise err("`_` cannot be part of an or-pattern: it already matches every value", alt)
+                    own: dict[str, Type] = {}
+                    self.check_pattern(alt, t, own, top)
+                    if first is None:
+                        first = own
+                    elif own != first:
+                        raise err("every alternative of an or-pattern must bind the same names with the same types", alt)
+                for name, ty in (first or {}).items():
+                    if name in binds:
+                        raise err("a pattern cannot bind the same name twice", p)
+                    binds[name] = ty
+            case "tuple":
+                if not isinstance(t, TupleT):
+                    raise err(f"a tuple pattern cannot match {t}", p)
+                if len(p.subs) != len(t.elems):
+                    raise err(f"this tuple pattern has {len(p.subs)} elements, but the value has {len(t.elems)}", p)
+                for sub, ty in zip(p.subs, t.elems):
+                    self.check_pattern(sub, ty, binds)
+            case "enum":
+                self.enum_pattern(p, t, binds)
+            case _:  # some / none / ok / err
+                if p.kind in ("some", "none"):
+                    if not isinstance(t, OptionT):
+                        raise err(f"`{p.kind}` can only match an Option, not {t}", p)
+                    inner = [t.inner] if p.kind == "some" else []
+                else:
+                    if not isinstance(t, ResultT):
+                        raise err(f"`{p.kind}` can only match a Result, not {t}", p)
+                    inner = [t.ok if p.kind == "ok" else t.err]
+                for sub, ty in zip(p.subs, inner):
+                    self.check_pattern(sub, ty, binds)
+
+    def enum_pattern(self, p: ast.Pattern, t: Type, binds: dict[str, Type]) -> None:
+        """Check `Enum.Variant(p, ...)` against the matched type."""
+        if not isinstance(t, EnumT):
+            raise err(f"`{p.type.name}.{p.name}` is a variant pattern, but the value is {t}", p)
+        info = self.enums[t.name]
+        if p.type.name in self.generics and not p.type.args:  # `Opt.Some(x)`: the type arguments come from the value
+            if t.base != p.type.name:
+                raise err(f"this `match` is on {t}, not {p.type.name.rsplit(chr(183), 1)[-1]}", p)
+            named = t
         else:
-            key = arm.variant
-            if key in ("some", "none"):
-                if not isinstance(t, OptionT):
-                    raise err(f"`{key}` can only match an Option, not {t}", arm)
-                tys = [t.inner] if key == "some" else []
-            else:
-                if not isinstance(t, ResultT):
-                    raise err(f"`{key}` can only match a Result, not {t}", arm)
-                tys = [t.ok if key == "ok" else t.err]
-        return key, tys
+            named = self.resolve(p.type)
+        if named != t:
+            raise err(f"this `match` is on {t}, not {named}", p)
+        tys = info.variants.get(p.name)
+        if tys is None:
+            raise err(f"enum {t} has no variant {p.name!r} (has: {', '.join(info.variants)})", p)
+        if len(p.subs) != len(tys):
+            want = f"{len(tys)} pattern(s) in parentheses" if tys else "no parentheses"
+            raise err(f"{t}.{p.name} carries {len(tys)} value(s): write {want}", p)
+        p.enum = t.name
+        for sub, ty in zip(p.subs, tys):
+            self.check_pattern(sub, ty, binds)
 
-    def literal_pattern(self, arm: ast.MatchArm, t: Type):
-        """Check a literal pattern against the matched type and return its value."""
-        lit = arm.literal
+    def literal_pattern(self, p: ast.Pattern, t: Type, top: bool) -> None:
+        """Check a literal pattern against the matched type."""
+        lit = p.literal
         if isinstance(lit, ast.Float) or (isinstance(lit, ast.UnaryOp) and isinstance(lit.operand, ast.Float)):
-            raise err("floats cannot be matched; use `if` and comparisons", arm)
+            raise err("floats cannot be matched; use `if` and comparisons", p)
         if isinstance(lit, ast.UnaryOp) and not (lit.op == "-" and isinstance(lit.operand, ast.Int)):
-            raise err("a `match` pattern must be a literal such as `3`, `-1`, `\"a\"` or `true`", arm)
+            raise err("a `match` pattern must be a literal such as `3`, `-1`, `\"a\"` or `true`", p)
         lt = self.expr(lit)
         if lt != t:
-            raise err(f"this `match` is on {t}, but the pattern is {lt}", arm)
-        return -lit.operand.value if isinstance(lit, ast.UnaryOp) else lit.value
+            where = "this `match` is on" if top else "the value here is"
+            raise err(f"{where} {t}, but the pattern is {lt}", p)
+
+    def range_pattern(self, p: ast.Pattern, t: Type) -> None:
+        """Check an integer range pattern: an `int` value, integer literal ends, and at least one value in it."""
+        for end in (p.lo, p.hi):
+            if end is None:
+                continue
+            if isinstance(end, ast.UnaryOp) and not (end.op == "-" and isinstance(end.operand, ast.Int)) \
+                    or not isinstance(end, (ast.Int, ast.UnaryOp)):
+                raise err("the ends of a range pattern must be integer literals such as `1` or `-5`", p)
+            self.expr(end)
+        if t != INT:
+            raise err(f"a range pattern matches an int, but the value is {t}", p)
+        lo, hi = ast.range_bounds(p)
+        if lo > hi:
+            raise err("this range matches no value: its start is not below its end", p)
 
     def arm_body(self, arm: ast.MatchArm, tys: list[Type]) -> None:
-        """Check an arm's body with its pattern's names bound to `tys`."""
+        """Check an arm's body with the names of its pattern (`arm.binds`) bound to `tys`."""
         self.scopes.push()
         try:
-            arm.vars = [None if b == "_" else self.scopes.declare(b, ty) for b, ty in zip(arm.binds, tys)]
+            arm.vars = [self.scopes.declare(b, ty) for b, ty in zip(arm.binds, tys)]
             if arm.guard is not None:
                 self.expect_bool(arm.guard, "a `match` guard")
             for st in arm.body:

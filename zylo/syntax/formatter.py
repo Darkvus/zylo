@@ -63,6 +63,61 @@ def float_text(v: float) -> str:
     return text if "." in text else text + ".0"
 
 
+def pattern_text(p: ast.Pattern, nested_or: bool = False) -> str:
+    """Return a pattern as written on one line.
+
+    Args:
+        p: The pattern.
+        nested_or: Whether `p` is an alternative of another or-pattern, which needs parentheses around an or-pattern.
+    """
+    match p.kind:
+        case "wild":
+            return "_"
+        case "bind":
+            return p.name
+        case "lit":
+            return expr_text(p.literal)
+        case "range":
+            lo = expr_text(p.lo) if p.lo is not None else ""
+            hi = expr_text(p.hi) if p.hi is not None else ""
+            return f"{lo}{'..=' if p.inclusive else '..'}{hi}"
+        case "enum":
+            args = f"({', '.join(pattern_text(x) for x in p.subs)})" if p.subs else ""
+            return f"{type_text(p.type)}.{p.name}{args}"
+        case "none":
+            return "none"
+        case "tuple":
+            return f"({', '.join(pattern_text(x) for x in p.subs)})"
+        case "or":
+            text = " | ".join(pattern_text(x, True) for x in p.subs)
+            return f"({text})" if nested_or else text
+        case _:  # some / ok / err
+            return f"{p.kind}({', '.join(pattern_text(x) for x in p.subs)})"
+
+
+def wrap_pattern(p: ast.Pattern, indent: int, col: int, tail: int, limit: int) -> str:
+    """Write a pattern on one line, or, when it is too long, with one part per line inside its brackets.
+
+    Args:
+        p: The pattern.
+        indent: Indentation level of the line the pattern starts on.
+        col: The column the pattern starts at.
+        tail: The width of what follows the pattern on its last line (`:`, or `,`).
+        limit: The line length.
+    """
+    flat = pattern_text(p)
+    if col + len(flat) + tail <= limit or not p.subs:
+        return flat
+    inner = INDENT * (indent + 1)
+    close = INDENT * indent + ")"
+    if p.kind == "or":
+        parts = [wrap_pattern(x, indent + 1, len(inner) + 2, 0, limit) for x in p.subs]
+        return "(\n" + inner + ("\n" + inner + "| ").join(parts) + "\n" + close
+    head = {"enum": f"{type_text(p.type)}.{p.name}" if p.type else "", "tuple": ""}.get(p.kind, p.kind)
+    items = "".join(f"{inner}{wrap_pattern(x, indent + 1, len(inner), 1, limit)},\n" for x in p.subs)
+    return f"{head}(\n{items}{close}"
+
+
 def type_text(t: ast.TypeRef) -> str:
     """Return a written type."""
     if t.name == "?":
@@ -592,16 +647,6 @@ class _Formatter:
             case _:
                 raise ValueError(f"cannot format {type(s).__name__}")
 
-    @staticmethod
-    def pattern_text(arm: ast.MatchArm) -> str:
-        """Return the pattern of a `match` arm as written."""
-        binds = f"({', '.join(arm.binds)})" if arm.binds else ""
-        if arm.literal is not None:
-            return expr_text(arm.literal)
-        if arm.type is not None:
-            return f"{type_text(arm.type)}.{arm.variant}{binds}"
-        return arm.variant + binds
-
     def assign_text(self, s: ast.Assign, indent: int) -> str:
         """Return an assignment, keeping `x += 1` when that is how it was written."""
         target = expr_text(s.target)
@@ -636,18 +681,13 @@ class _Formatter:
         return head + "(\n" + "".join(f"{inner}{p},\n" for p in params) + INDENT * indent + ")" + ret
 
     def arm_head(self, arm: ast.MatchArm, indent: int) -> str:
-        """Write a `match` arm's patterns and guard; a long or-pattern goes in parentheses, one pattern per line."""
-        pats = [self.pattern_text(a) for a in [arm, *arm.alts]]
+        """Write a `match` arm's pattern and guard; a pattern that does not fit goes in brackets, one part per line."""
         col = len(INDENT) * indent
-        flat = " | ".join(pats)
-        if len(pats) > 1 and col + len(flat) + 1 > self.limit:
-            inner = INDENT * (indent + 1)
-            head = "(\n" + inner + ("\n" + inner + "| ").join(pats) + "\n" + INDENT * indent + ")"
-            guard_col = col + 1
-        else:
-            head, guard_col = flat, col + len(flat)
+        head = wrap_pattern(arm.pattern, indent, col, 1, self.limit)
         if arm.guard is None:
             return head
+        last = head.rsplit("\n", 1)[-1]
+        guard_col = len(last) if "\n" in head else col + len(last)
         return head + " if " + self.layout.expr(arm.guard, col, guard_col + 4, 1, 0, "stmt")
 
     def if_stmt(self, s: ast.If, indent: int, first_in_block: bool, kw: str) -> None:

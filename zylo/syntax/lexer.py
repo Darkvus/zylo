@@ -12,7 +12,8 @@ KEYWORDS = {
     "fn", "if", "elif", "else", "while", "for", "in", "return", "break", "continue",
     "and", "or", "not", "true", "false", "struct", "enum", "match", "is", "none", "import", "from", "as", "extern", "pub",
 }
-TWO_CHAR = {"==", "!=", "<=", ">=", "->", "=>", "+=", "-=", "*=", "/=", "%="}
+THREE_CHAR = {"..="}
+TWO_CHAR = {"..", "==", "!=", "<=", ">=", "->", "=>", "+=", "-=", "*=", "/=", "%="}
 ONE_CHAR = set("+-*/%<>=(),:[].?{}|")
 ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", "\\": "\\", '"': '"', "'": "'"}
 
@@ -170,6 +171,9 @@ def _lex_line(line: str, i: int, lineno: int, out: list[Token]) -> None:
             j = _scan_string(line, i, lineno, col)
             out.append(Token("STR", unescape(line[i + 1:j], lineno, col + 1), lineno, col))
             i = j + 1
+        elif line[i:i + 3] in THREE_CHAR:
+            out.append(Token("OP", line[i:i + 3], lineno, col))
+            i += 3
         elif line[i:i + 2] in TWO_CHAR:
             out.append(Token("OP", line[i:i + 2], lineno, col))
             i += 2

@@ -28,7 +28,7 @@ the ones listed below. `tests/test_architecture.py` enforces it on every change.
 |---|---|---|
 | `domain` | nothing | The **ubiquitous language**: `ast` (syntax nodes), `types`, `builtins` (the catalog of built-in functions and methods, with the signatures and descriptions editors show) and `errors`. Pure: no input or output. |
 | `syntax` | domain | The lexer, the parser (with error recovery) and the formatter: text ⇄ syntax tree. |
-| `semantics` | domain, syntax, packaging | The type `checker`, the module `linker`, `derive` (the typed JSON functions the checker generates per type), `generics` (templates, inference and the copies the checker makes per type) and `navigation` (which name refers to what, for hover, definition and rename): what a program means. |
+| `semantics` | domain, syntax, packaging | The type `checker`, the module `linker`, `derive` (the typed JSON functions the checker generates per type), `exhaustive` (which values a `match` leaves unmatched and which arms can never run: Maranget's usefulness algorithm over nested patterns and integer ranges), `generics` (templates, inference and the copies the checker makes per type) and `navigation` (which name refers to what, for hover, definition and rename): what a program means. |
 | `generation` | domain | The code generator: typed program → Rust source. |
 | `packaging` | domain | `manifest` (zylo.toml), `lock`, virtual `env`ironments, the `installer`, and `rust_deps` validation. |
 | `stdlib` (data) | nothing | Not a layer: the `.zy` modules shipped with the compiler (`import std.json`), found by `packaging/stdlib.py`. |

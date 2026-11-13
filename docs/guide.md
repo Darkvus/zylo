@@ -589,10 +589,12 @@ print(describe(1), command("stop"), show(some(3)), unwrap_or_zero(err("x")), yes
 
 - Literal arms are integers (optionally negative), strings and `true` / `false`. Floats are not matched (equality on
   floats is a trap); use `if`.
-- A `match` on an `int` or `str` must end with a `_:` arm. A `match` on a `bool` is complete with both `true` and
+- A `match` on an `int` or `str` must end with a `_:` arm (an `int` match can also be complete with
+  [range patterns](#nested-patterns-and-ranges)). A `match` on a `bool` is complete with both `true` and
   `false`; `Option` needs `some` and `none`, `Result` needs `ok` and `err`; otherwise add `_:`.
 - As with enums, an arm that can never run (a repeated literal, a `_` after everything is covered) is an error.
-- `some(x)`, `ok(v)` and `err(e)` bind exactly one name (`_` ignores it). The bound names live inside the arm.
+- `some(x)`, `ok(v)` and `err(e)` hold exactly one pattern: a name that binds it, `_` that ignores it, or a nested
+  pattern. The bound names live inside the arm.
 - `is some` / `is ok` narrowing is unchanged and still the lighter way to test a single case.
 
 ### Guards and or-patterns
@@ -639,6 +641,94 @@ print(describe(Color.Red), describe(Color.Gray(4)), size(1), size(-3))
   data-less variants, combine freely. `_` cannot be an alternative, since it already matches everything.
 - Repeating a value or variant that an earlier unguarded arm (or alternative) already matched is an error.
 - With a guard, the whole arm is `Pattern | Pattern if cond:`: the guard applies to all alternatives.
+
+### Nested patterns and ranges
+
+Patterns nest: the data of a variant, the value inside `some` / `ok` / `err` and the elements of a tuple are patterns
+themselves. Inside another pattern a bare name binds the value, `_` ignores it and anything else (a literal, a range, a
+variant) tests it. An `int` can be matched against ranges: `1..5` (5 excluded), `1..=5` (5 included), `5..` (no upper
+end), `..5` and `..=5` (no lower end); the ends are integer literals, negative ones included. A `match` can also take a
+tuple, `match (a, b):`.
+
+```zylo
+enum Shape:
+    Circle(float?)
+    Rect(int, int)
+    Named(str, int?)
+
+fn describe(s: Shape) -> str:
+    match s:
+        Shape.Circle(some(r)):
+            return f"circle {r}"
+        Shape.Circle(none):
+            return "circle of unknown size"
+        Shape.Rect(0, _) | Shape.Rect(_, 0):
+            return "flat"
+        Shape.Rect(w, h) if w == h:
+            return f"square {w}"
+        Shape.Rect(w, h):
+            return f"{w} by {h}"
+        Shape.Named("sun", _):
+            return "the sun"
+        Shape.Named(name, some(n)):
+            return f"{name} #{n}"
+        Shape.Named(name, none):
+            return name
+
+fn age(n: int) -> str:
+    match n:
+        ..0:
+            return "invalid"
+        0..3:
+            return "baby"
+        3..=12:
+            return "child"
+        13..:
+            return "older"
+
+fn parse(r: Result[tuple[int, str], str]) -> str:
+    match r:
+        ok((0, label)):
+            return f"zero {label}"
+        ok((n, _)) if n < 0:
+            return "negative"
+        ok((n, label)):
+            return f"{label}: {n}"
+        err(e):
+            return e
+
+fn both(a: bool, b: int?) -> int:
+    match (a, b):
+        (true, some(1 | 2)):
+            return 1
+        (true, some(_)) | (_, none):
+            return 2
+        (false, some(n)):
+            return n
+
+print(describe(Shape.Rect(2, 2)), age(7), age(-1), parse(ok((3, "x"))), both(true, some(2)))
+```
+
+How a `match` with nested patterns is checked:
+
+- **Exhaustiveness is exact.** The compiler works out the values no arm matches and names them in the error, with `_`
+  for the parts that do not matter: `` `match` on Shape does not cover Shape.Circle(none) ``, or
+  `` `match` on int does not cover 0..=4 ``. Ranges can therefore cover a whole `int` without a `_:`
+  (`..0`, `0..=9`, `10..`), while a plain `int` or `str` match still needs one. As before, an arm with a guard never
+  counts.
+- **Unreachable arms are errors.** An arm (or one alternative of an or-pattern) that every earlier unguarded arm
+  already matches can never run: `this arm can never run`, or `` `some(1)` is matched twice `` when it repeats an earlier
+  pattern exactly. Overlapping ranges are fine as long as the later arm still matches something new.
+- **Or-patterns nest too**: `some(1 | 2)`, `(1 | 2, true)`. Every alternative binds the same names with the same types,
+  and `_` cannot be an alternative.
+- A name cannot be bound twice in one pattern, a range must contain at least one value (`5..5` is an error), and a
+  binding named like a variant of the enum it matches (`some(Red)`) is rejected: write `Color.Red` or pick another name.
+- Strings can be matched at any depth (`Shape.Named("sun", _)`); `str` has infinitely many values, so some arm must
+  still cover the rest.
+- Generic enums and functions work in patterns: `Opt.Some(some(x))` inside `fn pick[T](o: Opt[T?], d: T) -> T`.
+
+The algorithm is Maranget's usefulness check, documented in `zylo/semantics/exhaustive.py`. Struct patterns
+(`Point(x=0, y)`) are not part of the language yet.
 
 ## Option and Result
 
