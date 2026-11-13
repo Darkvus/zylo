@@ -1,18 +1,63 @@
-from std.math import pi, e, sin, cos, atan2, ln, log10, hypot, trunc, radians, degrees, clamp, clamp_int, sign, gcd, lcm
+from std.math import (
+    pi,
+    e,
+    sin,
+    cos,
+    atan2,
+    ln,
+    log10,
+    hypot,
+    trunc,
+    radians,
+    degrees,
+    clamp,
+    clamp_int,
+    sign,
+    gcd,
+    lcm,
+)
 import std.text as text
 import std.os as os
 
 print(f"{pi():.6f} {e():.6f}")
-print(f"{sin(0.0):.3f} {cos(0.0):.3f} {atan2(1.0, 1.0):.6f} {ln(e()):.3f} {log10(1000.0):.3f} {hypot(3.0, 4.0):.1f}")
+print(
+    f"{sin(0.0):.3f} {cos(0.0):.3f} {atan2(1.0, 1.0):.6f} {ln(e()):.3f} {log10(1000.0):.3f} {hypot(3.0, 4.0):.1f}",
+)
 print(trunc(-2.7), trunc(2.7), f"{degrees(pi()):.1f}", f"{radians(180.0):.6f}")
-print(clamp(5.5, 0.0, 1.0), clamp(-1.0, 0.0, 1.0), clamp_int(7, 1, 5), sign(-9), sign(0), sign(4))
+print(
+    clamp(5.5, 0.0, 1.0),
+    clamp(-1.0, 0.0, 1.0),
+    clamp_int(7, 1, 5),
+    sign(-9),
+    sign(0),
+    sign(4),
+)
 print(gcd(-12, 18), gcd(0, 5), lcm(4, 6), lcm(0, 3))
-print("[" + text.pad_left("7", 3, "0") + "]", "[" + text.pad_right("ab", 5, ".") + "]", "[" + text.center("ab", 7, "*") + "]")
+print(
+    "[" + text.pad_left("7", 3, "0") + "]",
+    "[" + text.pad_right("ab", 5, ".") + "]",
+    "[" + text.center("ab", 7, "*") + "]",
+)
 print("[" + text.pad_left("long", 2, "0") + "]", "[" + text.pad_left("x", 3, "") + "]")
 print("[" + text.lstrip("  hi  ") + "]", "[" + text.rstrip("  hi  ") + "]")
 print(text.capitalize("hELLO wORLD"), text.reverse("héllo"), text.capitalize(""))
-print(text.remove_prefix("foobar", "foo"), text.remove_suffix("foobar", "bar"), text.remove_prefix("foobar", "x"))
-print(text.is_digit("123"), text.is_digit("12a"), text.is_digit(""), text.is_alpha("héllo"), text.is_alnum("a1"), text.is_space(" \t"))
+print(
+    text.remove_prefix("foobar", "foo"),
+    text.remove_suffix("foobar", "bar"),
+    text.remove_prefix("foobar", "x"),
+)
+print(
+    text.is_digit("123"),
+    text.is_digit("12a"),
+    text.is_digit(""),
+    text.is_alpha("héllo"),
+    text.is_alnum("a1"),
+    text.is_space(" \t"),
+)
 print(text.split_once("key=a=b", "="), text.split_once("none", "="))
-print(os.env_or("ZYLO_SURELY_UNSET_VARIABLE", "fallback"), os.join_path("a", "b"), os.platform() != "")
+print(
+    os.env_or("ZYLO_SURELY_UNSET_VARIABLE", "fallback"),
+    os.join_path("a", "b"),
+    os.platform() != "",
+)
 print(os.is_dir("."), os.remove_file("/zylo/does/not/exist/file") is err)

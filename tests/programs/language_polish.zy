@@ -92,7 +92,11 @@ fn first_or(xs: list[int], d: int) -> int:
     return xs[0]
 
 print(Level.Low.score(), Level.Mid(4).score(), Level.High("hi", 3).score())
-print(Level.Mid(2).label(), Level.High("top", 1).label(prefix="Z"), Level.Low.label("Q"))
+print(
+    Level.Mid(2).label(),
+    Level.High("top", 1).label(prefix="Z"),
+    Level.Low.label("Q"),
+)
 print(Level.Mid(5).bumped(), Level.Mid(5).bumped(by=10), Level.Low.bumped())
 levels = [Level.Low, Level.Mid(2), Level.High("a", 9)]
 total = 0

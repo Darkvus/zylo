@@ -743,7 +743,7 @@ print(len(routes), point)
 
 A line that is not indented past the line that opened a bracket and does not start with a closing bracket is taken as
 the start of the next statement, so a forgotten `)` is reported where it happened. `zylo fmt` prints such a literal on
-one line (wrapping long lines is still an open question).
+one line when it fits in 88 columns and one item per line otherwise (see [the formatter](editors.md#the-formatter)).
 
 ### The `?` operator
 

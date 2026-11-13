@@ -48,7 +48,11 @@ print(evens, nums.any(fn(n) => n > 8), nums.all(fn(n) => n > 1))
 print(nums.find(fn(n) => n < 3), nums.find(fn(n) => n > 50))
 print(nums.fold("", fn(s, n) => s + str(n)), nums.reduce(fn(a, b) => max(a, b)))
 empty: list[int] = []
-print(empty.reduce(fn(a, b) => a + b), empty.all(fn(n) => n > 0), empty.any(fn(n) => n > 0))
+print(
+    empty.reduce(fn(a, b) => a + b),
+    empty.all(fn(n) => n > 0),
+    empty.any(fn(n) => n > 0),
+)
 pairs = ["bb", "a", "ccc"]
 pairs.sort_by(fn(s) => (len(s), s))
 print(pairs)

@@ -26,7 +26,14 @@ fn next(light: Light, event: Event) -> Light:
                     return Light.Red
 
 light = Light.Red
-events = [Event.Tick, Event.Tick, Event.Tick, Event.Emergency, Event.Repair(45), Event.Repair(5)]
+events = [
+    Event.Tick,
+    Event.Tick,
+    Event.Tick,
+    Event.Emergency,
+    Event.Repair(45),
+    Event.Repair(5),
+]
 for event in events:
     light = next(light, event)
     print(f"{event} -> {light}")

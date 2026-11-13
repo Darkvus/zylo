@@ -33,6 +33,13 @@ fn grade(score: int) -> str:
         _:
             return "keep trying"
 
-for t in [Token.Plus, Token.Num(-3), Token.Num(7), Token.Word("let"), Token.Word("x"), Token.Eof]:
+for t in [
+    Token.Plus,
+    Token.Num(-3),
+    Token.Num(7),
+    Token.Word("let"),
+    Token.Word("x"),
+    Token.Eof,
+]:
     print(describe(t))
 print(grade(100), grade(95), grade(81), grade(10))

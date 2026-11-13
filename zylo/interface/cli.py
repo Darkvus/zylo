@@ -14,7 +14,7 @@ from pathlib import Path
 from zylo import __version__
 from zylo.application import package_commands as pkg
 from zylo.application.compile import build_executable, compile_file, diagnose_source
-from zylo.application.format import format_paths, format_text
+from zylo.application.format import check_line_length, configured_line_length, format_paths, format_text
 from zylo.domain.errors import BackendError, PackageError, ZyloError
 from zylo.interface import lsp
 from zylo.interface.diagnostics import format_errors
@@ -63,6 +63,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("paths", nargs="+", type=Path, help="files or directories")
     sp.add_argument("--check", action="store_true", help="change nothing; exit 1 if any file would be reformatted")
     sp.add_argument("--stdout", action="store_true", help="print the formatted text of one file instead of rewriting it")
+    sp.add_argument("--line-length", type=int, metavar="N",
+                    help="wrap lines longer than N (default: [format] line-length in zylo.toml, or 88)")
     sub.add_parser("lsp", help="run the language server (Language Server Protocol over stdin/stdout) for editors")
     sp = sub.add_parser("init", help="create zylo.toml and src/main.zy in the current directory")
     sp.add_argument("name", nargs="?", help="package name (default: the directory name)")
@@ -95,17 +97,24 @@ def format_main(a: argparse.Namespace) -> int:
     Returns:
         0 on success; 1 if a file has a syntax error, or with `--check` if any file would change.
     """
+    try:
+        if a.line_length is not None:
+            check_line_length(a.line_length, "--line-length")
+    except ZyloError as e:
+        print(f"zylo: {e}", file=sys.stderr)
+        return 2
     if a.stdout:
         if len(a.paths) != 1 or not a.paths[0].is_file():
             print("zylo: --stdout needs exactly one file", file=sys.stderr)
             return 2
         try:
-            sys.stdout.write(format_text(a.paths[0].read_text()))
+            width = a.line_length or configured_line_length(a.paths[0])
+            sys.stdout.write(format_text(a.paths[0].read_text(), width))
         except ZyloError as e:
             print(format_errors([e], str(a.paths[0]), a.paths[0].read_text(), use_color()), file=sys.stderr)
             return 1
         return 0
-    result = format_paths(a.paths, check=a.check)
+    result = format_paths(a.paths, check=a.check, line_length=a.line_length)
     for e in result.errors:
         print(format_errors([e], e.file or "", None, use_color()), file=sys.stderr)
     for p in result.changed:

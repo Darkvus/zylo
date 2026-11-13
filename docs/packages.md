@@ -85,6 +85,9 @@ entry = "src/lib.zy"    # optional; libraries default to src/lib.zy, then lib.zy
 strutil = "github.com/ana/strutil@v1.2.0"        # git: <host/user/repo>[@ref]
 other   = "https://example.org/team/other.git@main"
 local   = { path = "../local-lib" }               # a directory on disk
+
+[format]
+line-length = 88        # optional; where `zylo fmt` wraps lines (see editors.md)
 ```
 
 `zylo add` and `zylo remove` rewrite `zylo.toml`, so comments in that file are not preserved.

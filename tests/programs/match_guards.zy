@@ -38,4 +38,14 @@ fn word(s: str, o: int?) -> int:
                 some(_) | none:
                     return 0
 
-print(name(Color.Red), name(Color.Rgb(3, 1)), name(Color.Gray(1)), num(2), num(3), num(-4), num(9), word("a", none), word("z", some(9)))
+print(
+    name(Color.Red),
+    name(Color.Rgb(3, 1)),
+    name(Color.Gray(1)),
+    num(2),
+    num(3),
+    num(-4),
+    num(9),
+    word("a", none),
+    word("z", some(9)),
+)

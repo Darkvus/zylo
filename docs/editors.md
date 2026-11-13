@@ -122,6 +122,7 @@ formatter = { command = "zylo", args = ["fmt", "--stdout"] }
 zylo fmt src/            # rewrite every .zy file under src/
 zylo fmt --check .       # exit 1 if anything would change (for CI)
 zylo fmt --stdout a.zy   # print the formatted text instead of rewriting
+zylo fmt --line-length 100 src/   # wrap at 100 columns instead of 88
 ```
 
 It prints the syntax tree again, so it can never change what a program means (the tests check the tree before and
@@ -129,6 +130,40 @@ after, and that formatting twice changes nothing). Comments are kept next to the
 The style: four-space indentation, one space around operators and after commas, double-quoted strings, one blank line
 around top-level definitions and between methods, and at most one blank line in a row. A comment at the end of a block
 moves to the indentation of the statement that follows it.
+
+### Line wrapping
+
+A line that would be longer than the line length (88 by default) is wrapped. The outermost construct is broken first,
+and each part is tried on one line again, so only as much is wrapped as needed:
+
+- Calls, struct constructors, method arguments and list / dict / set / tuple literals go one item per line, with a
+  trailing comma and the closing bracket on its own line.
+- Long `and` / `or` / arithmetic expressions and chains of two or more method calls break inside parentheses, one
+  operand or call per line (`.name(...)` lines start with the dot). A chain whose calls do not fit even one per line
+  breaks the arguments of the long call instead.
+- Function and method signatures, `extern fn` signatures and `from ... import` lists go one parameter or name per line;
+  an import list is written inside `(...)`.
+- A long `match` or-pattern is written inside parentheses, one alternative per line: `(A | B | C) if guard:`.
+- A tuple after `=` or `return` gets parentheses when it has to wrap. Strings and f-strings are never split.
+
+```zylo
+total = (
+    base_price * quantity
+    + shipping_cost(weight, destination)
+    - discount_for(customer, quantity)
+)
+```
+
+Set the width with `--line-length N`, or for a whole project in `zylo.toml` (the flag wins; the language server uses the
+setting too):
+
+```toml
+[format]
+line-length = 100
+```
+
+A trailing comment of a wrapped statement stays on its first line. Comments written between the items of a multi-line
+literal move below the statement, as before.
 
 ## Troubleshooting
 

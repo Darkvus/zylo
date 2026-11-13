@@ -369,11 +369,11 @@ class Parser:
             if in_struct and self._is_self_param():
                 self.advance()
                 has_self = True
-                if self.match("OP", ","):
+                if self.match("OP", ",") and not self.check("OP", ")"):
                     params.append(self.parse_param())
             else:
                 params.append(self.parse_param())
-            while self.match("OP", ","):
+            while self.match("OP", ",") and not self.check("OP", ")"):  # a trailing comma is allowed
                 params.append(self.parse_param())
         self.expect("OP", ")")
         ret = self.parse_type() if self.match("OP", "->") else None
@@ -462,17 +462,20 @@ class Parser:
         return node
 
     def parse_from_import(self) -> ast.FromImport:
-        """Parse `from a.b import x [as y], ...`."""
+        """Parse `from a.b import x [as y], ...`; the names may be wrapped in parentheses (one per line)."""
         kw = self.advance()
         module = self.parse_dotted()
         self.expect("KW", "import")
+        paren = self.match("OP", "(") is not None
         names: list[tuple[str, str | None]] = []
         while True:
             name = self.expect("IDENT").value
             alias = self.expect("IDENT").value if self.match("KW", "as") else None
             names.append((name, alias))
-            if not self.match("OP", ","):
+            if not self.match("OP", ",") or (paren and self.check("OP", ")")):
                 break
+        if paren:
+            self.expect("OP", ")")
         self.expect("NEWLINE")
         return ast.FromImport(module, names, line=kw.line, col=kw.col)
 
@@ -607,13 +610,17 @@ class Parser:
         """Parse one arm and its block.
 
         An arm is a pattern, optionally followed by more alternatives (`1 | 2`) and a guard (`if cond`), then a block.
+        The patterns may be wrapped in parentheses, which lets a long or-pattern span several lines.
 
         Raises:
             ZyloError: If the pattern is malformed.
         """
+        paren = self.match("OP", "(") is not None  # `(A | B | C)`: the form `zylo fmt` uses for long or-patterns
         arm = self.parse_pattern()
         while self.match("OP", "|"):
             arm.alts.append(self.parse_pattern())
+        if paren:
+            self.expect("OP", ")")
         if self.match("KW", "if"):
             arm.guard = self.parse_expr()
         arm.body = self.parse_block()
