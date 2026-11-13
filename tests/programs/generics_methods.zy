@@ -1,0 +1,110 @@
+struct Box[T]:
+    value: T
+
+    fn get(self) -> T:
+        return self.value
+
+    fn map[U](self, f: fn(T) -> U) -> Box[U]:
+        return Box(value=f(self.value))
+
+    fn pair[U](self, other: U) -> tuple[T, U]:
+        return self.value, other
+
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+    fn map[U](self, f: fn(T) -> U) -> Maybe[U]:
+        match self:
+            Maybe.Just(x):
+                return Maybe.Just(f(x))
+            Maybe.Nothing:
+                return Maybe.Nothing
+
+    fn or_else(self, fallback: T) -> T:
+        match self:
+            Maybe.Just(x):
+                return x
+            Maybe.Nothing:
+                return fallback
+
+struct Counter:
+    n: int
+
+    fn bump(self):
+        self.n = self.n + 1
+
+    fn show[T: Show](self, label: T) -> str:
+        return f"{label}={self.n}"
+
+    fn apply[T](self, x: T, f: fn(int, T) -> T) -> T:
+        return f(self.n, x)
+
+fn first[T](xs: list[T]) -> T:
+    return xs[0]
+
+fn twice[T](x: T, f: fn(T) -> T) -> T:
+    return f(f(x))
+
+fn map_all[T, U](xs: list[T], f: fn(T) -> U) -> list[U]:
+    out: list[U] = []
+    for x in xs:
+        append(out, f(x))
+    return out
+
+fn double[T: Num](x: T) -> T:
+    return x * 2
+
+fn add_one[T: Num](a: T) -> T:
+    return a + 1
+
+fn shifted[T: Num](a: T) -> T:
+    return 10 - a
+
+fn total[T: Num](xs: list[T]) -> T:
+    acc: T = 0
+    for x in xs:
+        acc = acc + x
+    return acc
+
+fn clamp_low[T: Num](x: T) -> T:
+    if x < 0:
+        return -1
+    return x
+
+fn len_of(s: str) -> int:
+    return len(s)
+
+# generic methods
+b = Box(value=21)
+print(b.map(fn(x) => x * 2).get())
+print(b.map(fn(x) => f"<{x}>").get())
+print(b.map[float](fn(x) => float(x) / 2.0).get())
+print(b.pair("a"), b.pair(true))
+m = Maybe.Just(3)
+print(m.map(fn(x) => x + 1).or_else(0))
+none_m: Maybe[int] = Maybe.Nothing
+print(none_m.map(fn(x) => f"v{x}").or_else("none"))
+c = Counter(n=0)
+c.bump()
+c.bump()
+print(c.show("hits"), c.show(7))
+print(c.apply("x", fn(n, s) => s + str(n)))
+
+# generic functions as values
+g = first[int]
+print(g([4, 5, 6]))
+h: fn(list[str]) -> str = first
+print(h(["p", "q"]))
+print(twice(3, double))
+print(twice(1.5, double))
+print(map_all([[1, 2], [3]], first))
+print(map_all(["a", "bb"], len_of))
+fs = [first[str], first[str]]
+print(fs[0](["z"]))
+
+# numeric literals
+print(add_one(1), add_one(1.5))
+print(shifted(3), shifted(2.5))
+print(total([1, 2, 3]), total([0.5, 0.25]))
+print(clamp_low(-5), clamp_low(-2.5), clamp_low(4))

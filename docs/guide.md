@@ -843,8 +843,9 @@ A type parameter that nothing determines is an error that tells you so (`cannot 
 **Write the arguments yourself** when you want to, or must: `first[int](xs)`, `Box[str](value="x")`,
 `Maybe[int].Nothing`, `util.first[Point](points)`, and in types `Box[int]`, `Pair[str, list[int]]`. The brackets after a
 name are read as type arguments when they hold types (built-in names or capitalised names) and a `(` or `.` follows;
-`table[key](x)` still indexes a variable. (`first[point](xs)` with a lowercase struct needs `first` to be generic in the
-same file, or let the compiler infer it.)
+`table[key](x)` still indexes a variable. A function cannot be indexed, so once the compiler knows that a name is a
+function, the brackets after it are type arguments whatever they hold: `first[point](xs)` and `pick[point, int](a, 1)`
+work with a lowercase struct even when `first` comes from another module.
 
 **The body is checked once, for every type.** Inside a generic definition a `T` can be stored, passed around and returned,
 but nothing more: `a > b`, `a + b`, `print(a)` or `a == b` on a plain `T` are errors, because some type might not allow them.
@@ -889,6 +890,104 @@ print(describe("a", "b"))                               # a differs from b
 Using a type that lacks the bound is reported where you call: `largest([Point(...)])` says that `Point` cannot be used
 for `T`, which is bound by `Ord`.
 
+### Generic methods
+
+A method can have type parameters of its own, besides those of its struct or enum. They are written after the method's
+name and inferred at the call like those of a function (or written: `b.map[str](f)`):
+
+```zylo
+struct Box[T]:
+    value: T
+
+    fn map[U](self, f: fn(T) -> U) -> Box[U]:
+        return Box(value=f(self.value))
+
+    fn pair[U](self, other: U) -> tuple[T, U]:
+        return (self.value, other)
+
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+    fn map[U](self, f: fn(T) -> U) -> Maybe[U]:
+        match self:
+            Maybe.Just(x):
+                return Maybe.Just(f(x))
+            Maybe.Nothing:
+                return Maybe.Nothing
+
+struct Log:
+    count: int
+
+    fn tag[T: Show](self, x: T) -> str:
+        return f"{x}#{self.count}"
+
+b = Box(value=21)
+print(b.map(fn(x) => x * 2).value)             # 42
+print(b.map(fn(x) => f"<{x}>").value)          # <21>
+print(b.map[float](fn(x) => float(x)).value)   # 21.0
+print(b.pair("a"))                             # (21, "a")
+print(Maybe.Just(2).map(fn(x) => x > 1))       # Just(true)
+print(Log(count=3).tag(2.5))                   # 2.5#3
+```
+
+A method's parameters may have bounds (`[T: Show]`) and must not reuse a name the struct or enum already declares. The
+body is checked once for every type, like any generic. Each list of type arguments a program uses makes an ordinary
+method of the struct or enum (`Box[int].map[str]`).
+
+### Generic functions as values
+
+A generic function can be passed around once its type arguments are decided: written (`first[int]`), or taken from the
+function type the context expects (a variable with a type, a parameter, a return type). It is an ordinary function value
+after that.
+
+```zylo
+fn first[T](xs: list[T]) -> T:
+    return xs[0]
+
+fn apply_all[T, U](xs: list[T], f: fn(T) -> U) -> list[U]:
+    out: list[U] = []
+    for x in xs:
+        append(out, f(x))
+    return out
+
+g = first[int]
+h: fn(list[str]) -> str = first
+print(g([4, 5]), h(["p", "q"]))                 # 4 p
+print(apply_all([[1, 2], [3]], first))          # [1, 3]
+```
+
+`g = first` alone is an error: nothing says which `T` is meant. Bounds are checked for the chosen types.
+
+### Numbers in generics
+
+An integer literal can take the type of a parameter bounded by `Num`: it is an `int` when `T` is `int` and a `float`
+when `T` is `float`. The other operand (or the declared type, or the other arguments of the call) says which `T` it is:
+
+```zylo
+fn add_one[T: Num](a: T) -> T:
+    return a + 1
+
+fn total[T: Num](xs: list[T]) -> T:
+    acc: T = 0
+    for x in xs:
+        acc = acc + x
+    return acc
+
+fn clamp[T: Num](x: T, low: T, high: T) -> T:
+    if x < low:
+        return low
+    if x > high:
+        return high
+    return x
+
+print(add_one(1), add_one(1.5))                 # 2 2.5
+print(total([1, 2, 3]), total([0.5, 0.25]))     # 6 0.75
+```
+
+Only integer literals work this way (a float literal would be wrong for `T = int`: compute in `float(a)` instead), and
+only with `Num`: `a + 1` on a `T: Ord` or a plain `T` is an error that says so.
+
 ### How generics compile
 
 Generics are **monomorphized**: for every list of type arguments a program uses, the compiler makes a copy of the
@@ -897,12 +996,13 @@ as fast as the specialised version and nothing is boxed. The same goes for `to_j
 generic struct (`Pair[int, Point]` has its own functions, and appears in schemas as `Pair_int_Point`). Generics work
 across modules and re-exports. See [design.md](design.md#generics) for the reasoning.
 
-- A generic function is called, not passed around: `g = first` is an error (wrap it: `fn(xs: list[int]) => first(xs)`).
-- A method cannot declare its own type parameters; declare them on the struct or enum.
+- A generic function used as a value needs its type arguments decided (`first[int]`, or an expected function type);
+  `g = first` is an error.
 - A generic that keeps instantiating itself with bigger types (`f[T]` calling `f[list[T]]`) is stopped with an error
   after 12 levels of nesting.
-- There are no user-defined bounds (traits), no default type arguments, and no numeric literals of type `T`
-  (write `a + b`, not `a + 1`).
+- There are no user-defined bounds (traits) and no default type arguments. Float literals cannot be a `T`.
+- In the editor, hovering a name inside a generic body shows its type with the bounds of the parameters it mentions and
+  the types the program instantiated them with.
 
 ## Typed JSON
 

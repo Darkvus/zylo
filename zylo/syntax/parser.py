@@ -64,6 +64,12 @@ def typey(t: ast.TypeRef) -> bool:
     return ok and all(typey(a) for a in t.args) and (t.ret is None or typey(t.ret))
 
 
+def builtin_only(t: ast.TypeRef) -> bool:
+    """Whether a parsed type is made only of built-in type names: `int`, `list[str]`, `(int, bool)`, `T?`."""
+    ok = t.name in BUILTIN_TYPE_NAMES or t.name == "?"
+    return ok and all(builtin_only(a) for a in t.args) and (t.ret is None or builtin_only(t.ret))
+
+
 class Parser:
     """Recursive-descent parser over a token list.
 
@@ -388,9 +394,6 @@ class Parser:
         name_tok = self.expect("IDENT")
         name = name_tok.value
         tparams = self.parse_tparams()
-        if tparams and in_struct:
-            raise ZyloError("a method cannot have its own type parameters; declare them on the struct or enum",
-                            tparams[0].line, tparams[0].col)
         if tparams and extern:
             raise ZyloError("an `extern fn` cannot be generic", tparams[0].line, tparams[0].col)
         self.expect("OP", "(")
@@ -835,6 +838,10 @@ class Parser:
             self.pos = start
             return None
         nxt = self.cur
+        # a generic function of this file, or only built-in types, can also be used as a value: `g = first[int]`
+        value_use = name in self.generics or all(builtin_only(a) for a in args)
+        if value_use:
+            return args
         if nxt.kind != "OP" or nxt.value not in follow or not (name in self.generics or all(typey(a) for a in args)):
             self.pos = start
             return None
@@ -934,6 +941,8 @@ class Parser:
                     self.expect("OP", "]")
                     expr = ast.Slice(expr, lo, hi, line=lb.line, col=lb.col)
                     continue
+                if self.check("OP", ",") and lo is not None:
+                    lo = self.index_list(lo)
                 self.expect("OP", "]")
                 expr = ast.Index(expr, lo, line=lb.line, col=lb.col)
             elif self.check("OP", "?"):
@@ -956,6 +965,21 @@ class Parser:
                     expr = ast.Attr(expr, name.value, targs=targs or [], line=name.line, col=name.col)
             else:
                 return expr
+
+    def index_list(self, first: ast.Expr) -> ast.Expr:
+        """Read `a, b` inside brackets that are followed by `(`: type arguments of a generic function named by lowercase types.
+
+        `pick[point, int](xs)` cannot be told from an index until the linker knows what `pick` is, so the list is kept as a
+        tuple, which the linker turns into type arguments. Anywhere else a comma in brackets is still a syntax error.
+        """
+        start = self.pos
+        items = [first]
+        while self.match("OP", ","):
+            items.append(self.parse_expr())
+        if not (self.check("OP", "]") and self.peek().kind == "OP" and self.peek().value == "("):
+            self.pos = start
+            return first
+        return ast.TupleLit(items, bare=True, line=first.line, col=first.col)
 
     def parse_primary(self) -> ast.Expr:
         """Parse a literal, name, call, parenthesised expression or tuple, list, dict or set display.

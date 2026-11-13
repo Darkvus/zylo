@@ -216,6 +216,25 @@ class Resolution:
 
 # ---- types from the checker ---------------------------------------------------------------------------------
 
+@dataclass
+class Template:
+    """A generic definition (or generic method) of the checked program, for hover.
+
+    Attributes:
+        name: The definition's name as written.
+        params: Each type parameter with its bounds.
+        insts: The types each parameter was instantiated with in the program (empty when it never was).
+        start: First line of the definition.
+        end: Last line of the definition.
+    """
+
+    name: str
+    params: list[tuple[str, list[str]]]
+    insts: dict[str, list[str]]
+    start: int
+    end: int
+
+
 class Types:
     """The types the checker found, by source position.
 
@@ -223,6 +242,7 @@ class Types:
         expr: The type of each expression, by `(file, line, col)`.
         binders: The type of each parameter, loop variable and pattern variable, by `(file, kind, line, col, index)`.
         owners: For every struct and enum of the linked program, the file and name that define it, by linked name.
+        templates: The generic definitions, by `(file, line, column)` of the definition.
     """
 
     def __init__(self) -> None:
@@ -230,6 +250,7 @@ class Types:
         self.expr: dict[tuple[Path, int, int], Type] = {}
         self.binders: dict[tuple, Type] = {}
         self.owners: dict[str, tuple[Path, str]] = {}
+        self.templates: dict[tuple[Path, int, int], Template] = {}
 
     @classmethod
     def from_link(cls, linker: Linker) -> "Types":
@@ -253,6 +274,10 @@ class Types:
 
     def collect(self, f: Path, n: ast.Node) -> None:
         """Record what one node tells about types."""
+        if isinstance(n, (ast.FnDef, ast.StructDef, ast.EnumDef)) and n.tparams and n.line:
+            end = max((x.line for x in ast.walk(n) if x.line), default=n.line)
+            self.templates[(f, n.line, n.col)] = Template(
+                show_name(n.name), [(p.name, list(p.bounds)) for p in n.tparams], getattr(n, "tinst", {}), n.line, end)
         if isinstance(n, EXPRESSIONS) and n.ty is not None and n.line:
             self.expr[(f, n.line, n.col)] = n.ty
         elif isinstance(n, ast.Param) and n.info is not None:
@@ -265,6 +290,15 @@ class Types:
             for i, v in enumerate(n.vars):
                 if v is not None:
                     self.binders[(f, "match", n.line, n.col, i)] = v.ty
+
+    def enclosing(self, path: Path, line: int) -> list[Template]:
+        """The generic definitions a line is inside, innermost first (a generic method is inside its generic struct)."""
+        found = [t for (f, _, _), t in self.templates.items() if f == path and t.start <= line <= t.end]
+        return sorted(found, key=lambda t: t.end - t.start)
+
+    def template_at(self, path: Path, line: int, col: int) -> Template | None:
+        """The generic definition that starts at a position."""
+        return self.templates.get((path, line, col))
 
     def at(self, path: Path, line: int, col: int) -> Type | None:
         """The type of the expression at a position, or None when the checker did not type it."""
@@ -279,6 +313,11 @@ class Types:
         if isinstance(t, (StructT, EnumT)):
             return self.owners.get(t.base or t.name)  # an instance of a generic belongs to its generic
         return None
+
+
+def show_name(name: str) -> str:
+    """A linked name `module·T` as written."""
+    return re.sub(r"(?:\w+\u00b7)+", "", name)
 
 
 def show_type(t: Type) -> str:

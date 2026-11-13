@@ -105,8 +105,8 @@ def test_type_arguments_of_a_generic_of_this_file_may_be_lowercase():
 
 
 def test_parse_errors():
-    with pytest.raises(ZyloError, match="own type parameters"):
-        parse("struct S[T]:\n    a: T\n\n    fn m[U](self, u: U):\n        return\n")
+    with pytest.raises(ZyloError, match="cannot be generic"):
+        parse("extern fn f[T](x: T) = \"x\"\n")
     with pytest.raises(ZyloError, match="duplicate type parameter"):
         parse("fn f[T, T](x: T):\n    return\n")
     with pytest.raises(ZyloError):
@@ -197,7 +197,7 @@ def test_uninferable_type_parameter():
 
 
 def test_mismatched_arguments():
-    fails("fn same[T](a: T, b: T) -> T:\n    return a\nx = same(1, \"a\")\n", "argument 2 of same: expected int, got str", 3)
+    fails("fn same[T](a: T, b: T) -> T:\n    return a\nx = same(1, \"a\")\n", "argument 1 of same: expected str, got int", 3)
     fails(LIB + "x = Box(value=1, other=2)\n", "has no field 'other'")
     fails(LIB + "x = first(1)\n", "expected list\\[T\\], got int")
 
@@ -238,7 +238,7 @@ def test_unknown_bound_and_duplicate_names():
 
 
 def test_a_generic_function_is_not_a_value_and_a_generic_enum_is_not_a_call():
-    fails("fn f[T](a: T) -> T:\n    return a\ng = f\n", "generic function and cannot be used as a value", 3)
+    fails("fn f[T](a: T) -> T:\n    return a\ng = f\n", "cannot infer type parameter T of f used as a value", 3)
     fails(LIB + "x = Opt(1)\n", "'Opt' is an enum")
 
 

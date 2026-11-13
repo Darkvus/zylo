@@ -1,0 +1,73 @@
+# Generic methods, generic functions as values, and numbers inside generics: a Maybe[T] whose `map` and
+# `and_then` change the type, `first` passed where a function is expected, and arithmetic that works for int and float.
+
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+    fn map[U](self, f: fn(T) -> U) -> Maybe[U]:
+        match self:
+            Maybe.Just(x):
+                return Maybe.Just(f(x))
+            Maybe.Nothing:
+                return Maybe.Nothing
+
+    fn and_then[U](self, f: fn(T) -> Maybe[U]) -> Maybe[U]:
+        match self:
+            Maybe.Just(x):
+                return f(x)
+            Maybe.Nothing:
+                return Maybe.Nothing
+
+    fn or_else(self, fallback: T) -> T:
+        match self:
+            Maybe.Just(x):
+                return x
+            Maybe.Nothing:
+                return fallback
+
+fn parse_age(text: str) -> Maybe[int]:
+    n = parse_int(text)
+    if n is none:
+        return Maybe.Nothing
+    return Maybe.Just(n)
+
+fn adult(age: int) -> Maybe[int]:
+    if age >= 18:
+        return Maybe.Just(age)
+    return Maybe.Nothing
+
+fn first[T](xs: list[T]) -> T:
+    return xs[0]
+
+fn apply_all[T, U](xs: list[T], f: fn(T) -> U) -> list[U]:
+    out: list[U] = []
+    for x in xs:
+        append(out, f(x))
+    return out
+
+fn clamp[T: Num](x: T, low: T, high: T) -> T:
+    if x < low:
+        return low
+    if x > high:
+        return high
+    return x
+
+fn squares_plus_one[T: Num](xs: list[T]) -> T:
+    total: T = 0
+    for x in xs:
+        total = total + x * x + 1
+    return total
+
+for text in ["42", "17", "abc", "30"]:
+    verdict = parse_age(text).and_then(adult).map(fn(a) => f"adult, {a} years")
+    print(text, "->", verdict.or_else("rejected"))
+
+lists = [[3, 1], [4, 1, 5], [9]]
+print(apply_all(lists, first))
+print(apply_all([[0.5, 1.5], [2.5]], first))
+pick: fn(list[str]) -> str = first
+print(pick(["x", "y"]), first[bool]([true, false]))
+
+print(clamp(15, 0, 10), clamp(-3, 0, 10), clamp(2.5, 0.0, 1.0), clamp(0.25, 0.0, 1.0))
+print(squares_plus_one([1, 2, 3]), squares_plus_one([0.5, 1.5]))

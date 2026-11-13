@@ -226,6 +226,43 @@ def variable_type(ent: Entity, ref: Ref, res: Resolution) -> str | None:
     return None
 
 
+def _param_note(res: Resolution, templates: list, shown: str | None, always: bool = False) -> str:
+    """What hover adds about the type parameters in a shown type: their bounds and what the program instantiated them with.
+
+    Args:
+        res: The resolution of the file.
+        templates: The generic definitions that declare the parameters in question, innermost first.
+        shown: The text of a type; only parameters it mentions are described (None or `always`: all of them).
+        always: Describe every parameter of `templates`.
+
+    Returns:
+        Markdown lines (empty when no type parameter is involved).
+    """
+    words = set(re.findall(r"\w+", shown or ""))
+    lines: list[str] = []
+    for tpl in templates:
+        for name, bounds in tpl.params:
+            if not (always or name in words):
+                continue
+            head = f"`{name}: {' + '.join(bounds)}`" if bounds else f"`{name}`"
+            seen = tpl.insts.get(name)
+            used = f"instantiated with {', '.join(f'`{t}`' for t in seen)}" if seen else "not instantiated anywhere in this program"
+            lines.append(f"{head}, a type parameter of `{tpl.name}`: {used}")
+    return "\n\n" + "\n\n".join(lines) if lines else ""
+
+
+def _template_note(ent: Entity, res: Resolution, node: ast.Node | None, shown: str | None = None) -> str:
+    """The type-parameter note for a definition: its own parameters, and those of the struct or enum around a method."""
+    if res.types is None or node is None or ent is None:
+        return ""
+    found = []
+    for n in (node, getattr(ent.owner, "node", None) if ent.owner is not None and ent.owner.node is not node else None):
+        tpl = res.types.template_at(ent.path or res.index.path, n.line, n.col) if n is not None else None
+        if tpl is not None:
+            found.append(tpl)
+    return _param_note(res, found, shown, always=shown is None)
+
+
 def _describe(project: Project, ent: Entity, ref: Ref, res: Resolution) -> str:
     """The Markdown shown when hovering a name."""
     ent = deref(ent) or ent
@@ -236,25 +273,27 @@ def _describe(project: Project, ent: Entity, ref: Ref, res: Resolution) -> str:
         if ent.kind == "self":
             ty = variable_type(ent, ref, res) or (ent.target.name if ent.target else None)
         label = {"variable": "variable", "parameter": "parameter", "self": "self"}[ent.kind]
-        return f"```zylo\n({label}) {ent.name}{': ' + ty if ty else ''}\n```"
+        note = _param_note(res, res.types.enclosing(res.index.path, ref.line), ty) if res.types is not None else ""
+        return f"```zylo\n({label}) {ent.name}{': ' + ty if ty else ''}\n```{note}"
     if ent.kind == "function" and isinstance(node, ast.FnDef):
-        return f"```zylo\n{signature_text(node)}\n```{_doc_block(node)}"
+        return f"```zylo\n{signature_text(node)}\n```{_doc_block(node)}{_template_note(ent, res, node)}"
     if ent.kind == "method" and isinstance(node, ast.FnDef):
-        return f"```zylo\n{_fn_text(node, owner)}\n```{_doc_block(node)}"
+        return f"```zylo\n{_fn_text(node, owner)}\n```{_doc_block(node)}{_template_note(ent, res, node)}"
     if ent.kind == "struct" and isinstance(node, ast.StructDef):
         fields = "".join(f"\n    {f.name}: {type_text(f.type)}" + (f" = {expr_text(f.default)}" if f.default is not None else "")
                          for f in node.fields)
-        return f"```zylo\nstruct {ent.name}{tparams_text(node.tparams)}{fields}\n```{_doc_block(node)}"
+        return f"```zylo\nstruct {ent.name}{tparams_text(node.tparams)}{fields}\n```{_doc_block(node)}{_template_note(ent, res, node)}"
     if ent.kind == "enum" and isinstance(node, ast.EnumDef):
         variants = "".join(f"\n    {v.name}" + (f"({', '.join(type_text(t) for t in v.fields)})" if v.fields else "")
                            for v in node.variants)
-        return f"```zylo\nenum {ent.name}{tparams_text(node.tparams)}{variants}\n```{_doc_block(node)}"
+        return f"```zylo\nenum {ent.name}{tparams_text(node.tparams)}{variants}\n```{_doc_block(node)}{_template_note(ent, res, node)}"
     if ent.kind == "variant" and isinstance(node, ast.Variant):
         data = f"({', '.join(type_text(t) for t in node.fields)})" if node.fields else ""
         return f"```zylo\n{owner}.{ent.name}{data}\n```{_doc_block(node)}"
     if ent.kind == "field" and isinstance(node, ast.Field):
         default = f" = {expr_text(node.default)}" if node.default is not None else ""
-        return f"```zylo\n(field) {owner}.{ent.name}: {type_text(node.type)}{default}\n```{_doc_block(node)}"
+        note = _template_note(ent.owner, res, ent.owner.node, type_text(node.type)) if ent.owner is not None else ""
+        return f"```zylo\n(field) {owner}.{ent.name}: {type_text(node.type)}{default}\n```{_doc_block(node)}{note}"
     if ent.kind == "module":
         where = f"\n\n{ent.module_path}" if ent.module_path else ""
         return f"```zylo\nmodule {ent.name}\n```{where}"
