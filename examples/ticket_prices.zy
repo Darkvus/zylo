@@ -1,0 +1,68 @@
+# Nested patterns and integer ranges in `match`.
+
+enum Payment:
+    Cash(int)
+    Card(str, int?)
+    Voucher(int?)
+
+fn band(age: int) -> str:
+    match age:
+        ..0:
+            return "invalid"
+        0..3:
+            return "free"
+        3..=12:
+            return "child"
+        13..=64:
+            return "adult"
+        65..:
+            return "senior"
+
+fn price(age: int) -> int:
+    match age:
+        ..3:
+            return 0
+        3..=12 | 65..:
+            return 8
+        _:
+            return 15
+
+fn surcharge(p: Payment) -> int:
+    match p:
+        Payment.Cash(_):
+            return 0
+        Payment.Card("amex", some(months)) if months > 6:
+            return 5
+        Payment.Card("amex", _):
+            return 3
+        Payment.Card(_, some(_)):
+            return 2
+        Payment.Card(_, none):
+            return 1
+        Payment.Voucher(some(0)) | Payment.Voucher(none):
+            return 0
+        Payment.Voucher(some(amount)):
+            return -amount
+
+fn check(age: int, p: Payment) -> str:
+    match (band(age), p):
+        ("invalid", _):
+            return "rejected"
+        ("free", Payment.Voucher(_)):
+            return "no voucher needed"
+        (b, _):
+            return f"{b}: {price(age) + surcharge(p)}"
+
+orders: list[tuple[int, Payment]] = [
+    (-1, Payment.Cash(0)),
+    (2, Payment.Voucher(none)),
+    (2, Payment.Cash(10)),
+    (10, Payment.Card("amex", some(12))),
+    (30, Payment.Card("amex", some(3))),
+    (30, Payment.Card("visa", some(3))),
+    (30, Payment.Card("visa", none)),
+    (70, Payment.Voucher(some(0))),
+    (70, Payment.Voucher(some(4))),
+]
+for age, p in orders:
+    print(check(age, p))

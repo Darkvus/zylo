@@ -537,39 +537,68 @@ class EnumDef(Node):
 
 
 @dataclass
-class MatchArm(Node):
-    """One arm of a `match`, followed by its block.
+class Pattern(Node):
+    """One pattern of a `match` arm; patterns nest (`Shape.Circle(some(r))`, `ok((a, b))`, `some(1..=5)`).
 
-    The pattern is one of: `Enum.Variant(a, b)`, a literal (`0`, `"a"`, `true`), `some(x)` / `none` / `ok(v)` /
-    `err(e)`, or `_` for everything else.
+    The kinds, in `kind`:
+
+    - `wild`: `_`, matches anything and binds nothing.
+    - `bind`: a name, matches anything and binds it (only inside another pattern).
+    - `lit`: an `int`, `str` or `bool` literal (`literal`).
+    - `range`: an integer range `lo..hi`, `lo..=hi`, `lo..`, `..hi` or `..=hi`; a missing bound is None.
+    - `enum`: `Enum.Variant` or `Enum.Variant(p, ...)` (`type`, `name`, `subs`).
+    - `some` / `none` / `ok` / `err`: the `Option` and `Result` patterns (`subs` holds the one inner pattern).
+    - `tuple`: `(p, q, ...)` (`subs`).
+    - `or`: `p | q` (`subs` holds the alternatives); inside brackets or at the top of an arm.
 
     Attributes:
-        type: The enum as written (`Shape` or `mod.Shape`) for a variant pattern, otherwise None.
-        variant: The variant name, `some` / `none` / `ok` / `err`, `_`, or `literal` for a literal pattern.
-        binds: Names bound to the variant's data, in order.
-        body: Statements of the arm.
-        vars: The variables for `binds` (set by the checker).
-        literal: The literal expression of a literal pattern, otherwise None.
-        alts: The further alternatives of an or-pattern (`1 | 2 | 3`); each is a pattern-only arm with an empty
-            body. The arm itself holds the first alternative.
-        guard: The condition of `Pattern if cond:`, otherwise None.
+        kind: One of the kinds above.
+        name: The bound name (`bind`) or the variant name (`enum`).
+        type: The enum as written (`Shape`, `mod.Shape`, `Opt[int]`) for an `enum` pattern, otherwise None.
+        subs: Sub-patterns: the data of a variant, the elements of a tuple, the alternatives of an `or`.
+        literal: The literal of a `lit` pattern.
+        lo: The lower bound of a `range` (None when open).
+        hi: The upper bound of a `range` (None when open).
+        inclusive: Whether the upper bound of a `range` is included (`..=`).
+        enum: The (mangled) enum this pattern matches, set by the checker for an `enum` pattern.
+        ty: (inherited) the type of the value this pattern matches, set by the checker.
     """
-    type: TypeRef | None
-    variant: str
-    binds: list[str]
-    body: list["Stmt"]
-    vars: list = field(default_factory=list)
+    kind: str
+    name: str = ""
+    type: TypeRef | None = None
+    subs: list["Pattern"] = field(default_factory=list)
     literal: "Expr | None" = None
-    alts: list["MatchArm"] = field(default_factory=list)
+    lo: "Expr | None" = None
+    hi: "Expr | None" = None
+    inclusive: bool = False
+    enum: str | None = None
+
+
+@dataclass
+class MatchArm(Node):
+    """One arm of a `match`: a pattern, an optional guard and a block.
+
+    Attributes:
+        pattern: The pattern; an `or` pattern for `1 | 2`.
+        body: Statements of the arm.
+        guard: The condition of `Pattern if cond:`, otherwise None.
+        binds: The names the pattern binds, in order of first appearance (every alternative of an or-pattern binds
+            the same names); set by the checker.
+        vars: The variables for `binds` (set by the checker).
+    """
+    pattern: Pattern
+    body: list["Stmt"]
     guard: "Expr | None" = None
+    binds: list[str] = field(default_factory=list)
+    vars: list = field(default_factory=list)
 
 
 @dataclass
 class Match(Node):
-    """`match value:` on an enum, `int`, `str`, `bool`, `Option` or `Result`; it must be exhaustive.
+    """`match value:` on an enum, `int`, `str`, `bool`, `Option`, `Result` or tuple; it must be exhaustive.
 
-    Arms may carry a guard (`Pattern if cond:`) and or-patterns (`1 | 2:`); a guarded arm does not count toward
-    exhaustiveness.
+    Arms may carry a guard (`Pattern if cond:`), or-patterns (`1 | 2:`), nested patterns and integer ranges; a
+    guarded arm does not count toward exhaustiveness.
     """
     value: "Expr"
     arms: list[MatchArm]
@@ -599,6 +628,26 @@ Stmt = (ExprStmt | Assign | Unpack | If | While | For | Return | Break | Continu
 class Program(Node):
     """A whole program: the statements of one module, or of all modules after linking."""
     body: list[Stmt]
+
+
+INT_MIN = -(2 ** 63)
+INT_MAX = 2 ** 63 - 1
+
+
+def literal_int(e: "Expr") -> int:
+    """The value of an integer literal pattern, `-3` included."""
+    if isinstance(e, UnaryOp):
+        return -e.operand.value
+    return e.value
+
+
+def range_bounds(p: Pattern) -> tuple[int, int]:
+    """The first and last integer of a `range` pattern, both included (it may be empty: `lo > hi`)."""
+    lo = literal_int(p.lo) if p.lo is not None else INT_MIN
+    if p.hi is None:
+        return lo, INT_MAX
+    hi = literal_int(p.hi)
+    return lo, hi if p.inclusive else hi - 1
 
 
 # ---- generic traversal -----------------------------------------------------------------------

@@ -288,8 +288,7 @@ class Types:
                 self.binders[(f, "for", n.line, n.col, i)] = info.ty
         elif isinstance(n, ast.MatchArm):
             for i, v in enumerate(n.vars):
-                if v is not None:
-                    self.binders[(f, "match", n.line, n.col, i)] = v.ty
+                self.binders[(f, "match", n.line, n.col, i)] = v.ty
 
     def enclosing(self, path: Path, line: int) -> list[Template]:
         """The generic definitions a line is inside, innermost first (a generic method is inside its generic struct)."""
@@ -790,14 +789,13 @@ class Walker:
             self.visit(st)
         self.pop()
 
-    def pattern_tokens(self, arm: ast.MatchArm) -> tuple[list[Token], list[Token]]:
-        """The tokens of a pattern's `Enum.Variant` path and of the names it binds."""
-        i = self.fx.tok_at.get((arm.line, arm.col))
+    def pattern_path(self, p: ast.Pattern) -> list[Token]:
+        """The tokens of an `Enum.Variant` pattern's path (`mod.Enum.Variant`)."""
+        i = self.fx.tok_at.get((p.line, p.col))
         t = self.fx.tok(i) if i is not None else None
         if i is None or t is None or t.kind != "IDENT":
-            return [], []
+            return []
         parts, j = self.fx.dotted(i)
-        binds: list[Token] = []
         nxt = self.fx.tok(j)
         if nxt is not None and nxt.kind == "OP" and nxt.value == "[":  # `Opt[int].Some(x)`: skip the type arguments
             depth = 0
@@ -810,45 +808,49 @@ class Walker:
             variant = self.fx.tok(j + 1)
             if nxt is not None and nxt.value == "." and variant is not None and variant.kind == "IDENT":
                 parts.append(variant)
-                j += 2
-                nxt = self.fx.tok(j)
-        if nxt is not None and nxt.kind == "OP" and nxt.value == "(":
-            j += 1
-            while (b := self.fx.tok(j)) is not None and b.kind == "IDENT":
-                binds.append(b)
-                j += 2
-        return parts, binds
+        return parts
 
-    def pattern(self, arm: ast.MatchArm, shared: list[Entity] | None) -> list[Entity]:
-        """Resolve one pattern; the first of an or-pattern declares the names, the others use the same variables."""
-        if arm.variant == "literal":
-            if arm.literal is not None:
-                self.visit(arm.literal)
-            return []
-        parts, binds = self.pattern_tokens(arm)
-        if arm.type is not None:
-            for a in arm.type.args:
+    def pattern(self, p: ast.Pattern, arm: ast.MatchArm, made: dict[str, Entity]) -> None:
+        """Resolve a pattern and the patterns inside it.
+
+        The first appearance of a name declares it; later ones (the other alternatives of an or-pattern) use the same
+        variable.
+
+        Args:
+            p: The pattern.
+            arm: The arm it belongs to; its position keys the variables' types.
+            made: The variables declared so far, by name.
+        """
+        if p.kind == "lit":
+            self.visit(p.literal)
+        elif p.kind == "range":
+            for end in (p.lo, p.hi):
+                if end is not None:
+                    self.visit(end)
+        elif p.kind == "bind":
+            t = self.fx.tok(self.fx.tok_at.get((p.line, p.col)))
+            if t is not None and t.value == p.name:
+                if p.name in made:
+                    self.tok_ref(t, made[p.name], decl=True)
+                else:
+                    ent = Entity("variable", p.name, ("var", self.path, t.line, t.col), self.path, t.line, t.col,
+                                 type_key=("match", arm.line, arm.col, len(made)))
+                    self.declare(ent, t)
+                    made[p.name] = ent
+        elif p.kind == "enum":
+            parts = self.pattern_path(p)
+            for a in p.type.args:
                 self.typeref(a)
-        if arm.type is not None and len(parts) >= 2:
-            enum = deref(self.qualified(parts[:-1]))
-            self.tok_ref(parts[-1], self.project.member(enum, arm.variant) if enum else None, space="member")
-        made: list[Entity] = []
-        for k, t in enumerate(binds):
-            if shared is None:
-                ent = Entity("variable", t.value, ("var", self.path, t.line, t.col), self.path, t.line, t.col,
-                             type_key=("match", arm.line, arm.col, k))
-                self.declare(ent, t)
-                made.append(ent)
-            elif k < len(shared):
-                self.tok_ref(t, shared[k], decl=True)
-        return made
+            if len(parts) >= 2:
+                enum = deref(self.qualified(parts[:-1]))
+                self.tok_ref(parts[-1], self.project.member(enum, p.name) if enum else None, space="member")
+        for sub in p.subs:
+            self.pattern(sub, arm, made)
 
     def arm(self, arm: ast.MatchArm) -> None:
-        """Resolve a `match` arm: its pattern(s), guard and body, in a scope of their own."""
+        """Resolve a `match` arm: its pattern, guard and body, in a scope of their own."""
         self.push()
-        made = self.pattern(arm, None)
-        for alt in arm.alts:
-            self.pattern(alt, made)
+        self.pattern(arm.pattern, arm, {})
         if arm.guard is not None:
             self.visit(arm.guard)
         for s in arm.body:

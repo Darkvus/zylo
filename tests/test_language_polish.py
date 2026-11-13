@@ -73,14 +73,14 @@ def test_parse_match_patterns():
     src = "match x:\n    1:\n        pass\n    -2:\n        pass\n    \"a\":\n        pass\n    true:\n        pass\n"
     src += "    some(v):\n        pass\n    none:\n        pass\n    ok(v):\n        pass\n    err(_):\n        pass\n    _:\n        pass\n"
     arms = parse(src.replace("pass", "print(1)")).body[0].arms
-    assert [a.variant for a in arms] == ["literal"] * 4 + ["some", "none", "ok", "err", "_"]
-    assert arms[1].literal.op == "-" and arms[4].binds == ["v"]
+    assert [a.pattern.kind for a in arms] == ["lit"] * 4 + ["some", "none", "ok", "err", "wild"]
+    assert arms[1].pattern.literal.op == "-" and arms[4].pattern.subs[0].name == "v"
 
 
 def test_parse_errors():
     with pytest.raises(ZyloError, match="positional arguments must come before named"):
         parse("f(a=1, 2)\n")
-    with pytest.raises(ZyloError, match="binds exactly one name"):
+    with pytest.raises(ZyloError, match="holds exactly one pattern"):
         parse("match x:\n    some:\n        print(1)\n")
     with pytest.raises(ZyloError, match="write the enum before the variant"):
         parse("match x:\n    Circle:\n        print(1)\n")

@@ -19,8 +19,8 @@ def fails(src: str, match: str) -> None:
 def test_parse_guard_and_alternatives():
     m = parse("x = 1\nmatch x:\n    1 | 2 | 3 if x > 1:\n        print(1)\n    _:\n        print(2)\n").body[1]
     arm = m.arms[0]
-    assert len(arm.alts) == 2 and isinstance(arm.guard, ast.BinOp)
-    assert m.arms[1].guard is None and not m.arms[1].alts
+    assert arm.pattern.kind == "or" and len(arm.pattern.subs) == 3 and isinstance(arm.guard, ast.BinOp)
+    assert m.arms[1].guard is None and m.arms[1].pattern.kind == "wild"
 
 
 def test_formatter_round_trips():

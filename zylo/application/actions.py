@@ -93,8 +93,9 @@ def block_end(lines: list[str], first: int) -> int:
 def enum_qualifier(project: Project, fx: FileIndex, match: ast.Match, owner: tuple[Path, str]) -> str:
     """How the enum is written in this file: as the arms already write it, else by its import, else its bare name."""
     for arm in match.arms:
-        if arm.type is not None:
-            return arm.type.name
+        for n in ast.walk(arm.pattern):
+            if isinstance(n, ast.Pattern) and n.type is not None:
+                return n.type.name
     path, name = owner
     if path == fx.path:
         return name
@@ -131,10 +132,11 @@ def match_fixes(project: Project, path: Path, line: int) -> list[CodeAction]:
     enum = owner_fx.defs.get(owner[1]) if owner_fx and owner else None
     if not isinstance(enum, ast.EnumDef):
         return []
-    arms = [a for arm in match.arms for a in (arm, *arm.alts)]
-    if any(a.variant == "_" and a.guard is None for a in arms):
+    alts = [(arm, a) for arm in match.arms for a in (arm.pattern.subs if arm.pattern.kind == "or" else [arm.pattern])]
+    if any(a.kind == "wild" and arm.guard is None for arm, a in alts):
         return []
-    covered = {a.variant for a in arms if a.guard is None}
+    # a variant counts as covered when an unguarded arm matches it whatever it carries
+    covered = {a.name for arm, a in alts if arm.guard is None and a.kind == "enum" and all(irrefutable(x) for x in a.subs)}
     missing = [v for v in enum.variants if v.name not in covered]
     if not missing:
         return []
@@ -155,6 +157,11 @@ def match_fixes(project: Project, path: Path, line: int) -> list[CodeAction]:
     names = ", ".join(v.name for v in missing)
     title = f"Add the missing match arm for {qualifier}.{names}" if len(missing) == 1 else f"Add the missing match arms ({names})"
     return [CodeAction(title, [edit])]
+
+
+def irrefutable(p: ast.Pattern) -> bool:
+    """Whether a pattern matches every value of its type."""
+    return p.kind in ("wild", "bind") or (p.kind == "tuple" and all(irrefutable(x) for x in p.subs))
 
 
 # ---- the entry point ----------------------------------------------------------------------------------------------

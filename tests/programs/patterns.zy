@@ -1,0 +1,181 @@
+enum Shape:
+    Circle(float?)
+    Rect(int, int)
+    Named(str, int?)
+    Empty
+
+enum Opt[T]:
+    Some(T)
+    Nothing
+
+fn area(s: Shape) -> str:
+    match s:
+        Shape.Circle(some(r)):
+            return f"circle {r}"
+        Shape.Circle(none):
+            return "unknown circle"
+        Shape.Rect(0, _) | Shape.Rect(_, 0):
+            return "flat"
+        Shape.Rect(w, h) if w == h:
+            return f"square {w}"
+        Shape.Rect(w, h):
+            return f"rect {w}x{h}"
+        Shape.Named("sun", some(n)):
+            return f"the sun, {n}"
+        Shape.Named(name, none):
+            return f"{name} alone"
+        Shape.Named(name, some(n)):
+            return f"{name} {n}"
+        Shape.Empty:
+            return "empty"
+
+fn grade(n: int) -> str:
+    match n:
+        ..0:
+            return "negative"
+        0:
+            return "zero"
+        1..5:
+            return "low"
+        5..=9:
+            return "mid"
+        10..:
+            return "high"
+
+fn bucket(n: int) -> int:
+    match n:
+        ..=-1:
+            return -1
+        0..=9:
+            return 0
+        10..=99:
+            return 1
+        100..:
+            return 2
+
+fn pair(r: Result[tuple[int, str], str]) -> str:
+    match r:
+        ok((0, s)):
+            return f"zero {s}"
+        ok((n, "x")) if n > 1:
+            return f"x{n}"
+        ok((n, s)):
+            return f"{n}:{s}"
+        err("boom"):
+            return "boom!"
+        err(e):
+            return f"error {e}"
+
+fn both(a: bool, b: int?) -> str:
+    match (a, b):
+        (true, some(1 | 2)):
+            return "t12"
+        (true, some(n)):
+            return f"t{n}"
+        (false, some(3..=5)):
+            return "f35"
+        (false, some(_)):
+            return "f"
+        (_, none):
+            return "none"
+
+fn unwrap_or(o: Opt[int?], d: int) -> int:
+    match o:
+        Opt[int?].Some(some(x)):
+            return x
+        Opt[int?].Some(none) | Opt[int?].Nothing:
+            return d
+
+fn nested(o: Result[int?, str]) -> str:
+    match o:
+        ok(some(x)) if x > 100:
+            return "big"
+        ok(some(x)):
+            return f"inner {x}"
+        ok(none):
+            return "outer only"
+        err(_):
+            return "nothing"
+
+fn names(p: tuple[str, str]) -> str:
+    match p:
+        ("a" | "b", "z"):
+            return "ab-z"
+        (x, "z"):
+            return f"{x}-z"
+        ("a", y):
+            return f"a-{y}"
+        (x, y):
+            return x + y
+
+fn shout(s: Shape) -> int:
+    match s:
+        Shape.Rect(mut_w, h):
+            mut_w += h
+            return mut_w
+        _:
+            return 0
+
+fn pick[T](o: Opt[T?], d: T) -> T:
+    match o:
+        Opt.Some(some(x)):
+            return x
+        Opt.Some(none) | Opt.Nothing:
+            return d
+
+fn pairs[A, B](r: Result[tuple[A, B], str], a: A) -> A:
+    match r:
+        ok((x, _)):
+            return x
+        err(_):
+            return a
+
+fn count(xs: list[int]) -> int:
+    match (len(xs), xs):
+        (0, _):
+            return 0
+        (1..=3, _):
+            return 1
+        _:
+            return 2
+
+rr: Result[tuple[int, str], str] = ok((4, "a"))
+n: Opt[str?] = Opt.Nothing
+print(
+    area(Shape.Circle(some(1.5))),
+    area(Shape.Circle(none)),
+    area(Shape.Rect(0, 3)),
+    area(Shape.Rect(2, 2)),
+)
+print(
+    area(Shape.Rect(2, 3)),
+    area(Shape.Named("sun", some(1))),
+    area(Shape.Named("moon", none)),
+)
+print(area(Shape.Named("moon", some(4))), area(Shape.Empty))
+print(grade(-3), grade(0), grade(4), grade(5), grade(9), grade(10), grade(1000))
+print(bucket(-5), bucket(0), bucket(9), bucket(10), bucket(99), bucket(100))
+print(
+    pair(ok((0, "a"))),
+    pair(ok((3, "x"))),
+    pair(ok((1, "x"))),
+    pair(err("boom")),
+    pair(err("bad")),
+)
+print(
+    both(true, some(2)),
+    both(true, some(9)),
+    both(false, some(4)),
+    both(false, some(7)),
+    both(true, none),
+)
+print(
+    unwrap_or(Opt.Some(some(5)), 0),
+    unwrap_or(Opt.Some(none), 7),
+    unwrap_or(Opt.Nothing, 8),
+)
+print(nested(ok(some(500))), nested(ok(some(5))), nested(ok(none)), nested(err("e")))
+print(names(("a", "z")), names(("q", "z")), names(("a", "k")), names(("q", "k")))
+print(shout(Shape.Rect(2, 3)), shout(Shape.Empty))
+print(pick(Opt.Some(some(3)), 0), pick(n, "d"), pairs(rr, 9))
+print(count([]), count([1, 2]), count([1, 2, 3, 4]))

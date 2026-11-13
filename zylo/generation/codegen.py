@@ -9,6 +9,7 @@ Structs: `#[derive(Clone, PartialEq)] struct` + an `impl` with their methods. `s
 `&mut self` depending on what the checker inferred (`FnDef.self_mut`). `Debug` is written by hand to
 imprimir `Point(x=1.0, y=2.0)`.
 """
+import dataclasses
 import re
 
 from zylo.domain import ast
@@ -440,47 +441,107 @@ class Gen:
     def match(self, s: ast.Match) -> None:
         """Emit a `match` as a Rust `match` on an owned copy of the value, binding each arm's data by value.
 
-        Strings are matched as `&str`; `Option` and `Result` arms become `Some`/`None`/`Ok`/`Err` patterns.
+        Strings are matched as `&str`; `Option` and `Result` arms become `Some`/`None`/`Ok`/`Err` patterns. Rust cannot
+        match a string literal inside an owned `String`, so a string literal nested in a pattern becomes a fresh
+        binding plus a comparison in the arm's guard (see `arm_patterns`).
         """
         scrutinee = f"{emit_ref(s.value)}.as_str()" if s.value.ty == STR else emit(s.value)
         self.line(f"match {scrutinee} {{")
         self.depth += 1
         for arm in s.arms:
-            pattern = " | ".join(self.arm_pattern(s, a, arm) for a in [arm, *arm.alts])
-            guard = f" if {emit_ref(arm.guard)}" if arm.guard is not None else ""
-            self.line(f"{pattern}{guard} => {{")
-            self.block(arm.body)
-            self.line("}")
+            for pattern, checks in self.arm_patterns(arm):
+                conds = list(checks)
+                if arm.guard is not None:
+                    conds.append(f"({emit_ref(arm.guard)})" if checks else emit_ref(arm.guard))
+                guard = f" if {' && '.join(conds)}" if conds else ""
+                self.line(f"{pattern}{guard} => {{")
+                self.block(arm.body)
+                self.line("}")
         self.depth -= 1
         self.line("}")
 
+    def arm_patterns(self, arm: ast.MatchArm) -> list[tuple[str, list[str]]]:
+        """The Rust patterns of an arm, each with the extra guard conditions it needs.
+
+        Alternatives are joined into one Rust or-pattern, except when one has a string literal nested inside it: then
+        every alternative becomes an arm of its own (with its own comparisons), because each binds different fresh names.
+        """
+        shared = {v.name: v for v in arm.vars}
+        top = arm.pattern
+        if not self.nested_str(top):
+            return [(self.rust_pattern(top, shared, [], True), [])]
+        out = []
+        for alt in self.expand_alternatives(top):
+            checks: list[str] = []
+            out.append((self.rust_pattern(alt, shared, checks, True), checks))
+        return out
+
+    @staticmethod
+    def nested_str(p: ast.Pattern, top: bool = True) -> bool:
+        """Whether a pattern has a string literal below its top (where the scrutinee is already a `&str`)."""
+        if p.kind == "or":
+            return any(Gen.nested_str(x, top) for x in p.subs)
+        if p.kind == "lit":
+            return p.ty == STR and not top
+        return any(Gen.nested_str(x, False) for x in p.subs)
+
+    @staticmethod
+    def expand_alternatives(p: ast.Pattern) -> list[ast.Pattern]:
+        """Rewrite a pattern as a list of patterns without or-patterns that together match the same values."""
+        if p.kind == "or":
+            return [alt for x in p.subs for alt in Gen.expand_alternatives(x)]
+        if not p.subs:
+            return [p]
+        combos: list[list[ast.Pattern]] = [[]]
+        for sub in p.subs:
+            combos = [c + [alt] for c in combos for alt in Gen.expand_alternatives(sub)]
+        return [dataclasses.replace(p, subs=c) for c in combos]
+
     ARM_WRAPPERS = {"some": "Some", "ok": "Ok", "err": "Err"}
 
-    def arm_pattern(self, s: ast.Match, arm: ast.MatchArm, owner: ast.MatchArm) -> str:
-        """Return the Rust pattern of one alternative of a `match` arm.
+    def rust_pattern(self, p: ast.Pattern, shared: dict, checks: list[str], top: bool = False) -> str:
+        """Return the Rust pattern for a Zylo pattern.
 
         Args:
-            s: The `match`.
-            arm: The alternative (the arm itself or one of its `alts`).
-            owner: The arm, whose checked variables every alternative's bindings share.
+            p: The pattern.
+            shared: The arm's variables by name; a binding that is assigned to in the arm is written `mut`.
+            checks: Receives the comparisons for the string literals nested in the pattern (each is replaced by a
+                fresh name in the returned pattern).
+            top: Whether `p` is the whole pattern of an arm.
         """
-        if arm.variant == "_":
-            return "_"
-        if arm.variant == "none":
-            return "None"
-        if arm.literal is not None:
-            lit = arm.literal
-            if isinstance(lit, ast.Str):
-                return str_lit(lit.value)
-            if isinstance(lit, ast.Bool):
-                return "true" if lit.value else "false"
-            return emit_ref(lit)
-        if not arm.binds:
-            return f"{tname(s.enum)}::{arm.variant}"
-        shared = {v.name: v for v in owner.vars if v is not None}
-        binds = ", ".join("_" if b == "_" else f"{'mut ' if shared[b].mutable else ''}{ident(b)}" for b in arm.binds)
-        head = self.ARM_WRAPPERS.get(arm.variant) if arm.type is None else f"{tname(s.enum)}::{arm.variant}"
-        return f"{head}({binds})"
+        sub = lambda x: self.rust_pattern(x, shared, checks)  # noqa: E731
+        match p.kind:
+            case "wild":
+                return "_"
+            case "bind":
+                return f"{'mut ' if shared[p.name].mutable else ''}{ident(p.name)}"
+            case "none":
+                return "None"
+            case "lit":
+                lit = p.literal
+                if isinstance(lit, ast.Str):
+                    if top:
+                        return str_lit(lit.value)
+                    name = f"__s{len(checks)}"
+                    checks.append(f"{name} == {str_lit(lit.value)}")
+                    return name
+                if isinstance(lit, ast.Bool):
+                    return "true" if lit.value else "false"
+                return emit_ref(lit)
+            case "range":
+                lo, hi = ast.range_bounds(p)
+                if p.lo is None:
+                    return f"..={hi}"
+                return f"{lo}.." if p.hi is None else f"{lo}..={hi}"
+            case "enum":
+                name = f"{tname(p.enum)}::{p.name}"
+                return f"{name}({', '.join(sub(x) for x in p.subs)})" if p.subs else name
+            case "tuple":
+                return f"({', '.join(sub(x) for x in p.subs)})"
+            case "or":
+                return " | ".join(self.rust_pattern(x, shared, checks, top) for x in p.subs)
+            case _:
+                return f"{self.ARM_WRAPPERS[p.kind]}({', '.join(sub(x) for x in p.subs)})"
 
     def struct(self, sd: ast.StructDef) -> None:
         """Emit a struct, its `Debug` implementation and its methods."""

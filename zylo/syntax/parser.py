@@ -672,46 +672,79 @@ class Parser:
     def parse_arm(self) -> ast.MatchArm:
         """Parse one arm and its block.
 
-        An arm is a pattern, optionally followed by more alternatives (`1 | 2`) and a guard (`if cond`), then a block.
-        The patterns may be wrapped in parentheses, which lets a long or-pattern span several lines.
+        An arm is a pattern (alternatives separated by `|` make an or-pattern), optionally followed by a guard
+        (`if cond`), then a block. The patterns may be wrapped in parentheses, which lets a long or-pattern span
+        several lines.
 
         Raises:
             ZyloError: If the pattern is malformed.
         """
-        paren = self.match("OP", "(") is not None  # `(A | B | C)`: the form `zylo fmt` uses for long or-patterns
-        arm = self.parse_pattern()
-        while self.match("OP", "|"):
-            arm.alts.append(self.parse_pattern())
-        if paren:
-            self.expect("OP", ")")
+        first = self.cur
+        pattern = self.parse_or_pattern(top=True)
+        arm = ast.MatchArm(pattern, [], line=first.line, col=first.col)
         if self.match("KW", "if"):
             arm.guard = self.parse_expr()
         arm.body = self.parse_block()
         return arm
 
-    def parse_pattern(self) -> ast.MatchArm:
-        """Parse one pattern, as an arm with an empty body.
+    def parse_or_pattern(self, top: bool = False) -> ast.Pattern:
+        """Parse `pattern | pattern | ...`; a single pattern is returned as it is.
 
-        The pattern is `_`, `Enum.Variant`, `Enum.Variant(a, b)`, a literal (`1`, `-1`, `"a"`, `true`), `none`, or
-        `some(x)` / `ok(v)` / `err(e)`.
+        Args:
+            top: Whether this is the pattern of an arm, where a bare name is an error instead of a binding.
+        """
+        first = self.cur
+        alts = [self.parse_pattern(top)]
+        while self.match("OP", "|"):
+            alts.append(self.parse_pattern(top))
+        if len(alts) == 1:
+            return alts[0]
+        return ast.Pattern("or", subs=alts, line=first.line, col=first.col)
+
+    def parse_pattern(self, top: bool = False) -> ast.Pattern:
+        """Parse one pattern.
+
+        The pattern is `_`, a name (a binding, only inside another pattern), `Enum.Variant`, `Enum.Variant(p, q)`, a
+        literal (`1`, `-1`, `"a"`, `true`), an integer range (`1..5`, `1..=5`, `5..`, `..=5`), `none`,
+        `some(p)` / `ok(p)` / `err(p)`, a tuple `(p, q)` or a parenthesized or-pattern `(p | q)`.
 
         Raises:
             ZyloError: If the pattern is malformed.
         """
         first = self.cur
         pos = {"line": first.line, "col": first.col}
+        if first.kind == "OP" and first.value == "(":
+            self.advance()
+            inner = self.parse_or_pattern()
+            if self.check("OP", ","):
+                items = [inner]
+                while self.match("OP", ","):
+                    if self.check("OP", ")"):
+                        break
+                    items.append(self.parse_or_pattern())
+                self.expect("OP", ")")
+                if len(items) < 2:
+                    raise ZyloError("a tuple pattern needs at least two elements", first.line, first.col)
+                return ast.Pattern("tuple", subs=items, **pos)
+            self.expect("OP", ")")
+            return inner
         if first.kind == "KW" and first.value == "none":
             self.advance()
-            return ast.MatchArm(None, "none", [], [], **pos)
+            return ast.Pattern("none", **pos)
+        if first.kind == "OP" and first.value in ("..", "..="):
+            return self.parse_range(None, pos)
         if first.kind in ("INT", "FLOAT", "STR") or (first.kind == "OP" and first.value == "-") \
                 or (first.kind == "KW" and first.value in ("true", "false")):
-            lit = self.parse_unary()
-            if not isinstance(lit, (ast.Int, ast.Float, ast.Str, ast.Bool, ast.UnaryOp)):
-                raise ZyloError("a `match` pattern must be a literal", first.line, first.col)
-            return ast.MatchArm(None, "literal", [], [], literal=lit, **pos)
+            lit = self.parse_pattern_literal(first)
+            if first.kind == "FLOAT" and (self.check("OP", "..") or self.check("OP", "..=")):
+                raise ZyloError("range patterns work on integers only", first.line, first.col)
+            if first.kind == "INT" or (first.kind == "OP" and isinstance(lit, ast.UnaryOp)):
+                if self.check("OP", "..") or self.check("OP", "..="):
+                    return self.parse_range(lit, pos)
+            return ast.Pattern("lit", literal=lit, **pos)
         self.expect("IDENT")
         if first.value == "_":
-            return ast.MatchArm(None, "_", [], [], **pos)
+            return ast.Pattern("wild", **pos)
         parts = [first.value]
         targs: list[ast.TypeRef] = []
         while self.match("OP", "."):
@@ -723,19 +756,47 @@ class Parser:
             self.expect("OP", ".")
             parts.append(self.expect("IDENT").value)
         if len(parts) < 2 and first.value not in ("some", "ok", "err"):
-            raise ZyloError(f"write the enum before the variant: `Enum.{first.value}`", first.line, first.col)
-        binds: list[str] = []
+            if top or self.check("OP", "("):
+                raise ZyloError(f"write the enum before the variant: `Enum.{first.value}`", first.line, first.col)
+            return ast.Pattern("bind", name=first.value, **pos)
+        subs: list[ast.Pattern] = []
         if self.match("OP", "("):
-            binds.append(self.expect("IDENT").value)
+            subs.append(self.parse_or_pattern())
             while self.match("OP", ","):
-                binds.append(self.expect("IDENT").value)
+                if self.check("OP", ")"):
+                    break
+                subs.append(self.parse_or_pattern())
             self.expect("OP", ")")
-        if len(parts) == 1:  # some(x) / ok(v) / err(e)
-            if len(binds) != 1:
-                raise ZyloError(f"`{first.value}(...)` binds exactly one name: write `{first.value}(x)`", first.line, first.col)
-            return ast.MatchArm(None, first.value, binds, [], **pos)
+        if len(parts) == 1:  # some(p) / ok(p) / err(p)
+            if len(subs) != 1:
+                raise ZyloError(f"`{first.value}(...)` holds exactly one pattern: write `{first.value}(x)`", first.line, first.col)
+            return ast.Pattern(first.value, subs=subs, **pos)
         typ = ast.TypeRef(".".join(parts[:-1]), targs, line=first.line, col=first.col)
-        return ast.MatchArm(typ, parts[-1], binds, [], **pos)
+        return ast.Pattern("enum", name=parts[-1], type=typ, subs=subs, **pos)
+
+    def parse_pattern_literal(self, first: Token) -> ast.Expr:
+        """Parse the literal of a pattern or of the end of a range pattern.
+
+        Raises:
+            ZyloError: If it is not a literal.
+        """
+        lit = self.parse_unary()
+        if not isinstance(lit, (ast.Int, ast.Float, ast.Str, ast.Bool, ast.UnaryOp)):
+            raise ZyloError("a `match` pattern must be a literal", first.line, first.col)
+        return lit
+
+    def parse_range(self, lo: ast.Expr | None, pos: dict) -> ast.Pattern:
+        """Parse the `..hi` / `..=hi` / `..` part of an integer range pattern; `lo` was already read."""
+        op = self.advance()
+        hi = None
+        nxt = self.cur
+        if nxt.kind == "INT" or (nxt.kind == "OP" and nxt.value == "-"):
+            hi = self.parse_pattern_literal(nxt)
+        if lo is None and hi is None:
+            raise ZyloError("a range pattern needs at least one end: `1..5`, `5..` or `..=5`", op.line, op.col)
+        if hi is None and op.value == "..=":
+            raise ZyloError("an inclusive range needs an end: write `5..` for an open end", op.line, op.col)
+        return ast.Pattern("range", lo=lo, hi=hi, inclusive=op.value == "..=", **pos)
 
     def parse_param(self) -> ast.Param:
         """Parse one `name: type` or `name: type = default` parameter.

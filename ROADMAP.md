@@ -29,6 +29,7 @@ and is built vertically (lexer → parser → checker → codegen → tests).
 | **v0.21 Language server completion** | Completion that knows types (fields and methods after a dot, module exports, enum variants, named arguments, imports, types, names in scope, built-in methods), hover and signature help for built-in functions and methods, quick fixes (add a missing import, add the missing `match` arms), and semantic features that keep working around syntax errors; see [docs/editors.md](docs/editors.md) | done |
 | **v0.22 Generics** | Type parameters on functions, structs and enums (`fn first[T]`, `struct Box[T]`, `enum Opt[T]`), inferred at calls or written (`first[int](xs)`), a fixed set of bounds (`Eq`, `Show`, `Ord`, `Num`, `Key`), generic bodies checked once for every type, monomorphized to plain Rust, working across modules, re-exports, typed JSON and the language server; see [docs/guide.md](docs/guide.md#generics) | done |
 | **v0.24 Generics follow-ups** | Generic methods (`fn map[U](self, f: fn(T) -> U) -> Box[U]`, on generic and ordinary structs and enums), generic functions as values (`g = first[int]`, or `first` passed where `fn(list[int]) -> int` is expected), integer literals of a `Num`-bounded parameter (`a + 1`), type arguments that are lowercase structs of another module (`first[point](xs)`), and hover inside generic bodies with the bounds and the instantiations; see [docs/guide.md](docs/guide.md#generic-methods) | done |
+| **v0.25 Nested patterns** | Patterns that nest (`Shape.Circle(some(r))`, `ok((a, b))`, `some(1 \| 2)`), integer ranges (`1..5`, `1..=5`, `5..`, `..=5`), `match` on tuples, exact exhaustiveness (the error names the values left over, e.g. `Shape.Circle(none)` or `0..=4`; ranges can cover an `int` without `_`), unreachable-arm and duplicate detection, guards and or-patterns composing with all of it, generics inside patterns, and editor support for the names bound in nested patterns; see [docs/guide.md](docs/guide.md#nested-patterns-and-ranges) | done |
 | **Community** | Documentation translations (the docs are English-only for now) and localized diagnostics | |
 
 Later: user-defined bounds and default type arguments, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
@@ -38,7 +39,7 @@ Later: user-defined bounds and default type arguments, concurrency, a central pa
 - Language server: more code actions (unused variables, wrapping a value in `some`), and completion of `match` patterns.
 
 - Narrowing beyond plain variables and field paths: `and` chains, indexed elements and closures.
-- Nested patterns and integer ranges in `match`; non-constant default values.
+- Struct patterns in `match` (`Point(x=0, y)`) and `x @ pattern` bindings; non-constant default values.
 - Long-term memory model: implicit clones plus inferred borrows, or simplified ownership.
 - Custom error types and conversions for `?` between different error types.
 - Package trust: signing or an allow-list on top of the lock file checksums.

@@ -35,8 +35,9 @@ def test_parse_match_arms():
     src = SHAPE + "x = Shape.Empty\nmatch x:\n    Shape.Rect(w, h):\n        print(w)\n    _:\n        print(1)\n"
     m = parse(src).body[2]
     assert isinstance(m, ast.Match)
-    assert [(a.variant, a.binds) for a in m.arms] == [("Rect", ["w", "h"]), ("_", [])]
-    assert m.arms[1].type is None
+    assert [(a.pattern.kind, a.pattern.name, [s.name for s in a.pattern.subs]) for a in m.arms] == [
+        ("enum", "Rect", ["w", "h"]), ("wild", "", [])]
+    assert m.arms[0].pattern.type.name == "Shape" and m.arms[1].pattern.type is None
 
 
 def test_an_arm_must_name_its_enum():
@@ -108,7 +109,7 @@ def test_pattern_arity_and_enum_are_checked():
 
 
 def test_match_needs_an_enum():
-    fails("match [1]:\n    _:\n        print(1)\n", "needs an enum, int, str, bool, Option or Result value, not list\\[int\\]")
+    fails("match [1]:\n    _:\n        print(1)\n", "needs an enum, int, str, bool, Option, Result or tuple value, not list\\[int\\]")
     fails("match 1.5:\n    _:\n        print(1)\n", "cannot be used on a float")
 
 
