@@ -581,28 +581,41 @@ class Pattern(Node):
     - `some` / `none` / `ok` / `err`: the `Option` and `Result` patterns (`subs` holds the one inner pattern).
     - `tuple`: `(p, q, ...)` (`subs`).
     - `or`: `p | q` (`subs` holds the alternatives); inside brackets or at the top of an arm.
+    - `struct`: `Point(x=0, y)`: some of a struct's fields, each matched by a pattern (`type`, `fields`, `subs`); a bare
+      name is the shorthand for `name=name`.
+    - `at`: `name @ pattern` matches what the pattern matches and binds the whole value to `name` (`name`, and the
+      pattern as the only element of `subs`).
+
+    A bare `bind` is also allowed at the top of an arm, where it catches every value that is left (`other:`).
 
     Attributes:
         kind: One of the kinds above.
-        name: The bound name (`bind`) or the variant name (`enum`).
-        type: The enum as written (`Shape`, `mod.Shape`, `Opt[int]`) for an `enum` pattern, otherwise None.
-        subs: Sub-patterns: the data of a variant, the elements of a tuple, the alternatives of an `or`.
+        name: The bound name (`bind`, `at`) or the variant name (`enum`).
+        type: The enum or struct as written (`Shape`, `mod.Shape`, `Opt[int]`) for an `enum` or `struct` pattern,
+            otherwise None.
+        subs: Sub-patterns: the data of a variant, the elements of a tuple, the alternatives of an `or`, the field
+            patterns of a `struct`, the pattern after `@`.
+        fields: The field names of a `struct` pattern, one per element of `subs`, in the order written.
         literal: The literal of a `lit` pattern.
         lo: The lower bound of a `range` (None when open).
         hi: The upper bound of a `range` (None when open).
         inclusive: Whether the upper bound of a `range` is included (`..=`).
-        enum: The (mangled) enum this pattern matches, set by the checker for an `enum` pattern.
+        enum: The (mangled) enum or struct this pattern matches, set by the checker for an `enum` or `struct` pattern.
+        slots: The sub-pattern of every field of the struct in declaration order (None for a field the pattern does
+            not mention), set by the checker for a `struct` pattern.
         ty: (inherited) the type of the value this pattern matches, set by the checker.
     """
     kind: str
     name: str = ""
     type: TypeRef | None = None
     subs: list["Pattern"] = field(default_factory=list)
+    fields: list[str] = field(default_factory=list)
     literal: "Expr | None" = None
     lo: "Expr | None" = None
     hi: "Expr | None" = None
     inclusive: bool = False
     enum: str | None = None
+    slots: list["Pattern | None"] | None = None
 
 
 @dataclass
@@ -626,7 +639,7 @@ class MatchArm(Node):
 
 @dataclass
 class Match(Node):
-    """`match value:` on an enum, `int`, `str`, `bool`, `Option`, `Result` or tuple; it must be exhaustive.
+    """`match value:` on an enum, struct, `int`, `str`, `bool`, `Option`, `Result` or tuple; it must be exhaustive.
 
     Arms may carry a guard (`Pattern if cond:`), or-patterns (`1 | 2:`), nested patterns and integer ranges; a
     guarded arm does not count toward exhaustiveness.
@@ -683,7 +696,7 @@ def range_bounds(p: Pattern) -> tuple[int, int]:
 
 # ---- generic traversal -----------------------------------------------------------------------
 
-_ANNOTATIONS = {"tys", "variant", "enum", "ty", "var", "vars", "info", "infos", "unwrap", "then_bind", "else_bind", "after_bind", "captures", "inst", "fixed"}
+_ANNOTATIONS = {"tys", "variant", "enum", "ty", "var", "vars", "info", "infos", "unwrap", "then_bind", "else_bind", "after_bind", "captures", "inst", "fixed", "slots"}
 
 
 def children(node: Node) -> Iterator[Node]:

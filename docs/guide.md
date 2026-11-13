@@ -153,6 +153,11 @@ a = with_name(a, "y")
 print(a.names)
 ```
 
+The variable of a `for` loop is a copy of each element too, so the same rule applies to it: `for q in ps: q.x = 9`
+changes a value that is thrown away, and is the error `loop variable 'q' is modified but the changes are lost`. Loop over
+the indexes (`for i in range(len(ps)): ps[i].x = 9`) to change the list, or use the copy afterwards (`append(out, q)`),
+which makes it deliberate.
+
 ### Default and named arguments
 
 A parameter can have a default value, written `name: type = value`. Callers may leave it out, and may
@@ -771,8 +776,91 @@ How a `match` with nested patterns is checked:
   still cover the rest.
 - Generic enums and functions work in patterns: `Opt.Some(some(x))` inside `fn pick[T](o: Opt[T?], d: T) -> T`.
 
-The algorithm is Maranget's usefulness check, documented in `zylo/semantics/exhaustive.py`. Struct patterns
-(`Point(x=0, y)`) are not part of the language yet.
+The algorithm is Maranget's usefulness check, documented in `zylo/semantics/exhaustive.py`.
+
+### Struct patterns, `@` bindings and catch-all names
+
+A struct is matched by naming the type and the fields to look at: `Point(x=0, y)`. Each element is `field=pattern`, or just
+`field`, the shorthand for `field=field` that binds the field to a variable of the same name. Fields that are not
+mentioned match anything, so `Point(x=0)` is a partial pattern and `Point()` matches every `Point`. The patterns of the
+fields are ordinary patterns, so they nest, take guards, or-patterns and ranges, and work on generic structs
+(`Box(value=0)`, or `Box[int](label)`) and on structs of another module (`geo.Point(x=0)`).
+
+`name @ pattern` matches what the pattern matches *and* binds the whole value to `name`: `n @ 1..=9`, `big @ (100 | 200)`,
+`c @ Shape.Circle(_)`. The pattern after the `@` cannot bind names of its own (`c @ Shape.Circle(r)` is an error): bind the
+whole value or its parts.
+
+A bare name at the top of an arm is a catch-all that binds the whole value, like `_` with a name: `other:`. It
+matches everything the earlier arms left, so an arm after it can never run. There is no ambiguity with enum variants
+or constants: a variant is always written with its enum (`Shape.Circle`), a pattern is never a constant, and a bare name
+that is also a variant of the matched enum (`Circle:`) is an error that tells you to write `Shape.Circle`.
+
+```zylo
+struct Point:
+    x: int
+    y: int
+
+struct Segment:
+    from_: Point
+    to: Point
+    label: str
+
+enum Shape:
+    Circle(int)
+    Dot(Point)
+
+fn place(p: Point) -> str:
+    match p:
+        Point(x=0, y=0):
+            return "origin"
+        Point(x=0, y):
+            return f"on the y axis at {y}"
+        Point(y=0, x=far @ 100..):
+            return f"far on the x axis ({far})"
+        Point(x, y=0):
+            return f"on the x axis at {x}"
+        other:
+            return f"at ({other.x}, {other.y})"
+
+fn describe(seg: Segment) -> str:
+    match seg:
+        Segment(from_=Point(x=0, y=0), to=Point(x, y), label="path"):
+            return f"path from the origin to {x},{y}"
+        Segment(label=name @ ("a" | "b")):
+            return f"short name {name}"
+        Segment(label):
+            return label
+
+fn kind(s: Shape) -> str:
+    match s:
+        c @ Shape.Circle(_):
+            return f"round {c}"
+        Shape.Dot(Point(x=0)):
+            return "dot on the y axis"
+        rest:
+            return f"{rest}"
+
+fn grade(n: int) -> str:
+    match n:
+        d @ 1..=9:
+            return f"digit {d}"
+        other:
+            return f"number {other}"
+
+print(place(Point(0, 3)), describe(Segment(Point(0, 0), Point(1, 2), "path")), kind(Shape.Circle(2)), grade(7))
+```
+
+How these are checked:
+
+- A field must exist (`struct Point has no field 'z'`), is written once, and its pattern must fit the field's type.
+  Exhaustiveness treats a struct as a tuple of its fields, so the error names what is left over: `` `match` on Point does
+  not cover Point(x=..=-1), Point(x=1..) `` for a lone `Point(x=0)`.
+- A struct pattern names the struct as a type (`Point(...)`), while a variant needs its enum (`Shape.Dot(...)`); writing
+  `Dot(...)` is an error that says so.
+- Alternatives *inside* a pattern are checked against each other, not only the alternatives of a whole arm:
+  `some(1 | 1)` is an error (`` `1` is matched twice ``), and so is `some(1..=5 | 2..=3)` (the second alternative can never run).
+- On a `str` scrutinee, `other:` and `s @ "a"` bind a `String`; inside a struct, a tuple or a variant a bound string is
+  already one.
 
 ## Option and Result
 

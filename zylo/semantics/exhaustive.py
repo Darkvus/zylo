@@ -10,10 +10,12 @@ when it matches some value that no row matches. Two questions are answered with 
   unguarded arms. `missing` finds such values and writes them as patterns, for the error message.
 
 Patterns are first lowered to `Con` (a constructor with sub-patterns), `Alt` (an or-pattern) or None (a wildcard or a
-binding). The constructors are:
+binding; `name @ pattern` is lowered as the pattern). The constructors are:
 
 - `("v", name)`: an enum variant, `some`, `none`, `ok` or `err`; its sub-patterns are the variant's data.
 - `("t",)`: a tuple; its sub-patterns are the elements.
+- `("st",)`: a struct, the only constructor of its type; its sub-patterns are the fields in declaration order (a field the
+  pattern does not mention is a wildcard).
 - `("b", value)`: `true` or `false`.
 - `("s", text)`: a string literal; `str` has infinitely many values, so a column of strings is never complete.
 - `("i", lo, hi)`: an integer interval, both ends included (a literal is `lo == hi`). The columns of integers are
@@ -25,7 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from zylo.domain import ast
-from zylo.domain.types import BOOL, INT, STR, EnumT, OptionT, ResultT, TupleT, Type
+from zylo.domain.types import BOOL, INT, STR, EnumT, OptionT, ResultT, StructT, TupleT, Type
 
 INT_MIN, INT_MAX = ast.INT_MIN, ast.INT_MAX
 LIMIT = 6  # witnesses collected for an error message
@@ -70,6 +72,10 @@ def lower(p: ast.Pattern) -> Pat:
             return Con(("v", p.kind), tuple(lower(s) for s in p.subs))
         case "tuple":
             return Con(("t",), tuple(lower(s) for s in p.subs))
+        case "struct":
+            return Con(("st",), tuple(None if s is None else lower(s) for s in p.slots))
+        case "at":
+            return lower(p.subs[0])
         case "or":
             return Alt(tuple(lower(s) for s in p.subs))
     raise ValueError(f"unknown pattern kind {p.kind!r}")
@@ -100,11 +106,14 @@ class Space:
 
     Args:
         variants: Gives the data types of each variant of an enum type, by variant name.
+        structs: Gives the field types of a struct type, by field name in declaration order.
     """
 
-    def __init__(self, variants: Callable[[EnumT], dict[str, list[Type]]]):
-        """Remember how to look up the variants of an enum type."""
+    def __init__(self, variants: Callable[[EnumT], dict[str, list[Type]]],
+                 structs: Callable[[StructT], dict[str, Type]] = lambda ty: {}):
+        """Remember how to look up the variants of an enum type and the fields of a struct type."""
         self.variants = variants
+        self.structs = structs
 
     # ---- what a type is made of ------------------------------------------------------------
 
@@ -119,6 +128,8 @@ class Space:
                 return [ty.ok if c[1] == "ok" else ty.err]
         if c[0] == "t":
             return list(ty.elems)
+        if c[0] == "st":
+            return list(self.structs(ty).values())
         return []
 
     def universe(self, ty: Type) -> list[Ctor] | None:
@@ -131,6 +142,8 @@ class Space:
             return [("v", "ok"), ("v", "err")]
         if isinstance(ty, TupleT):
             return [("t",)]
+        if isinstance(ty, StructT):
+            return [("st",)]
         if ty == BOOL:
             return [("b", True), ("b", False)]
         return None
@@ -161,7 +174,7 @@ class Space:
             uncovered = [a for a in atoms if not any(covers(h, a) for h in heads)]
             return (atoms, True) if not uncovered else (uncovered, False)
         universe = self.universe(ty)
-        if universe is None:  # `str` and every type that cannot be taken apart (lists, structs, ...): never complete
+        if universe is None:  # `str` and every type that cannot be taken apart (lists, ...): never complete
             return [("*",)], False
         missing = [c for c in universe if c not in heads]
         return (universe, True) if not missing else (missing, False)
@@ -254,6 +267,9 @@ class Space:
                 return c[1] + (f"({', '.join(subs)})" if subs else "")
             case "t":
                 return f"({', '.join(subs)})"
+            case "st":  # only the fields that matter: `Point(x=0)`
+                shown = [f"{n}={x}" for n, x in zip(self.structs(ty), subs) if x != "_"]
+                return f"{ty}({', '.join(shown)})"
             case "b":
                 return "true" if c[1] else "false"
             case "i":

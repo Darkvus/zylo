@@ -8,7 +8,10 @@ The position decides what is offered:
 - on the `import` and `from ... import` lines, modules and the names a module exports;
 - where a type is expected (after `->`, after a parameter's or a field's `:`), types;
 - where a trait is expected (a bound after `[T:` or `+`, the list after `struct Name(`), traits;
-- inside the parentheses of a call, the parameters (or struct fields) not yet given by name, as `name=`;
+- inside the parentheses of a call or of a struct pattern, the parameters (or struct fields) not yet given by name, as
+  `name=` (in a pattern also as the bare `name` that binds the field);
+- at the start of a `match` arm, the patterns of the matched value's type: `Shape.Circle`, `some`, `none`, `true`, a
+  struct's name, `_`;
 - anywhere else, the variables and parameters in scope, the names of the file (definitions, imports, modules), the
   built-in functions and the keywords.
 
@@ -24,7 +27,7 @@ from pathlib import Path
 from zylo.application.editor import Call, call_at, callee_entity, signature_of, signature_text, variable_type
 from zylo.domain import ast
 from zylo.domain.builtins import FUNCTIONS, METHODS, Builtin, describe, receiver_kind
-from zylo.domain.types import ParamT
+from zylo.domain.types import BOOL, OptionT, ParamT, ResultT
 from zylo.packaging.stdlib import stdlib_module, stdlib_modules
 from zylo.semantics.generics import BOUND_HELP, BOUNDS
 from zylo.semantics.navigation import Entity, FileIndex, Project, Resolution, deref, doc_of
@@ -492,6 +495,117 @@ def named_arguments(project: Project, path: Path, source: str, line: int, col: i
             for i, (n, detail, doc, kind) in enumerate(items) if n not in call.used and (call.used or i >= given)]
 
 
+# ---- patterns -----------------------------------------------------------------------------------------------------
+
+def written_enum(project: Project, fx: FileIndex, owner: tuple[Path, str]) -> str:
+    """How an enum defined at `owner` is written in this file: its name, the name it is imported as, or `module.Name`."""
+    path, name = owner
+    if path == fx.path:
+        return name
+    for local in fx.froms:
+        ent = deref(fx.local_import(local))
+        if ent is not None and ent.kind == "enum" and ent.path == path and ent.name == name:
+            return local
+    for local, b in fx.aliases.items():
+        if project.module_path(fx.path, b.dotted) == path:
+            return f"{local}.{name}"
+    return name
+
+
+def arm_match_line(lines: list[str], line: int, code: str) -> int | None:
+    """The line of the `match` whose arm is being started at the cursor, or None when the cursor is not in an arm's pattern.
+
+    The cursor is in a pattern when the text before it holds no `:` and no guard, and the nearest line above that is
+    indented less is a `match` header (an arm's body is under the arm, not directly under the `match`).
+    """
+    if ":" in code or re.search(r"\bif\b", code):
+        return None
+    cur = indent_of(lines[line - 1]) if 0 < line <= len(lines) else 0
+    for n in range(line - 1, 0, -1):
+        text = lines[n - 1]
+        if text.strip() and not text.lstrip().startswith("#") and indent_of(text) < cur:
+            return n if re.match(r"\s*match\b.*:\s*$", text) else None
+    return None
+
+
+def pattern_items(project: Project, path: Path, lines: list[str], match: int) -> list[Completion]:
+    """The patterns that fit the value a `match` is on, by its type.
+
+    These are an enum's variants, `some`/`none`, `ok`/`err`, a struct's name or `true`/`false`, and always `_`.
+
+    Args:
+        project: The project.
+        path: The file.
+        lines: The document's lines.
+        match: The line of the `match` header.
+    """
+    scrutinee = re.match(r"\s*match\s+(.*?):\s*$", lines[match - 1]).group(1)
+    out = [Completion("_", "keyword", "matches anything", rank=3)]
+    indent = indent_of(lines[match - 1])
+    end = match  # the arms are unfinished (and so are not valid code): the `match` is replaced by its value alone
+    for n in range(match + 1, len(lines) + 1):
+        if lines[n - 1].strip() and indent_of(lines[n - 1]) <= indent:
+            break
+        end = n
+    new = [*lines[:match - 1], " " * indent + scrutinee, *lines[end:]]
+    probe_project = Project(project.root, {**project.overrides, path.resolve(): "\n".join(new) + "\n"},
+                            project.packages_dir, project.trusted)
+    found = probe_project.probe_type(path, match)
+    if found is None:
+        return out
+    t, types = found
+    owner = types.owner_of(t)
+    ent = None
+    if owner is not None:
+        owner_fx = probe_project.file(owner[0])
+        ent = owner_fx.def_entity(owner[1]) if owner_fx else None
+    node = ent.node if ent is not None else None
+    if isinstance(node, ast.EnumDef):
+        name = written_enum(probe_project, probe_project.file(path), owner)
+        out += [Completion(f"{name}.{v.name}", "variant", entity_item(v.name, probe_project.member(ent, v.name)).detail, rank=0)
+                for v in node.variants]
+    elif isinstance(node, ast.StructDef):
+        out.append(Completion(owner[1], "struct", "a struct pattern: `" + owner[1] + "(field=pattern)`", rank=0))
+    elif isinstance(t, OptionT):
+        out += [Completion("some", "variant", "(pattern)", rank=0), Completion("none", "variant", "", rank=0)]
+    elif isinstance(t, ResultT):
+        out += [Completion("ok", "variant", "(pattern)", rank=0), Completion("err", "variant", "(pattern)", rank=0)]
+    elif t == BOOL:
+        out += [Completion("true", "keyword", rank=0), Completion("false", "keyword", rank=0)]
+    return out
+
+
+def struct_pattern_fields(project: Project, fx: FileIndex, text: str, call: Call) -> list[Completion]:
+    """The fields a struct pattern being typed (`Point(x=0, `) has not mentioned yet, as `name=` and as the bare `name` that binds it.
+
+    The line is an unfinished arm, which no parser accepts, so the struct is found by the name written before the
+    parenthesis (`Point`, `geo.Point`) instead of through the checker.
+
+    Args:
+        project: The project.
+        fx: The file being edited.
+        text: The line being typed.
+        call: The parenthesis being typed in, from `call_at`.
+    """
+    written = re.search(r"[^\W\d][\w.]*$", text[:call.callee.col - 1 + len(call.callee.value)])
+    if written is None:
+        return []
+    segs = written.group(0).split(".")
+    cur = deref(fx.module_level(segs[0]))
+    for seg in segs[1:]:
+        cur = deref(project.export_entity(cur.module_path, seg)) if cur is not None and cur.kind == "module" and cur.module_path else None
+    if cur is None or cur.kind != "struct" or not isinstance(cur.node, ast.StructDef):
+        return []
+    out: list[Completion] = []
+    for f in cur.node.fields:
+        if f.name in call.used:
+            continue
+        detail = type_text(f.type)
+        out.append(Completion(f"{f.name}=", "field", detail, f.doc or "", rank=0))
+        out.append(Completion(f.name, "field", detail, f.doc or "", rank=1))
+    return out
+
+
 # ---- the entry point ----------------------------------------------------------------------------------------------
 
 def complete(project: Project, path: Path, line: int, col: int) -> list[Completion]:
@@ -548,8 +662,14 @@ def complete(project: Project, path: Path, line: int, col: int) -> list[Completi
             out += [Completion(b, "type", BOUND_HELP[b], rank=1) for b in BOUNDS]
         return unique(out + file_names(fx, False, False, traits=True))
     call = call_at(source, line, col)
+    match = arm_match_line(lines, line, code)
     if call is not None and call.innermost == "(" and call.at_start and not types_only:
         out += named_arguments(project, path, source, line, col, call)
+        if match is not None:
+            out += struct_pattern_fields(project, fx, text, call)
+    starts_pattern = code.count("(") == code.count(")") and re.search(r"(?:^|[|@])\s*\w*$", code) is not None
+    if match is not None and starts_pattern and not types_only:
+        out += pattern_items(project, path, lines, match)
     if types_only:
         out += [Completion(n, "type", doc, rank=1) for n, doc in TYPE_NAMES.items()]
         out += file_names(fx, True)

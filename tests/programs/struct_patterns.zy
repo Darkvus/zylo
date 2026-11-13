@@ -1,0 +1,136 @@
+struct Point:
+    x: int
+    y: int
+
+struct Line:
+    a: Point
+    b: Point
+    name: str
+
+struct Box[T]:
+    value: T
+    label: str
+
+enum Shape:
+    Circle(int)
+    Square(Point)
+    Empty
+
+fn where(p: Point) -> str:
+    match p:
+        Point(x=0, y=0):
+            return "origin"
+        Point(x=0, y):
+            return f"on y axis at {y}"
+        Point(y=0, x):
+            return f"on x axis at {x}"
+        Point(x=1 | 2, y=3..=9):
+            return "small"
+        Point(x, y) if x == y:
+            return "diagonal"
+        other:
+            return f"other {other.x},{other.y}"
+
+fn line(l: Line) -> str:
+    match l:
+        Line(a=Point(x=0), name="axis"):
+            return "axis line"
+        Line(name="", b=Point(y=0, x)):
+            return f"unnamed to {x}"
+        Line(name=n @ ("a" | "b")):
+            return "ab " + n
+        Line(name):
+            return name
+
+fn digit(n: int) -> str:
+    match n:
+        d @ 1..=9:
+            return f"digit {d}"
+        k @ 10..:
+            return f"big {k}"
+        other:
+            return f"non-positive {other}"
+
+fn shape(s: Shape) -> str:
+    match s:
+        c @ Shape.Circle(_):
+            return f"{c}"
+        Shape.Square(Point(x, y=0)):
+            return f"flat square {x}"
+        Shape.Square(Point(y=q)):
+            return f"square raised {q}"
+        other:
+            return f"{other}"
+
+fn word(s: str) -> str:
+    match s:
+        "a":
+            return "A"
+        w @ ("b" | "c"):
+            return w + "!"
+        other:
+            other = other + "?"
+            return other
+
+fn opt(o: int?) -> int:
+    match o:
+        some(n @ 1..=5):
+            return n
+        some(n @ (6 | 7)):
+            return n * 2
+        some(n):
+            return n * 10
+        none:
+            return 0
+
+fn boxed(b: Box[int]) -> str:
+    match b:
+        Box(value=0):
+            return "empty box"
+        Box(value=v @ 1..=9, label):
+            return f"{label}: small {v}"
+        Box(label=""):
+            return "unlabelled"
+        Box(value, label):
+            return f"{label}: {value}"
+
+fn pair(p: tuple[int, Point]) -> str:
+    match p:
+        (0, Point(x)):
+            return f"zero {x}"
+        (n @ 1.., Point(y=0)):
+            return f"positive {n} flat"
+        (_, other):
+            return f"rest {other.y}"
+
+print(where(Point(0, 0)))
+print(where(Point(0, 5)))
+print(where(Point(7, 0)))
+print(where(Point(2, 5)))
+print(where(Point(4, 4)))
+print(where(Point(8, 4)))
+print(line(Line(Point(0, 1), Point(1, 1), "axis")))
+print(line(Line(Point(5, 1), Point(3, 0), "")))
+print(line(Line(Point(5, 1), Point(3, 1), "b")))
+print(line(Line(Point(5, 1), Point(3, 1), "zz")))
+print(digit(5))
+print(digit(50))
+print(digit(-5))
+print(shape(Shape.Circle(1)))
+print(shape(Shape.Square(Point(3, 0))))
+print(shape(Shape.Square(Point(3, 4))))
+print(shape(Shape.Empty))
+print(word("a"))
+print(word("c"))
+print(word("zz"))
+print(opt(some(3)))
+print(opt(some(7)))
+print(opt(some(30)))
+print(opt(none))
+print(boxed(Box(0, "x")))
+print(boxed(Box(4, "x")))
+print(boxed(Box(40, "")))
+print(boxed(Box(40, "y")))
+print(pair((0, Point(9, 9))))
+print(pair((3, Point(9, 0))))
+print(pair((3, Point(9, 5))))

@@ -475,7 +475,7 @@ class Checker(GenericMixin, TraitMixin):
         return self.named(info.name)
 
     def match_stmt(self, s: ast.Match) -> None:
-        """Check a `match` on an enum, `int`, `str`, `bool`, `Option`, `Result` or tuple.
+        """Check a `match` on an enum, struct, `int`, `str`, `bool`, `Option`, `Result` or tuple.
 
         Every pattern must fit the value's type and bind its data. Reachability and exhaustiveness are decided by
         `semantics/exhaustive.py`: an arm that could never run is an error, and so is a `match` that leaves some value
@@ -484,11 +484,13 @@ class Checker(GenericMixin, TraitMixin):
         t = self.expr(s.value)
         if isinstance(t, EnumT):
             s.enum = t.name
+        elif isinstance(t, StructT):
+            pass
         elif t == FLOAT:
             raise err("`match` cannot be used on a float: floats are not matched exactly; use `if` and comparisons", s.value)
         elif not isinstance(t, (OptionT, ResultT, TupleT)) and t not in (INT, STR, BOOL):
-            raise err(f"`match` needs an enum, int, str, bool, Option, Result or tuple value, not {t}", s.value)
-        space = Space(lambda ty: self.enums[ty.name].variants)
+            raise err(f"`match` needs an enum, struct, int, str, bool, Option, Result or tuple value, not {t}", s.value)
+        space = Space(lambda ty: self.enums[ty.name].variants, lambda ty: self.structs[ty.name].fields)
         rows: list[list[Pat]] = []
         before = len(self.errors)
         for arm in s.arms:
@@ -535,12 +537,41 @@ class Checker(GenericMixin, TraitMixin):
                 else:
                     dead = err(f"this {noun} can never run: the patterns before it already match every value it matches", alt)
             local.append(row)
+        if dead is None:
+            dead = self.nested_redundancy(arm.pattern, space)
         arm.binds = list(binds)
         self.arm_body(arm, list(binds.values()))
         if dead is not None:
             raise dead
         if arm.guard is None:
             rows.extend(local)
+
+    @staticmethod
+    def nested_redundancy(top: ast.Pattern, space: Space) -> ZyloError | None:
+        """Find an alternative of an or-pattern *inside* another pattern that an earlier alternative already covers.
+
+        The alternatives of the arm's own or-pattern are compared with the arms before it (see `check_arm`); this
+        compares the alternatives of `some(1 | 1)` or `(1 | 2 | 1, _)` with each other, wherever they are.
+
+        Args:
+            top: The whole pattern of the arm.
+            space: The usefulness algorithm.
+
+        Returns:
+            The error for the first redundant alternative, or None.
+        """
+        for node in Checker.pattern_nodes(top):
+            if node.kind != "or" or node is top:
+                continue
+            seen: list[list[Pat]] = []
+            for alt in node.subs:
+                row = [lower(alt)]
+                if seen and not space.useful(seen, row, [node.ty]):
+                    if row in seen:
+                        return err(f"`{pattern_text(alt)}` is matched twice: an earlier alternative is the same", alt)
+                    return err("this alternative can never run: the alternatives before it already match every value it matches", alt)
+                seen.append(row)
+        return None
 
     def check_pattern(self, p: ast.Pattern, t: Type, binds: dict[str, Type], top: bool = False) -> None:
         """Check a pattern against the type of the value it matches, collecting the names it binds.
@@ -556,11 +587,14 @@ class Checker(GenericMixin, TraitMixin):
             case "wild":
                 pass
             case "bind":
-                if p.name in binds:
-                    raise err("a pattern cannot bind the same name twice", p)
-                if isinstance(t, EnumT) and p.name in self.enums[t.name].variants:
-                    raise err(f"`{p.name}` is a variant of {t}: write `{t}.{p.name}` to match it, or choose another name", p)
-                binds[p.name] = t
+                self.bind_name(p, t, binds)
+            case "at":
+                inner: dict[str, Type] = {}
+                self.check_pattern(p.subs[0], t, inner, top)
+                if inner:
+                    raise err(f"the pattern after `{p.name} @` cannot bind names ({', '.join(inner)}): bind the whole value or "
+                              f"its parts, not both", p.subs[0])
+                self.bind_name(p, t, binds)
             case "lit":
                 self.literal_pattern(p, t, top)
             case "range":
@@ -589,6 +623,8 @@ class Checker(GenericMixin, TraitMixin):
                     self.check_pattern(sub, ty, binds)
             case "enum":
                 self.enum_pattern(p, t, binds)
+            case "struct":
+                self.struct_pattern(p, t, binds)
             case _:  # some / none / ok / err
                 if p.kind in ("some", "none"):
                     if not isinstance(t, OptionT):
@@ -601,8 +637,24 @@ class Checker(GenericMixin, TraitMixin):
                 for sub, ty in zip(p.subs, inner):
                     self.check_pattern(sub, ty, binds)
 
+    def bind_name(self, p: ast.Pattern, t: Type, binds: dict[str, Type]) -> None:
+        """Declare the name of a `bind` or `at` pattern, which holds the value `t`.
+
+        Raises:
+            ZyloError: If the name is already bound by the pattern, or is a variant of the matched enum (a bare variant
+                name is never a pattern: it would silently catch every value instead of the variant).
+        """
+        if p.name in binds:
+            raise err("a pattern cannot bind the same name twice", p)
+        if isinstance(t, EnumT) and p.name in self.enums[t.name].variants:
+            raise err(f"`{p.name}` is a variant of {t}: write `{t}.{p.name}` to match it, or choose another name", p)
+        binds[p.name] = t
+
     def enum_pattern(self, p: ast.Pattern, t: Type, binds: dict[str, Type]) -> None:
         """Check `Enum.Variant(p, ...)` against the matched type."""
+        if isinstance(t, StructT) and all(x.kind == "bind" for x in p.subs):  # `mod.Point(x, y)`: a struct pattern
+            p.kind, p.fields = "struct", [x.name for x in p.subs]
+            return self.struct_pattern(p, t, binds)
         if not isinstance(t, EnumT):
             raise err(f"`{p.type.name}.{p.name}` is a variant pattern, but the value is {t}", p)
         info = self.enums[t.name]
@@ -623,6 +675,33 @@ class Checker(GenericMixin, TraitMixin):
         p.enum = t.name
         for sub, ty in zip(p.subs, tys):
             self.check_pattern(sub, ty, binds)
+
+    def struct_pattern(self, p: ast.Pattern, t: Type, binds: dict[str, Type]) -> None:
+        """Check `Point(x=0, y)` against the matched type: the named fields exist and each sub-pattern fits its field.
+
+        Sets `p.slots` (the sub-pattern of every field, in declaration order) and `p.enum` (the struct).
+        """
+        written = f"{p.type.name.rsplit(chr(183), 1)[-1]}"
+        if not isinstance(t, StructT):
+            if isinstance(t, EnumT) and p.type.name.count(".") == 0 and p.name in self.enums[t.name].variants:
+                raise err(f"write the enum before the variant: `{t}.{p.name}`", p)
+            raise err(f"`{written}(...)` is a struct pattern, but the value is {t}", p)
+        info = self.structs[t.name]
+        if p.type.name in self.generics and not p.type.args:  # `Box(v=1)`: the type arguments come from the value
+            if t.base != p.type.name:
+                raise err(f"this `match` is on {t}, not {written}", p)
+        else:
+            named = self.resolve(p.type)
+            if named != t:
+                raise err(f"this `match` is on {t}, not {named}", p)
+        for name in p.fields:
+            if name not in info.fields:
+                raise err(f"struct {t} has no field {name!r} (has: {', '.join(info.fields)})", p)
+        p.enum = t.name
+        for name, sub in zip(p.fields, p.subs):
+            self.check_pattern(sub, info.fields[name], binds)
+        by_field = dict(zip(p.fields, p.subs))
+        p.slots = [by_field.get(name) for name in info.fields]
 
     def literal_pattern(self, p: ast.Pattern, t: Type, top: bool) -> None:
         """Check a literal pattern against the matched type."""
@@ -1089,6 +1168,7 @@ class Checker(GenericMixin, TraitMixin):
         for b in s.body:
             self.stmt(b)
         self.loops -= 1
+        self.lost_loop_mutation(s)
         self.scopes.pop()
 
     def assign(self, s: ast.Assign) -> None:
@@ -1189,6 +1269,26 @@ class Checker(GenericMixin, TraitMixin):
                 raise err(f"parameter {p.name!r} is modified but the changes are not visible to the caller: arguments are "
                           f"passed by value; return it (`-> {info.ty}`), make the function a method of its struct, or share "
                           f"the state with a `Cell`", p if p.line else node)
+
+    def lost_loop_mutation(self, s: ast.For) -> None:
+        """Reject a loop variable that the body modifies in place and never uses otherwise.
+
+        The variable of `for q in ps` is a copy of the element, so `q.x = 9` changes a value that is thrown away at the
+        end of the iteration (the same mistake as a lost parameter change, see `lost_mutation`). Reading `q` as well
+        (`print(q.x)`, `out.append(q)`) makes the copy deliberate and keeps it legal.
+
+        Args:
+            s: The loop just checked.
+
+        Raises:
+            ZyloError: On a modified loop variable that the body never uses afterwards.
+        """
+        names = s.targets or [s.var]
+        for name, info in zip(names, s.infos or [s.info]):
+            if info is not None and info.place_mut and not is_copy_type(info.ty) and info.uses <= info.mut_roots:
+                raise err(f"loop variable {name!r} is modified but the changes are lost: it is a copy of the element; "
+                          f"loop over the indexes (`for i in range(len(...))`, then `xs[i].field = ...`), or use the "
+                          f"copy afterwards (append it to a new list)", s)
 
     def captured_error(self, name: str, node: ast.Node) -> ZyloError:
         """The error for modifying a variable that a closure captured."""

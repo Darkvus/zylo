@@ -262,9 +262,21 @@ def test_field_assignment_marks_variable_and_param_mutable():
     assert p.body[3].params[0].info.mutable is True
 
 
-def test_loop_variable_field_assignment_is_allowed_on_the_copy():
-    p = checked(POINT + "ps = [Point(1.0, 2.0)]\nfor q in ps:\n    q.x = 9.0\n")
-    assert p.body[2].info.mutable is True
+def test_loop_variable_field_assignment_never_used_is_a_lost_mutation():
+    fails(POINT + "ps = [Point(1.0, 2.0)]\nfor q in ps:\n    q.x = 9.0\n", "loop variable 'q' is modified but the changes are lost")
+
+
+def test_loop_variable_modified_and_used_is_a_deliberate_copy():
+    p = checked(POINT + "ps = [Point(1.0, 2.0)]\nout: list[Point] = []\nfor q in ps:\n    q.x = 9.0\n    out.append(q)\n")
+    assert p.body[3].info.mutable is True
+
+
+def test_loop_variable_tuple_target_lost_mutation():
+    fails(POINT + "ps = [(1, Point(1.0, 2.0))]\nfor n, q in ps:\n    q.x = 9.0\n    print(n)\n", "loop variable 'q' is modified")
+
+
+def test_copy_typed_loop_variable_is_never_flagged():
+    checked("for i in range(3):\n    i = i + 1\n")
 
 
 def test_unit_method_result_cannot_be_assigned():
