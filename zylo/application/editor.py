@@ -426,8 +426,15 @@ def rename(project: Project, path: Path, line: int, col: int, new_name: str) -> 
     hit = project.ref_at(path, line, col)
     if hit is None or hit[0].entity is None:
         raise RenameError("there is no name to rename here")
-    refs = project.plan_rename(hit[0].entity, new_name)
-    return [Edit(Place(p, r.line, r.col, r.length), new_name) for p, r in refs]
+    target = hit[0].entity
+    refs = project.plan_rename(target, new_name)
+    edits = []
+    for p, r in refs:
+        text = new_name
+        if r.field is not None:  # the shorthand `x` in `Point(x)` is a field and a variable at once
+            text = f"{r.name}={new_name}" if r.entity == target else f"{new_name}={r.name}"
+        edits.append(Edit(Place(p, r.line, r.col, r.length), text))
+    return edits
 
 
 # ---- signature help ---------------------------------------------------------------------------------------------

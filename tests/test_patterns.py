@@ -64,7 +64,6 @@ def test_ranges_with_negative_ends_and_exclusive_ends():
     ("x = 1\nmatch x:\n    1.5..2:\n        print(1)\n", "integers only"),
     ("x = (1, 2)\nmatch x:\n    (a,):\n        print(1)\n", "at least two elements"),
     ("x = 1\nmatch x:\n    some(a, b):\n        print(1)\n", "exactly one pattern"),
-    ("x = 1\nmatch x:\n    Circle(r):\n        print(1)\n", "write the enum before the variant"),
 ])
 def test_malformed_patterns(src, message):
     with pytest.raises(ZyloError, match=message):

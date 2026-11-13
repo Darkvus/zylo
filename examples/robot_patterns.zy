@@ -1,0 +1,70 @@
+# Struct patterns, `name @ pattern` bindings and a catch-all name.
+# A robot walks on a grid; each step is described by matching on its position.
+
+struct Pos:
+    x: int
+    y: int
+
+struct Robot:
+    name: str
+    pos: Pos
+    battery: int
+
+enum Command:
+    Move(int, int)
+    Charge(int)
+    Stop
+
+fn describe(r: Robot) -> str:
+    match r:
+        Robot(battery=0, name):
+            return f"{name} is out of power"
+        Robot(pos=Pos(x=0, y=0), name):
+            return f"{name} is home"
+        Robot(pos=Pos(x=0, y), name):
+            return f"{name} is on the y axis at {y}"
+        Robot(pos=Pos(y=0, x), name):
+            return f"{name} is on the x axis at {x}"
+        Robot(battery=low @ 1..=20, name):
+            return f"{name} is running low ({low}%)"
+        other:
+            return f"{other.name} is at ({other.pos.x}, {other.pos.y})"
+
+fn apply(r: Robot, c: Command) -> Robot:
+    match c:
+        Command.Move(dx, dy) if r.battery >= 10:
+            return Robot(r.name, Pos(r.pos.x + dx, r.pos.y + dy), r.battery - 10)
+        Command.Move(_, _):
+            return r
+        Command.Charge(amount):
+            return Robot(r.name, r.pos, min(100, r.battery + amount))
+        Command.Stop:
+            return r
+
+fn grade(battery: int) -> str:
+    match battery:
+        full @ 100:
+            return f"full ({full})"
+        n @ 50..100:
+            return f"good ({n})"
+        n @ 1..50:
+            return f"weak ({n})"
+        other:
+            return f"dead ({other})"
+
+robot = Robot("Rex", Pos(0, 0), 35)
+commands = [
+    Command.Move(3, 0),
+    Command.Move(-3, 4),
+    Command.Move(2, 2),
+    Command.Move(1, 1),
+    Command.Charge(80),
+    Command.Move(5, 5),
+    Command.Stop,
+]
+print(describe(robot))
+for c in commands:
+    robot = apply(robot, c)
+    print(describe(robot))
+for b in [100, 73, 12, 0]:
+    print(grade(b))

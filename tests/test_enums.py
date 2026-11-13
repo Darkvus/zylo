@@ -41,8 +41,9 @@ def test_parse_match_arms():
 
 
 def test_an_arm_must_name_its_enum():
-    with pytest.raises(ZyloError, match="write the enum before the variant"):
-        parse("match x:\n    Circle(r):\n        print(r)\n")
+    assert parse("match x:\n    Circle(r):\n        print(r)\n").body[0].arms[0].pattern.kind == "struct"
+    fails(SHAPE + "s = Shape.Empty\nmatch s:\n    Circle(r):\n        print(r)\n    _:\n        print(0)\n",
+          "write the enum before the variant", 7)
 
 
 def test_empty_match_and_bad_enum_bodies_are_rejected():
@@ -109,7 +110,7 @@ def test_pattern_arity_and_enum_are_checked():
 
 
 def test_match_needs_an_enum():
-    fails("match [1]:\n    _:\n        print(1)\n", "needs an enum, int, str, bool, Option, Result or tuple value, not list\\[int\\]")
+    fails("match [1]:\n    _:\n        print(1)\n", "needs an enum, struct, int, str, bool, Option, Result or tuple value, not list\\[int\\]")
     fails("match 1.5:\n    _:\n        print(1)\n", "cannot be used on a float")
 
 

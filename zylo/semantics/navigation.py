@@ -151,6 +151,8 @@ class Ref:
             variant name, a named argument.
         needs_type: True for a member access whose receiver type is unknown, so it could not be resolved.
         scope: The scope the occurrence is in.
+        field: For the shorthand `x` in a struct pattern (`Point(x, y=0)`), the field it also names: the same text is
+            the variable and the field, so renaming either one rewrites it as `x=new` or `new=x`.
     """
 
     line: int
@@ -162,6 +164,7 @@ class Ref:
     space: str
     needs_type: bool
     scope: Scope | None
+    field: Entity | None = None
 
 
 @dataclass
@@ -844,7 +847,58 @@ class Walker:
                 parts.append(variant)
         return parts
 
-    def pattern(self, p: ast.Pattern, arm: ast.MatchArm, made: dict[str, Entity]) -> None:
+    def field_labels(self, parts: list[Token]) -> list[Token]:
+        """The `field` tokens of the `field=pattern` elements written directly inside a struct pattern's parentheses."""
+        i = self.fx.tok_at.get((parts[-1].line, parts[-1].col)) if parts else None
+        if i is None:
+            return []
+        i += 1
+        t = self.fx.tok(i)
+        if t is not None and t.kind == "OP" and t.value == "[":  # `Box[int](v=1)`: skip the type arguments
+            depth = 0
+            while (t := self.fx.tok(i)) is not None:
+                depth += (t.value == "[") - (t.value == "]") if t.kind == "OP" else 0
+                i += 1
+                if depth == 0:
+                    break
+            t = self.fx.tok(i)
+        if t is None or t.kind != "OP" or t.value != "(":
+            return []
+        labels, depth = [], 0
+        while (t := self.fx.tok(i)) is not None:
+            if t.kind == "OP" and t.value in "([":
+                depth += 1
+            elif t.kind == "OP" and t.value in ")]":
+                depth -= 1
+                if depth == 0:
+                    break
+            nxt = self.fx.tok(i + 1)
+            if depth == 1 and t.kind == "IDENT" and nxt is not None and nxt.kind == "OP" and nxt.value == "=":
+                labels.append(t)
+            i += 1
+        return labels
+
+    def struct_pattern(self, p: ast.Pattern, arm: ast.MatchArm, made: dict[str, Entity]) -> None:
+        """Resolve `Point(x=0, y)`: the struct, each written field name, and the patterns of the fields.
+
+        A bare `y` is both a field and the variable that binds it (see `Ref.field`).
+        """
+        parts = self.pattern_path(p)
+        for a in p.type.args:
+            self.typeref(a)
+        struct = deref(self.qualified(parts)) if parts else None
+        labels = self.field_labels(parts)
+        k = 0
+        for name, sub in zip(p.fields, p.subs):
+            ent = self.project.member(struct, name) if struct is not None and struct.kind == "struct" else None
+            if k < len(labels) and labels[k].value == name and (labels[k].line, labels[k].col) < (sub.line, sub.col):
+                self.tok_ref(labels[k], ent, space="member")
+                k += 1
+                self.pattern(sub, arm, made)
+            else:
+                self.pattern(sub, arm, made, field=ent)
+
+    def pattern(self, p: ast.Pattern, arm: ast.MatchArm, made: dict[str, Entity], field: Entity | None = None) -> None:
         """Resolve a pattern and the patterns inside it.
 
         The first appearance of a name declares it; later ones (the other alternatives of an or-pattern) use the same
@@ -854,6 +908,7 @@ class Walker:
             p: The pattern.
             arm: The arm it belongs to; its position keys the variables' types.
             made: The variables declared so far, by name.
+            field: The struct field a bare name is the shorthand for, when `p` is an element of a struct pattern.
         """
         if p.kind == "lit":
             self.visit(p.literal)
@@ -861,7 +916,7 @@ class Walker:
             for end in (p.lo, p.hi):
                 if end is not None:
                     self.visit(end)
-        elif p.kind == "bind":
+        elif p.kind in ("bind", "at"):
             t = self.fx.tok(self.fx.tok_at.get((p.line, p.col)))
             if t is not None and t.value == p.name:
                 if p.name in made:
@@ -871,6 +926,14 @@ class Walker:
                                  type_key=("match", arm.line, arm.col, len(made)))
                     self.declare(ent, t)
                     made[p.name] = ent
+                if field is not None:
+                    for r in reversed(self.res.refs):
+                        if (r.line, r.col) == (t.line, t.col):
+                            r.field = field
+                            break
+        elif p.kind == "struct":
+            self.struct_pattern(p, arm, made)
+            return
         elif p.kind == "enum":
             parts = self.pattern_path(p)
             for a in p.type.args:
@@ -1341,7 +1404,7 @@ class Project:
                     raise RenameError(
                         f"cannot rename {entity.name!r} safely: the type of a value it is used on is unknown in "
                         f"{p.name}:{r.line}; fix the errors in the program first")
-                if r.entity in family:
+                if r.entity in family or (r.field is not None and r.field in family):
                     out.append((p, r))
         return out
 

@@ -32,16 +32,17 @@ and is built vertically (lexer → parser → checker → codegen → tests).
 | **v0.25 Nested patterns** | Patterns that nest (`Shape.Circle(some(r))`, `ok((a, b))`, `some(1 \| 2)`), integer ranges (`1..5`, `1..=5`, `5..`, `..=5`), `match` on tuples, exact exhaustiveness (the error names the values left over, e.g. `Shape.Circle(none)` or `0..=4`; ranges can cover an `int` without `_`), unreachable-arm and duplicate detection, guards and or-patterns composing with all of it, generics inside patterns, and editor support for the names bound in nested patterns; see [docs/guide.md](docs/guide.md#nested-patterns-and-ranges) | done |
 | **v0.26 Correctness fixes** | A modified parameter whose changes are lost is now a compile error (arguments stay by value: return it, use a method or a `Cell`), the `pass` statement, `type_name(T)` (the name of a type, resolved per copy of a generic function), `;` between statements on one line, and a precise "already narrowed" error for `.unwrap()` on a value an `is` check has already unwrapped; the "Known limitations" in the design notes are brought up to date | done |
 | **v0.28 Traits** | User-defined bounds: `trait Shape:` declares method signatures, a struct or enum implements it by listing it (`struct Circle(Shape):`), and generics use it as a bound (`fn total[T: Shape + Show](xs: list[T])`) and call its methods on `T`; checked at the declaration (missing method, wrong signature, unknown trait) and at each instantiation, resolved per copy so there is no run-time cost, across modules and re-exports, with editor support (hover, definition, family rename, completion). Default type arguments (`struct Counter[T = int]`). No trait objects; see [docs/guide.md](docs/guide.md#traits) | done |
+| **v0.29 Struct patterns** | Struct patterns in `match` (`Point(x=0, y)`: partial fields, shorthand, nested, with guards, or-patterns, ranges and generic structs; exhaustiveness stays exact and names what is left), `name @ pattern` bindings (`n @ 1..=9`, `c @ Shape.Circle(_)`), a bare name as the catch-all arm (`other:`), redundancy checks inside nested or-patterns (`some(1 \| 1)`), a lost modification of a `for` loop variable (`for q in ps: q.x = 9`) is a compile error like a lost parameter change, and editor support: pattern completion (variants, struct fields), hover, definition and rename for the new bindings; see [docs/guide.md](docs/guide.md#struct-patterns--bindings-and-catch-all-names) | done |
 | **Community** | Documentation translations (the docs are English-only for now) and localized diagnostics | |
 
 Later: trait objects, `impl` for types the author does not own, default methods and supertraits, concurrency, a central package registry with `zylo publish`, semantic-version ranges and a dependency resolver.
 
 ## Open questions
 
-- Language server: more code actions (unused variables, wrapping a value in `some`), and completion of `match` patterns.
+- Language server: more code actions (unused variables, wrapping a value in `some`).
 
 - Narrowing beyond plain variables and field paths: `and` chains, indexed elements and closures.
-- Struct patterns in `match` (`Point(x=0, y)`) and `x @ pattern` bindings; non-constant default values.
+- Non-constant default values; `x @ pattern` with names inside the pattern.
 - Long-term memory model: implicit clones plus inferred borrows, or simplified ownership.
 - Custom error types and conversions for `?` between different error types.
 - Package trust: signing or an allow-list on top of the lock file checksums.

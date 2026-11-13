@@ -449,19 +449,24 @@ class Gen:
         self.line(f"match {scrutinee} {{")
         self.depth += 1
         for arm in s.arms:
-            for pattern, checks in self.arm_patterns(arm):
+            for pattern, checks, lets in self.arm_patterns(arm):
                 conds = list(checks)
                 if arm.guard is not None:
                     conds.append(f"({emit_ref(arm.guard)})" if checks else emit_ref(arm.guard))
                 guard = f" if {' && '.join(conds)}" if conds else ""
                 self.line(f"{pattern}{guard} => {{")
+                for let in lets:
+                    self.line(let)
                 self.block(arm.body)
                 self.line("}")
         self.depth -= 1
         self.line("}")
 
-    def arm_patterns(self, arm: ast.MatchArm) -> list[tuple[str, list[str]]]:
-        """The Rust patterns of an arm, each with the extra guard conditions it needs.
+    def arm_patterns(self, arm: ast.MatchArm) -> list[tuple[str, list[str], list[str]]]:
+        """The Rust patterns of an arm, each with the extra guard conditions it needs and the `let`s that start its body.
+
+        A name that binds a whole `str` scrutinee (`other:`, `s @ "a"`) matches a `&str`, so the pattern binds a fresh
+        name and a `let` makes the `String` the arm's body expects.
 
         Alternatives are joined into one Rust or-pattern, except when one has a string literal nested inside it: then
         every alternative becomes an arm of its own (with its own comparisons), because each binds different fresh names.
@@ -469,11 +474,13 @@ class Gen:
         shared = {v.name: v for v in arm.vars}
         top = arm.pattern
         if not self.nested_str(top):
-            return [(self.rust_pattern(top, shared, [], True), [])]
+            lets: list[str] = []
+            return [(self.rust_pattern(top, shared, [], lets, True), [], lets)]
         out = []
         for alt in self.expand_alternatives(top):
             checks: list[str] = []
-            out.append((self.rust_pattern(alt, shared, checks, True), checks))
+            lets = []
+            out.append((self.rust_pattern(alt, shared, checks, lets, True), checks, lets))
         return out
 
     @staticmethod
@@ -483,6 +490,8 @@ class Gen:
             return any(Gen.nested_str(x, top) for x in p.subs)
         if p.kind == "lit":
             return p.ty == STR and not top
+        if p.kind == "at":  # `s @ "a"` holds the same value as its pattern
+            return Gen.nested_str(p.subs[0], top)
         return any(Gen.nested_str(x, False) for x in p.subs)
 
     @staticmethod
@@ -499,7 +508,7 @@ class Gen:
 
     ARM_WRAPPERS = {"some": "Some", "ok": "Ok", "err": "Err"}
 
-    def rust_pattern(self, p: ast.Pattern, shared: dict, checks: list[str], top: bool = False) -> str:
+    def rust_pattern(self, p: ast.Pattern, shared: dict, checks: list[str], lets: list[str], top: bool = False) -> str:
         """Return the Rust pattern for a Zylo pattern.
 
         Args:
@@ -507,14 +516,29 @@ class Gen:
             shared: The arm's variables by name; a binding that is assigned to in the arm is written `mut`.
             checks: Receives the comparisons for the string literals nested in the pattern (each is replaced by a
                 fresh name in the returned pattern).
+            lets: Receives the `let`s that turn a `&str` binding of the whole scrutinee into a `String`.
             top: Whether `p` is the whole pattern of an arm.
         """
-        sub = lambda x: self.rust_pattern(x, shared, checks)  # noqa: E731
+        sub = lambda x: self.rust_pattern(x, shared, checks, lets)  # noqa: E731
         match p.kind:
             case "wild":
                 return "_"
-            case "bind":
-                return f"{'mut ' if shared[p.name].mutable else ''}{ident(p.name)}"
+            case "bind" | "at":
+                mut = "mut " if shared[p.name].mutable else ""
+                name = ident(p.name)
+                if top and p.ty == STR:
+                    let = f"let {mut}{name} = __top.to_string();"
+                    if let not in lets:
+                        lets.append(let)
+                    name, mut = "__top", ""
+                if p.kind == "bind":
+                    return f"{mut}{name}"
+                inner = p.subs[0]
+                if inner.kind == "lit" and isinstance(inner.literal, ast.Str) and not top:  # compared in the guard
+                    checks.append(f"{name} == {str_lit(inner.literal.value)}")
+                    return f"{mut}{name}"
+                text = self.rust_pattern(inner, shared, checks, lets, top)
+                return f"{mut}{name} @ ({text})" if inner.kind == "or" else f"{mut}{name} @ {text}"
             case "none":
                 return "None"
             case "lit":
@@ -538,8 +562,16 @@ class Gen:
                 return f"{name}({', '.join(sub(x) for x in p.subs)})" if p.subs else name
             case "tuple":
                 return f"({', '.join(sub(x) for x in p.subs)})"
+            case "struct":
+                items = []
+                for name, x in zip(p.fields, p.subs):
+                    text = sub(x)
+                    items.append(text if x.kind == "bind" and x.name == name else f"{ident(name)}: {text}")
+                if any(slot is None for slot in p.slots):
+                    items.append("..")
+                return f"{tname(p.enum)} {{ {', '.join(items)} }}" if items else f"{tname(p.enum)} {{ .. }}"
             case "or":
-                return " | ".join(self.rust_pattern(x, shared, checks, top) for x in p.subs)
+                return " | ".join(self.rust_pattern(x, shared, checks, lets, top) for x in p.subs)
             case _:
                 return f"{self.ARM_WRAPPERS[p.kind]}({', '.join(sub(x) for x in p.subs)})"
 

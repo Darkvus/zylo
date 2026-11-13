@@ -55,7 +55,10 @@ the changes are not visible to the caller". A parameter that is also read, retur
 copy and stays legal (`fn sorted_copy(xs) -> list: xs.sort(); return xs`). Plain reassignment (`xs = [1]`) is not
 flagged: it rebinds a local name, which nobody expects to reach the caller. Generic functions are checked through their
 copies, and closures cannot modify captured variables at all (an older error), so the rule covers every callable.
-Not covered: the variable of a `for` loop (`for q in ps: q.x = 1` changes the iteration's copy, which is documented).
+The variable of a `for` loop follows the same rule since v0.29: `for q in ps: q.x = 1` changes the iteration's copy, so
+a loop variable that is modified in place and never used otherwise is "loop variable 'q' is modified but the changes are
+lost" (use `for i in range(len(ps)): ps[i].x = 1`, or append the modified copy to a new list). Reading the variable too
+keeps it legal.
 
 **Declaration vs reassignment is inferred.** `x = 1` declares the first time and reassigns after,
 like Python. The checker marks variables that are reassigned or mutated (`append`, `xs[i] = v`,
@@ -112,6 +115,21 @@ is generated as a fresh binding plus a comparison in the arm's guard (an or-patt
 arm per alternative); Rust only sees those arms as guarded, which is sound because a string column can never be
 completed by a literal. Ranges are always emitted as inclusive Rust ranges. `is` narrowing is untouched: `match` is for choosing between cases, `is` for
 guarding a single one.
+
+**Struct patterns, `@` and the catch-all name (v0.29).** A struct is one more constructor for the algorithm, the only
+one of its type (`("st",)`), whose sub-patterns are its fields in declaration order; a field a pattern does not mention is
+a wildcard, which is how a partial pattern `Point(x=0)` is exact and how the error names `Point(x=..=-1)`. The checker
+records the sub-pattern of every field in `Pattern.slots` (an annotation, not a child) and codegen writes the Rust
+`Point { x: 0, y, .. }`. `name @ pattern` is lowered as `pattern` (the name is a variable, not a test) and is emitted as
+`name @ pattern`; the pattern after the `@` may not bind names, because Rust cannot bind a non-`Copy` value and parts of it
+at once, and a clone would hide the difference. A bare name at the top of an arm is a `bind` pattern, a catch-all that
+holds the whole value. It cannot be confused with a variant (variants always carry their enum: `Shape.Circle`), nor with
+a constant (a pattern is never a constant; the only names are bindings), so the one remaining slip, a bare name equal to a
+variant of the matched enum (`Circle:`, almost certainly a forgotten `Shape.`), is an error that suggests the qualified
+name. The scrutinee of a `match` on a `str` is a `&str`, so a name that binds the whole of it is emitted as a fresh name
+plus `let name = fresh.to_string();` at the top of the arm. Alternatives inside a pattern (`some(1 | 1)`) are checked
+against each other in isolation (context-free, so only an alternative that is useless on its own is reported; the
+alternatives of the arm's own or-pattern are checked against the arms before it).
 
 **Enum methods mirror struct methods.** `fn` with `self` inside an `enum` body is emitted in an `impl` block. Enum
 values are immutable (there is nothing to assign to), so a method always takes `&self` and the usual body is
@@ -370,9 +388,9 @@ Not done: trait objects, default methods, supertraits (`trait A(B)`), generic tr
 
 - Values are still cloned when stored (assigned to another variable, put in a struct or a list) or returned.
 - `is` narrowing works on plain variables and field paths (`p.name`, `self.a.b`), with a single `is` condition per `if` (no `and` chains) and not on call results or indexed elements. A narrowed value is already unwrapped: calling `unwrap`, `unwrap_or` or `unwrap_err` on it is the error "already narrowed" (an error rather than a no-op, so a stray `.unwrap()` is not mistaken for a second check, and the message says what to drop). Closures do not see a field narrowing.
-- `match` has guards, or-patterns, nested patterns, integer ranges and tuple scrutinees (exhaustiveness is exact), but no struct patterns (`Point(x=0, y)`), no `x @ pattern` bindings and no bare-name catch-all at the top of an arm (use `_`).
+- `match` has guards, or-patterns, nested patterns, struct patterns, `x @ pattern` bindings, a bare-name catch-all and tuple scrutinees (exhaustiveness is exact), but the pattern after `@` cannot bind names, there are no patterns for lists, dicts or strings by prefix, and the redundancy check of alternatives nested inside a pattern does not use the surrounding arms.
 - Generics are monomorphized. The bounds are a fixed set (`Eq`, `Ord`, `Num`...) and the traits a program declares: no trait objects, default methods, supertraits or generic traits, no implementing a trait for a type you do not own (`int`, a package's struct), no float literals of type `T`, no generic `extern fn`.
-- Arguments are passed by value; a modified parameter whose changes nobody could see is an error (see above). The variable of a `for` loop is a copy as well, and modifying it without using it afterwards is not flagged.
+- Arguments are passed by value; a modified parameter whose changes nobody could see is an error (see above). The variable of a `for` loop is a copy as well: modifying it in place without using it afterwards is an error (see above).
 - Rust generics and traits are not exposed (Zylo's traits are checked in the compiler and leave no trace in the generated Rust). Rust can call Zylo function values passed to an `extern fn` (see rust-interop.md).
 - No list comprehensions yet; closures are limited (see above).
 - The language server's types and member lookups need the file to parse and link (a syntax error elsewhere removes them), and its rename refuses rather than guess. I/O is synchronous and text-only (no binary files, sockets or subprocesses).

@@ -82,8 +82,7 @@ def test_parse_errors():
         parse("f(a=1, 2)\n")
     with pytest.raises(ZyloError, match="holds exactly one pattern"):
         parse("match x:\n    some:\n        print(1)\n")
-    with pytest.raises(ZyloError, match="write the enum before the variant"):
-        parse("match x:\n    Circle:\n        print(1)\n")
+    assert parse("match x:\n    Circle:\n        print(1)\n").body[0].arms[0].pattern.kind == "bind"
 
 
 def test_formatter_roundtrips_new_syntax():

@@ -88,11 +88,20 @@ def pattern_text(p: ast.Pattern, nested_or: bool = False) -> str:
             return "none"
         case "tuple":
             return f"({', '.join(pattern_text(x) for x in p.subs)})"
+        case "struct":
+            return f"{type_text(p.type)}({', '.join(field_text(n, x) for n, x in zip(p.fields, p.subs))})"
+        case "at":
+            return f"{p.name} @ {pattern_text(p.subs[0], True)}"
         case "or":
             text = " | ".join(pattern_text(x, True) for x in p.subs)
             return f"({text})" if nested_or else text
         case _:  # some / ok / err
             return f"{p.kind}({', '.join(pattern_text(x) for x in p.subs)})"
+
+
+def field_text(name: str, p: ast.Pattern) -> str:
+    """Return one field of a struct pattern: `x` when it just binds the field, otherwise `x=pattern`."""
+    return name if p.kind == "bind" and p.name == name else f"{name}={pattern_text(p)}"
 
 
 def wrap_pattern(p: ast.Pattern, indent: int, col: int, tail: int, limit: int) -> str:
@@ -113,9 +122,20 @@ def wrap_pattern(p: ast.Pattern, indent: int, col: int, tail: int, limit: int) -
     if p.kind == "or":
         parts = [wrap_pattern(x, indent + 1, len(inner) + 2, 0, limit) for x in p.subs]
         return "(\n" + inner + ("\n" + inner + "| ").join(parts) + "\n" + close
-    head = {"enum": f"{type_text(p.type)}.{p.name}" if p.type else "", "tuple": ""}.get(p.kind, p.kind)
-    items = "".join(f"{inner}{wrap_pattern(x, indent + 1, len(inner), 1, limit)},\n" for x in p.subs)
-    return f"{head}(\n{items}{close}"
+    if p.kind == "at":  # only the pattern after `@` can be broken; the name stays in front of it
+        head = f"{p.name} @ "
+        return head + wrap_pattern(p.subs[0], indent, col + len(head), tail, limit)
+    head = {"enum": f"{type_text(p.type)}.{p.name}" if p.type else "", "tuple": "",
+            "struct": type_text(p.type) if p.type else ""}.get(p.kind, p.kind)
+    names = p.fields if p.kind == "struct" else [""] * len(p.subs)
+    lines = []
+    for name, x in zip(names, p.subs):
+        if p.kind == "struct" and not (x.kind == "bind" and x.name == name):
+            label = f"{name}="
+            lines.append(f"{inner}{label}{wrap_pattern(x, indent + 1, len(inner) + len(label), 1, limit)},\n")
+        else:
+            lines.append(f"{inner}{wrap_pattern(x, indent + 1, len(inner), 1, limit)},\n")
+    return f"{head}(\n{''.join(lines)}{close}"
 
 
 def type_text(t: ast.TypeRef) -> str:

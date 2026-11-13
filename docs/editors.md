@@ -28,6 +28,8 @@ line being typed does not have to be valid:
 | After `Enum.` (also `module.Enum.`) | The variants, with their data (`Circle(float)`) and descriptions. |
 | In the parentheses of a call | The parameters (or struct fields) that have not been given yet, as `name=`, besides the names in scope. Positional arguments already written use up the first parameters. |
 | Where a trait is expected (a bound after `[T:` or `+`, the list after `struct Name(`) | The traits of the file and of its imports (and the built-in bounds `Eq`, `Show`, `Ord`, `Num`, `Key` in a bound), and the modules (for `module.Trait`). |
+| At the start of a `match` arm (also after `|` and `name @`) | The patterns that fit the matched value: the variants of an enum as `Enum.Variant` (written the way the file imports the enum), `some` / `none`, `ok` / `err`, `true` / `false`, a struct's name, and `_`. |
+| In the parentheses of a struct pattern (`Point(`) | The fields not mentioned yet, as `name=` (to match the field) and as the bare `name` (to bind it). |
 | Where a type is expected (after `->`, after the `:` of a parameter, a field or an annotated variable, inside `list[`) | `int`, `str`, `list`..., the structs and enums of the file and of its imports, and the modules (for `module.Type`). |
 | After `import` and `from ... import` | The modules (the standard library, and every `.zy` file of the workspace), then the names a module exports. |
 | Anywhere else | The variables and parameters in scope, the definitions, imports and modules of the file, the built-in functions and the keywords, in that order. |
@@ -84,7 +86,7 @@ the same thing:
 | A function or struct parameter | Its body and every `name=value` argument that sets it, in any file. |
 | A function, struct, enum or trait | Its definition, every use, the type annotations, and the `import`, `from ... import` and `pub from` lines of every file of the workspace that mentions it. |
 | A name imported with `as` | Only the importing file; the original keeps its name. |
-| A field, method or variant | Its definition, every access (`p.x`, `p.move()`, `Shape.Circle(...)`), constructor arguments (`Point(x=1.0)`) and `match` patterns. Other structs with a field of the same name are not touched. A trait's method and the methods that implement it are one family: renaming one renames them all, and the calls through a trait bound (`x.area()` where `x: T`). Renaming a parameter of such a method is refused, because parameter names are part of the trait's signature. |
+| A field, method or variant | Its definition, every access (`p.x`, `p.move()`, `Shape.Circle(...)`), constructor arguments (`Point(x=1.0)`) and `match` patterns (`Point(x=0)`). Other structs with a field of the same name are not touched. A trait's method and the methods that implement it are one family: renaming one renames them all, and the calls through a trait bound (`x.area()` where `x: T`). Renaming a parameter of such a method is refused, because parameter names are part of the trait's signature. In the shorthand `Point(x)` the one word is the field and a variable: renaming either rewrites it as `x=new` or `new=x`, so the other keeps its name. |
 
 The workspace is the directory of the project's `zylo.toml` (or the folder of the file when there is none). Hidden
 folders, `node_modules` and `target` are skipped, and the unsaved text of open files is used instead of what is on disk.

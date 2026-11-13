@@ -10,12 +10,12 @@ Each action is a list of text edits, so the editor shows and applies it like any
 from dataclasses import dataclass
 from pathlib import Path
 
-from zylo.application.completion import indent_of, module_files
+from zylo.application.completion import indent_of, module_files, written_enum
 from zylo.application.editor import Edit, Place
 from zylo.domain import ast
 from zylo.domain.types import EnumT
 from zylo.semantics.linker import RESERVED_TYPES
-from zylo.semantics.navigation import BUILTIN_TYPES, FileIndex, Project, Types, deref
+from zylo.semantics.navigation import BUILTIN_TYPES, FileIndex, Project, Types
 from zylo.syntax.lexer import KEYWORDS
 
 
@@ -94,19 +94,9 @@ def enum_qualifier(project: Project, fx: FileIndex, match: ast.Match, owner: tup
     """How the enum is written in this file: as the arms already write it, else by its import, else its bare name."""
     for arm in match.arms:
         for n in ast.walk(arm.pattern):
-            if isinstance(n, ast.Pattern) and n.type is not None:
+            if isinstance(n, ast.Pattern) and n.kind == "enum" and n.type is not None:
                 return n.type.name
-    path, name = owner
-    if path == fx.path:
-        return name
-    for local in fx.froms:
-        ent = deref(fx.local_import(local))
-        if ent is not None and ent.kind == "enum" and ent.path == path and ent.name == name:
-            return local
-    for local, b in fx.aliases.items():
-        if project.module_path(fx.path, b.dotted) == path:
-            return f"{local}.{name}"
-    return name
+    return written_enum(project, fx, owner)
 
 
 def match_fixes(project: Project, path: Path, line: int) -> list[CodeAction]:
@@ -133,10 +123,11 @@ def match_fixes(project: Project, path: Path, line: int) -> list[CodeAction]:
     if not isinstance(enum, ast.EnumDef):
         return []
     alts = [(arm, a) for arm in match.arms for a in (arm.pattern.subs if arm.pattern.kind == "or" else [arm.pattern])]
-    if any(a.kind == "wild" and arm.guard is None for arm, a in alts):
+    if any(a.kind in ("wild", "bind") and arm.guard is None for arm, a in alts):
         return []
     # a variant counts as covered when an unguarded arm matches it whatever it carries
-    covered = {a.name for arm, a in alts if arm.guard is None and a.kind == "enum" and all(irrefutable(x) for x in a.subs)}
+    covered = {u.name for arm, a in alts if arm.guard is None for u in [a.subs[0] if a.kind == "at" else a]
+               if u.kind == "enum" and all(irrefutable(x) for x in u.subs)}
     missing = [v for v in enum.variants if v.name not in covered]
     if not missing:
         return []
@@ -161,7 +152,9 @@ def match_fixes(project: Project, path: Path, line: int) -> list[CodeAction]:
 
 def irrefutable(p: ast.Pattern) -> bool:
     """Whether a pattern matches every value of its type."""
-    return p.kind in ("wild", "bind") or (p.kind == "tuple" and all(irrefutable(x) for x in p.subs))
+    if p.kind == "at":
+        return irrefutable(p.subs[0])
+    return p.kind in ("wild", "bind") or (p.kind in ("tuple", "struct") and all(irrefutable(x) for x in p.subs))
 
 
 # ---- the entry point ----------------------------------------------------------------------------------------------

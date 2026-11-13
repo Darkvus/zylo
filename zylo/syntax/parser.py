@@ -757,7 +757,7 @@ class Parser:
         """Parse `pattern | pattern | ...`; a single pattern is returned as it is.
 
         Args:
-            top: Whether this is the pattern of an arm, where a bare name is an error instead of a binding.
+            top: Whether this is the pattern of an arm, where a bare name catches every value that is left.
         """
         first = self.cur
         alts = [self.parse_pattern(top)]
@@ -770,9 +770,9 @@ class Parser:
     def parse_pattern(self, top: bool = False) -> ast.Pattern:
         """Parse one pattern.
 
-        The pattern is `_`, a name (a binding, only inside another pattern), `Enum.Variant`, `Enum.Variant(p, q)`, a
-        literal (`1`, `-1`, `"a"`, `true`), an integer range (`1..5`, `1..=5`, `5..`, `..=5`), `none`,
-        `some(p)` / `ok(p)` / `err(p)`, a tuple `(p, q)` or a parenthesized or-pattern `(p | q)`.
+        The pattern is `_`, a name (a binding), `name @ pattern`, `Enum.Variant`, `Enum.Variant(p, q)`, a struct
+        pattern `Point(x=0, y)`, a literal (`1`, `-1`, `"a"`, `true`), an integer range (`1..5`, `1..=5`, `5..`,
+        `..=5`), `none`, `some(p)` / `ok(p)` / `err(p)`, a tuple `(p, q)` or a parenthesized or-pattern `(p | q)`.
 
         Raises:
             ZyloError: If the pattern is malformed.
@@ -811,6 +811,8 @@ class Parser:
         self.expect("IDENT")
         if first.value == "_":
             return ast.Pattern("wild", **pos)
+        if self.match("OP", "@"):
+            return ast.Pattern("at", name=first.value, subs=[self.parse_pattern()], **pos)
         parts = [first.value]
         targs: list[ast.TypeRef] = []
         while self.match("OP", "."):
@@ -819,26 +821,60 @@ class Parser:
                 targs = self.parse_type_args()  # `Opt[int].Some(x)`: the enum with its type arguments
         if not targs and self.check("OP", "[") and len(parts) == 1:
             targs = self.parse_type_args()
-            self.expect("OP", ".")
-            parts.append(self.expect("IDENT").value)
-        if len(parts) < 2 and first.value not in ("some", "ok", "err"):
-            if top or self.check("OP", "("):
-                raise ZyloError(f"write the enum before the variant: `Enum.{first.value}`", first.line, first.col)
+            if not self.check("OP", "("):  # `Box[int](v=1)` is a struct pattern, `Opt[int].Some(x)` an enum one
+                self.expect("OP", ".")
+                parts.append(self.expect("IDENT").value)
+        if len(parts) < 2 and not targs and first.value not in ("some", "ok", "err") and not self.check("OP", "("):
             return ast.Pattern("bind", name=first.value, **pos)
         subs: list[ast.Pattern] = []
+        names: list[str] = []
         if self.match("OP", "("):
-            subs.append(self.parse_or_pattern())
-            while self.match("OP", ","):
-                if self.check("OP", ")"):
-                    break
+            while not self.check("OP", ")"):
+                item = self.cur
+                if item.kind == "IDENT" and self.peek().kind == "OP" and self.peek().value == "=":
+                    self.advance()
+                    self.advance()
+                    names.append(item.value)
+                else:
+                    names.append("")
                 subs.append(self.parse_or_pattern())
+                if not self.match("OP", ","):
+                    break
             self.expect("OP", ")")
+        if any(names) or (len(parts) == 1 and first.value not in ("some", "ok", "err")):
+            return self.struct_pattern(first, parts, targs, names, subs)
         if len(parts) == 1:  # some(p) / ok(p) / err(p)
             if len(subs) != 1:
                 raise ZyloError(f"`{first.value}(...)` holds exactly one pattern: write `{first.value}(x)`", first.line, first.col)
             return ast.Pattern(first.value, subs=subs, **pos)
         typ = ast.TypeRef(".".join(parts[:-1]), targs, line=first.line, col=first.col)
         return ast.Pattern("enum", name=parts[-1], type=typ, subs=subs, **pos)
+
+    def struct_pattern(self, first: Token, parts: list[str], targs: list[ast.TypeRef], names: list[str],
+                       subs: list[ast.Pattern]) -> ast.Pattern:
+        """Build the pattern `Point(x=0, y)`: each element is `field=pattern` or a bare name, the shorthand for `field=field`.
+
+        Args:
+            first: The first token of the pattern.
+            parts: The dotted name before the parentheses (`Point`, `mod.Point`).
+            targs: The type arguments written after the name.
+            names: The field written before each `=`, or "" for an element without one.
+            subs: The element patterns.
+
+        Raises:
+            ZyloError: If an element without `=` is not a bare name, or a field is named twice.
+        """
+        fields: list[str] = []
+        for name, sub in zip(names, subs):
+            if not name:
+                if sub.kind != "bind":
+                    raise ZyloError("a struct pattern lists its fields as `field=pattern`, or just `field` to bind it", sub.line, sub.col)
+                name = sub.name
+            if name in fields:
+                raise ZyloError(f"the field {name!r} appears twice in this pattern", sub.line, sub.col)
+            fields.append(name)
+        typ = ast.TypeRef(".".join(parts), targs, line=first.line, col=first.col)
+        return ast.Pattern("struct", name=parts[-1], type=typ, subs=subs, fields=fields, line=first.line, col=first.col)
 
     def parse_pattern_literal(self, first: Token) -> ast.Expr:
         """Parse the literal of a pattern or of the end of a range pattern.
