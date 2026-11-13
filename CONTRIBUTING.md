@@ -68,3 +68,22 @@ Always work **vertically**: a new construct goes through the whole pipeline befo
 - User mistakes are `ZyloError` with a line and column; a `rustc` failure on generated code is a Zylo bug (`BackendError`).
 - No implicit coercions between types: this is a design decision.
 - Error messages should say what is wrong and, when possible, how to fix it.
+
+## Windows code signing
+
+The Windows installer is signed with [SignPath Foundation](https://signpath.org/) (free for
+open-source projects), so Windows does not show "Unknown publisher". The release workflow signs
+the installer only when the repository variable `SIGNPATH_ORGANIZATION_ID` and the secret
+`SIGNPATH_API_TOKEN` are set; without them the installer is published unsigned.
+
+SignPath setup (once, by a maintainer):
+
+1. Apply at <https://signpath.org/apply> with the public repository and the MIT licence.
+2. In SignPath create the project `zylo`, the artifact configuration `installer` (the file is
+   `.signpath/artifact-configurations/installer.xml`) and the signing policy `release-signing`,
+   and connect the GitHub trusted build system.
+3. Add the organization id as the repository variable `SIGNPATH_ORGANIZATION_ID` and an API token
+   as the secret `SIGNPATH_API_TOKEN`.
+
+SmartScreen may still warn for a few days after the first signed release, until the certificate
+gains reputation.
