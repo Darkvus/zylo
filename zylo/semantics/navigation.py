@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from zylo.domain import ast
-from zylo.domain.builtins import BUILTINS, SHADOWABLE
+from zylo.domain.builtins import BUILTINS, METHODS, SHADOWABLE, receiver_kind
 from zylo.domain.errors import ZyloError
 from zylo.domain.types import EnumT, StructT, Type
 from zylo.packaging.stdlib import stdlib_dir
@@ -51,7 +51,8 @@ class Entity:
 
     Attributes:
         kind: "variable", "parameter", "self", "function", "struct", "enum", "variant", "field", "method", "module",
-            "alias" (a name bound by `from m import x as y`) or "builtin".
+            "alias" (a name bound by `from m import x as y`), "builtin" (a built-in function) or "builtin_method" (a
+            method of `str`, a list, a dict, a set, a `Cell`, an Option or a Result).
         name: The name as written where it is declared.
         key: What makes two entities the same thing; equality and hashing use only this.
         path: The file that declares it (for a module, the file that imports it).
@@ -62,14 +63,16 @@ class Entity:
         target: What an alias stands for, or the type a `self` belongs to.
         module_path: For a module, the file it names.
         type_key: Where the checker keeps the type of a variable declared by a loop, a pattern or a parameter.
+        receiver: For a built-in method, the type of the value it is called on.
     """
 
     def __init__(self, kind: str, name: str, key: tuple, path: Path | None = None, line: int = 0, col: int = 0,
                  node: ast.Node | None = None, owner: "Entity | None" = None, target: "Entity | None" = None,
-                 module_path: Path | None = None, type_key: tuple | None = None):
+                 module_path: Path | None = None, type_key: tuple | None = None, receiver: Type | None = None):
         """Create an entity; see the class attributes for the arguments."""
         self.kind, self.name, self.key, self.path, self.line, self.col = kind, name, key, path, line, col
         self.node, self.owner, self.target, self.module_path, self.type_key = node, owner, target, module_path, type_key
+        self.receiver = receiver
 
     def __eq__(self, other: object) -> bool:
         """Entities are equal when their keys are."""
@@ -909,6 +912,9 @@ class Walker:
             return None, True
         owner = self.types.owner_of(t) if self.types else None
         if owner is None:
+            kind = receiver_kind(t)
+            if kind is not None and e.name in METHODS[kind]:
+                return Entity("builtin_method", e.name, ("builtin_method", show_type(t), e.name), receiver=t), False
             return None, False
         fx = self.project.file(owner[0])
         ent = fx.def_entity(owner[1]) if fx else None
@@ -1070,13 +1076,52 @@ class Project:
 
     def types_for(self, path: Path) -> Types | None:
         """The checker's types for a file, linking and checking it as the entry of a program; None if it cannot be linked."""
-        linker = Linker(self.packages_dir, self.trusted, overrides=self.overrides)
+        found = self.link(path)
+        return Types.from_link(found[0]) if found else None
+
+    def link(self, path: Path) -> tuple[Linker, ast.Program] | None:
+        """Link and check a file as the entry of a program, skipping the statements that do not parse.
+
+        Args:
+            path: The entry file.
+
+        Returns:
+            The linker (holding every module, annotated with types) and the linked program, or None when the program
+            cannot be linked (an unknown import, a cycle...).
+        """
+        linker = Linker(self.packages_dir, self.trusted, overrides=self.overrides, tolerant=True)
         try:
             program = linker.link(path)
             check_all(program)
-            return Types.from_link(linker)
+            return linker, program
         except (ZyloError, RecursionError, OSError):
             return None
+
+    def probe_type(self, path: Path, line: int) -> tuple[Type, Types] | None:
+        """The type of the expression statement written alone on a line of a file.
+
+        Completion uses it to find the type of the value in front of a dot: it rewrites the line being typed into
+        that value on its own and asks the checker.
+
+        Args:
+            path: The file.
+            line: 1-based line of the expression statement.
+
+        Returns:
+            The expression's type with the type table of the program (to find what defines a struct), or None when the
+            program does not link or the checker did not reach the line.
+        """
+        found = self.link(path)
+        if found is None:
+            return None
+        linker, _ = found
+        mod = linker.by_path.get(path.resolve())
+        if mod is None:
+            return None
+        for n in ast.walk(mod.program):
+            if isinstance(n, ast.ExprStmt) and n.line == line and n.expr.ty is not None:
+                return n.expr.ty, Types.from_link(linker)
+        return None
 
     def resolution(self, path: Path) -> Resolution | None:
         """Resolve every name of a file (and cache the result); None when the file cannot be read."""
@@ -1145,7 +1190,7 @@ class Project:
             RenameError: With the reason.
         """
         if entity.kind not in RENAMEABLE:
-            what = {"builtin": "a built-in name", "module": "a module", "self": "`self`"}.get(entity.kind, entity.kind)
+            what = {"builtin": "a built-in name", "builtin_method": "a built-in method", "module": "a module", "self": "`self`"}.get(entity.kind, entity.kind)
             raise RenameError(f"cannot rename {what}")
         if entity.path is None or not self.in_workspace(entity.path):
             raise RenameError(f"{entity.name!r} is defined outside this workspace (a package or the standard library)")

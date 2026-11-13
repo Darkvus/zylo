@@ -9,14 +9,49 @@ Zylo ships a language server (`zylo lsp`), a formatter (`zylo fmt`) and a Visual
 | **Diagnostics** | Every syntax and type error, checked on the text you are typing, not only on save. A syntax error stops type checking (it would only add noise); an error inside an imported module is shown at the top of the file that imports it, naming the module. |
 | **Formatting** | The same canonical style as `zylo fmt`. |
 | **Outline** | Functions, structs (with their fields and methods) and top-level variables. |
-| **Completion** | Keywords, built-in functions and the functions, structs and variables of the file. |
-
-| **Hover** | The type of a variable, parameter or loop variable (narrowed by an `is` check where it is used), the signature and description of a function or method, the fields of a struct, the variants of an enum, and the description of each. |
+| **Completion** | See [Completion](#completion): what you can type at the cursor, by what comes before it. |
+| **Hover** | The type of a variable, parameter or loop variable (narrowed by an `is` check where it is used), the signature and description of a function, method or built-in, the fields of a struct, the variants of an enum, and the description of each. |
 | **Go to definition** | Variables, parameters, functions, structs, enums, variants, methods and fields, across files: through `import`, `from ... import ... as ...` and `pub from` re-exports, down to where the thing is really defined. On a module name it opens the module's file; on `self`, its struct. |
 | **Rename** | Safe renaming with a preview of every file changed; see [Renaming](#renaming). |
-| **Signature help** | While you type the arguments of a call, the signature of the function, method, struct constructor or enum variant, with the current parameter highlighted. Defaults are shown (`b: int = 2`), and a named argument (`b=`) highlights its own parameter. It works while the call is still unfinished. |
+| **Signature help** | While you type the arguments of a call, the signature of the function, method, built-in, struct constructor or enum variant, with the current parameter highlighted. Defaults are shown (`b: int = 2`), and a named argument (`b=`) highlights its own parameter. It works while the call is still unfinished. |
+| **Quick fixes** | Add a missing import; add the missing arms of a `match`. See [Quick fixes](#quick-fixes). |
 
-Not yet: completion of members after a dot and code actions.
+## Completion
+
+Completion is requested as you type and when you press `.`. What is offered depends on the text before the cursor, and the
+line being typed does not have to be valid:
+
+| Where | What you get |
+|---|---|
+| After `value.` | The **fields and methods** of the value's struct or enum (by the type the checker finds for it: `p.`, `p.move(1.0).`, `self.`, `names[0].`), or the **methods of `str`, `list`, `dict`, `set`, `Cell`, options and results**, with their signatures (`append(value: str)` on a `list[str]`) and descriptions. |
+| After `module.` | The functions, structs and enums the module exports, `pub from` re-exports included; names starting with `_` are private and not offered. |
+| After `Enum.` (also `module.Enum.`) | The variants, with their data (`Circle(float)`) and descriptions. |
+| In the parentheses of a call | The parameters (or struct fields) that have not been given yet, as `name=`, besides the names in scope. Positional arguments already written use up the first parameters. |
+| Where a type is expected (after `->`, after the `:` of a parameter, a field or an annotated variable, inside `list[`) | `int`, `str`, `list`..., the structs and enums of the file and of its imports, and the modules (for `module.Type`). |
+| After `import` and `from ... import` | The modules (the standard library, and every `.zy` file of the workspace), then the names a module exports. |
+| Anywhere else | The variables and parameters in scope, the definitions, imports and modules of the file, the built-in functions and the keywords, in that order. |
+
+Nothing is offered inside a string or a comment, but `{...}` inside an f-string is code.
+
+How it copes with incomplete code: variables in scope are found from the indentation, so the unfinished line itself is never
+needed; the value in front of a dot is typed by asking the checker about that value alone in place of the unfinished line; and
+statements that do not parse are skipped instead of stopping the analysis. What is still needed is that the *rest* of the program
+links (its imports exist) and that the statements before the cursor, in the same function, type check: a type error above the
+cursor in the same function hides the members of values below it.
+
+## Quick fixes
+
+Place the cursor on the name (or on the `match`) and open the quick fix menu (`Ctrl+.` in VS Code).
+
+- **Add an import.** On a name the file does not define, the other files of the workspace and the standard library are searched
+  for a function, struct or enum with that name, and one fix is offered for each module that has it:
+  `Import 'double' from 'util'` adds `from util import double` after the existing imports, or joins the `from util import ...`
+  line the file already has. In front of a dot (`json.parse(...)`), a module with that name is offered instead:
+  `Import the module 'std.json'`. Private names (`_name`) and names the file already binds are never offered.
+- **Add the missing `match` arms.** On a `match` over an enum that does not cover every variant (an arm with a guard does not
+  count, a `_` arm covers everything), the missing variants are added after the last arm, spelled the way the other arms spell
+  the enum (`Shape.Circle` or `shapes.Shape.Circle`), with `_` for each piece of data and a `print("TODO: ...")` body to replace.
+  In a function that returns a value, the placeholder still leaves the function without a `return`, which the compiler then points out.
 
 ## Navigation
 
@@ -27,8 +62,12 @@ variables of the top level) and use the type checker to tell what `p.x` or `p.mo
 - Definitions, imports and the scoping of variables work even when the program has type errors or an unfinished
   statement elsewhere (a statement that does not parse is skipped).
 - The *types* of variables, and which field or method a `value.name` is, need the program to link and check as far as
-  that expression. While the file has a syntax error, or the type of `value` is unknown, hovering a variable shows no
-  type and `value.name` has no definition.
+  that expression. A statement that does not parse is skipped, so the rest of the file keeps its types; but when the
+  program cannot link at all (an import that does not exist) or the type of `value` is unknown, hovering a variable
+  shows no type and `value.name` has no definition.
+- Built-in functions (`print`, `len`...) and the methods of `str`, lists, dicts, sets, cells, options and results (`.append`,
+  `.get`...) have hover and signature help too, with the types of the receiver filled in (`list[int].append(value: int)`).
+  They have no definition to go to and cannot be renamed.
 - A function's description is a string written as the first statement of its body, like the description of a struct
   (`fn area(s: Shape) -> float:` then `"Area of a shape."`); a struct, field, enum or variant takes the string right after it.
 
@@ -169,6 +208,7 @@ literal move below the statement, as before.
 
 - *No diagnostics appear*: run `zylo lsp` in a terminal; it should wait silently for input (press Ctrl-C to stop).
   If the command is not found, the editor cannot find it either.
-- *Hover shows no type, or a field has no definition*: the language server needs the file to link and type check up to
-  that point (see [Navigation](#navigation)); fix the syntax error or the earlier type error and try again.
+- *Hover shows no type, a field has no definition or `value.` offers nothing*: the language server needs the file to link and
+  type check up to that point (see [Navigation](#navigation) and [Completion](#completion)); fix the missing import or the
+  earlier type error in the same function and try again.
 - The language server logs unexpected errors to its standard error, which most editors show in an output panel.

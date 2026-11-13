@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from zylo import __version__
-from zylo.application.editor import completions, document_symbols
+from zylo.application.editor import document_symbols
 from zylo.domain.errors import ZyloError
 from zylo.interface.lsp import Server, error_range, uri_to_path
 
@@ -194,18 +194,10 @@ def test_the_symbols_reach_the_client_as_lsp_document_symbols():
     assert p["selectionRange"]["start"] == {"line": 0, "character": 7}
 
 
-def test_completion_offers_keywords_builtins_and_the_documents_own_names():
-    items = completions("fn helper() -> int:\n    return 1\nstruct Point:\n    x: int\ncount = 0\n")
-    labels = {c.label: c.kind for c in items}
-    assert labels["fn"] == "keyword" and labels["print"] == "function" and labels["helper"] == "function"
-    assert labels["Point"] == "struct" and labels["count"] == "variable"
-    assert len([c for c in items if c.label == "print"]) == 1  # no duplicates
-
-
 def test_completion_over_the_protocol():
-    replies, _ = run(open_doc("fn mine():\n    return\n"), {"id": 1, "method": "textDocument/completion", "params": {"textDocument": {"uri": URI}}})
+    replies, _ = run(open_doc("fn mine():\n    return\n"), {"id": 1, "method": "textDocument/completion", "params": {"textDocument": {"uri": URI}, "position": {"line": 1, "character": 4}}})
     labels = {i["label"]: i["kind"] for i in result(replies, 1)["result"]}
-    assert labels["mine"] == 3 and labels["fn"] == 14
+    assert labels["fn"] == 14 and labels["print"] == 3 and labels["mine"] == 3
 
 
 # ---- the real thing, over standard input and output -----------------------------------------------------
