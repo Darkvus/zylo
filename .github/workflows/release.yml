@@ -85,6 +85,31 @@ jobs:
           & $iscc "/DVersion=${{ needs.version.outputs.version }}" packaging\windows\zylo.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem dist
+      # Code signing through SignPath Foundation (free for open source). It runs only once the
+      # repository variable SIGNPATH_ORGANIZATION_ID and the secret SIGNPATH_API_TOKEN are set,
+      # so releases keep working unsigned until the SignPath project is approved.
+      - name: Upload the unsigned installer
+        id: unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: zylo-windows-installer-unsigned
+          path: dist/zylo-setup-x86_64.exe
+      - name: Sign the installer with SignPath
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: zylo
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+      - name: Use the signed installer
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: Copy-Item signed\zylo-setup-x86_64.exe dist\zylo-setup-x86_64.exe -Force
       - uses: actions/upload-artifact@v4
         with:
           name: zylo-windows-installer
