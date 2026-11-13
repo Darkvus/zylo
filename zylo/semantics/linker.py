@@ -128,6 +128,7 @@ class Linker:
         self.order: list[Module] = []  # dependencies before dependents
         self.entry_dir = Path.cwd()
         self.locals: set[str] = set()  # variables of the definition being rewritten: they hide functions of the same name
+        self.tparams: set[str] = set()  # type parameters of the definition being rewritten: they hide types of the same name
 
     # ---- public entry point ---------------------------------------------------------------
 
@@ -372,6 +373,7 @@ class Linker:
             if isinstance(s, (ast.Import, ast.FromImport)):
                 continue
             self.locals = local_names(s)
+            self.tparams = {p.name for p in getattr(s, "tparams", [])}
             self.rw(s, mod)
             if isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef)):
                 if isinstance(s, (ast.StructDef, ast.EnumDef)) and not mod.is_entry:
@@ -396,17 +398,20 @@ class Linker:
             target = self.export(dep, node.name, node, mod)
             args = [self.rw(a, mod) for a in node.args]
             named = [self.rw(n, mod) for n in node.named]
-            return ast.Call(target, args, named=named, line=node.line, col=node.col, file=node.file)
+            targs = [self.rw(t, mod) for t in node.targs]
+            return ast.Call(target, args, named=named, targs=targs, line=node.line, col=node.col, file=node.file)
         if isinstance(node, ast.Attr) and isinstance(node.value, ast.Name) and node.value.id in mod.aliases:
             dep = mod.aliases[node.value.id]
             if self.kind_of(dep, node.name) == "enum":  # `module.Enum` in `module.Enum.Variant`
-                return ast.Name(self.export(dep, node.name, node, mod, kind="enum"), line=node.line, col=node.col, file=node.file)
+                return ast.Name(self.export(dep, node.name, node, mod, kind="enum"), targs=[self.rw(t, mod) for t in node.targs],
+                                line=node.line, col=node.col, file=node.file)
             if self.kind_of(dep, node.name) == "fn":  # `module.function` used as a value
                 return ast.Name(self.export(dep, node.name, node, mod, kind="fn"), line=node.line, col=node.col, file=node.file)
             raise err(f"module {node.value.id!r} has no values; call a function: {node.value.id}.name(...)", node, mod.path)
         if isinstance(node, ast.Name) and node.id in mod.aliases:
             raise err(f"{node.id!r} is a module, not a value", node, mod.path)
         if isinstance(node, ast.Name):  # an enum of this module or imported by name, used as `Enum.Variant`
+            node.targs = [self.rw(t, mod) for t in node.targs]
             if mod.defs.get(node.id) == "enum":
                 node.id = mod.mangled(node.id)
             elif node.id in mod.froms and self.kind_of(*mod.froms[node.id]) == "enum":
@@ -439,6 +444,8 @@ class Linker:
 
     def rw_type(self, t: ast.TypeRef, mod: Module) -> None:
         """Rewrite a type name that refers to a struct of this or an imported module."""
+        if t.name in self.tparams and not t.args:
+            return  # a type parameter of the generic definition being rewritten
         if "." in t.name:
             head, _, name = t.name.rpartition(".")
             dep = mod.aliases.get(head)

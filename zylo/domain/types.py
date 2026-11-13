@@ -4,7 +4,7 @@ Two types are the same when they are equal, so the checker can compare them with
 the spelling used in Zylo source and in error messages (`list[int]`, `int?`, `Result[int, str]`).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -40,9 +40,15 @@ class StructT:
     """The type of a user-defined struct.
 
     Attributes:
-        name: The struct's name (mangled `module·Name` when it comes from another module).
+        name: The struct's name (mangled `module·Name` when it comes from another module). An instance of a generic
+            struct is named after its arguments (`Box[int]`), so two instances are the same type exactly when
+            their names are equal.
+        args: The type arguments of an instance of a generic struct (empty for an ordinary struct); not compared.
+        base: The generic struct this is an instance of (`Box`), or "" for an ordinary struct; not compared.
     """
     name: str
+    args: tuple["Type", ...] = field(default=(), compare=False)
+    base: str = field(default="", compare=False)
 
     def __str__(self) -> str:
         """Return the struct's name."""
@@ -54,9 +60,14 @@ class EnumT:
     """The type of a user-defined enum.
 
     Attributes:
-        name: The enum's name (mangled `module·Name` when it comes from another module).
+        name: The enum's name (mangled `module·Name` when it comes from another module); `Opt[int]` for an instance
+            of a generic enum.
+        args: The type arguments of an instance of a generic enum (empty otherwise); not compared.
+        base: The generic enum this is an instance of, or "" for an ordinary enum; not compared.
     """
     name: str
+    args: tuple["Type", ...] = field(default=(), compare=False)
+    base: str = field(default="", compare=False)
 
     def __str__(self) -> str:
         """Return the enum's name."""
@@ -170,13 +181,29 @@ class FnT:
         return f"fn({', '.join(map(str, self.params))}){ret}"
 
 
+@dataclass(frozen=True)
+class ParamT:
+    """A type parameter of a generic definition, while the checker checks that definition once for all its types.
+
+    Attributes:
+        name: The parameter's name (`T`).
+        bounds: The bounds the parameter was declared with (`Eq`, `Ord`, `Num`, `Show`, `Key`): what it is known to support.
+    """
+    name: str
+    bounds: frozenset[str] = frozenset()
+
+    def __str__(self) -> str:
+        """Return the parameter's name."""
+        return self.name
+
+
 INT = Prim("int")
 FLOAT = Prim("float")
 BOOL = Prim("bool")
 STR = Prim("str")
 UNIT = Prim("unit")
 
-Type = Prim | ListT | FnT | StructT | EnumT | OptionT | ResultT | TupleT | DictT | SetT | CellT
+Type = Prim | ListT | FnT | StructT | EnumT | OptionT | ResultT | TupleT | DictT | SetT | CellT | ParamT
 
 PRIMS = {"int": INT, "float": FLOAT, "bool": BOOL, "str": STR}
 

@@ -1,0 +1,144 @@
+struct Box[T]:
+    value: T
+
+    fn get(self) -> T:
+        return self.value
+
+    fn set(self, v: T):
+        self.value = v
+
+enum Opt[T]:
+    Some(T)
+    Empty
+
+    fn or_else(self, d: T) -> T:
+        match self:
+            Opt.Some(x):
+                return x
+            Opt.Empty:
+                return d
+
+fn first[T](xs: list[T]) -> T:
+    return xs[0]
+
+fn largest[T: Ord](xs: list[T]) -> T:
+    best = xs[0]
+    for x in xs:
+        if x > best:
+            best = x
+    return best
+
+fn map_all[T, U](xs: list[T], f: fn(T) -> U) -> list[U]:
+    out: list[U] = []
+    for x in xs:
+        append(out, f(x))
+    return out
+
+fn wrap[T](x: T) -> Box[T]:
+    return Box(value=x)
+
+enum Maybe[T]:
+    Some(T)
+    Empty
+
+    fn is_some(self) -> bool:
+        match self:
+            Maybe.Some(x):
+                return true
+            Maybe.Empty:
+                return false
+
+struct Tree[T]:
+    value: T
+    children: list[Tree[T]] = []
+
+    fn count(self) -> int:
+        n = 1
+        for c in self.children:
+            n += c.count()
+        return n
+
+struct Counter[K: Key]:
+    counts: dict[K, int]
+
+    fn add(self, k: K):
+        if k in self.counts:
+            self.counts[k] = self.counts[k] + 1
+        else:
+            self.counts[k] = 1
+
+    fn get(self, k: K) -> int:
+        return self.counts[k]
+
+fn find[T](xs: list[T], f: fn(T) -> bool) -> Maybe[T]:
+    for x in xs:
+        if f(x):
+            return Maybe.Some(x)
+    return Maybe.Empty
+
+fn total[T: Num](xs: list[T]) -> T:
+    t = xs[0]
+    for i in range(1, len(xs)):
+        t = t + xs[i]
+    return t
+
+fn avg[T: Num](xs: list[T]) -> float:
+    return float(total(xs)) / float(len(xs))
+
+fn show_all[T: Show](xs: list[T]):
+    for x in xs:
+        print(f"<{x}>")
+
+fn same[T: Eq](a: T, b: T) -> bool:
+    return a == b
+
+fn depth[T](t: Tree[T]) -> int:
+    d = 0
+    for c in t.children:
+        d = max(d, depth(c))
+    return d + 1
+
+fn cell_of[T](x: T) -> Cell[T]:
+    return cell(x)
+
+fn opt_or[T](o: T?, d: T) -> T:
+    if o is some:
+        return o
+    return d
+
+struct P:
+    a: int
+
+b = Box(value=3)
+b.set(5)
+print(b.get(), b)
+print(first([1, 2, 3]), first(["a", "b"]))
+print(largest([3, 9, 2]), largest(["x", "yy"]), largest([1.5, 0.5]))
+print(map_all([1, 2, 3], fn(x: int) => x * 2))
+print(map_all([1, 2, 3], fn(x) => str(x) + "!"))
+w = wrap("hi")
+print(w.get())
+o = Opt.Some(4)
+print(o.or_else(0))
+e: Opt[str] = Opt.Empty
+print(e.or_else("none"))
+print(first[float]([1.5]))
+bb = Box(value=Box(value=[1, 2]))
+print(bb.get().get())
+r = find([1, 2, 3], fn(x: int) => x > 1)
+print(r, r.is_some())
+r2 = find(["a"], fn(s) => s == "z")
+print(r2.is_some())
+t = Tree(value=1, children=[Tree(value=2), Tree(value=3, children=[Tree(value=4)])])
+print(t.count(), depth(t))
+c = Counter(counts={"a": 1})
+c.add("a")
+c.add("b")
+print(c.get("a"), c.get("b"))
+print(total([1, 2, 3]), total([1.5, 2.5]), avg([1, 2]))
+show_all([P(a=1), P(a=2)])
+print(same(P(a=1), P(a=1)), same("a", "b"))
+cl = cell_of(3)
+cl.set(9)
+print(cl.get())
+print(opt_or(none, 5), opt_or(some("x"), "y"))

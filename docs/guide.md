@@ -32,6 +32,7 @@ greet("zylo")
 | `set[T]` | set of distinct values, sorted | `BTreeSet<T>` |
 | `Cell[T]` | a shared, mutable box holding one `T` (see [Shared state](#shared-state-with-cell)) | `Rc<RefCell<T>>` |
 | `Name` | a struct you define | `struct` |
+| `Name[T]` | an instance of a generic struct or enum (see [Generics](#generics)) | one `struct` per `T` |
 | `T?` | optional value (`T` or nothing) | `Option<T>` |
 | `Result[T, E]` | a `T` or an error `E` | `Result<T, E>` |
 
@@ -775,10 +776,138 @@ value or the default.
 
 `print` shows these values as `Some(3)`, `None`, `Ok(18)` and `Err("message")`.
 
+## Generics
+
+A function, struct or enum can take **type parameters** in square brackets, so one definition works for many types:
+
+```zylo
+fn first[T](xs: list[T]) -> T:
+    return xs[0]
+
+struct Box[T]:
+    value: T
+
+    fn get(self) -> T:
+        return self.value
+
+    fn set(self, v: T):
+        self.value = v
+
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+    fn or_else(self, fallback: T) -> T:
+        match self:
+            Maybe.Just(x):
+                return x
+            Maybe.Nothing:
+                return fallback
+
+print(first([1, 2, 3]), first(["a", "b"]))     # 1 a
+b = Box(value=1.5)
+b.set(b.get() * 2.0)
+print(b)                                        # Box(value=3.0)
+print(Maybe.Just(4).or_else(0))                 # 4
+```
+
+**Type arguments are inferred.** At a call the compiler matches each argument's type with the declared parameter type
+(`list[T]` with `list[int]` gives `T = int`); every use of the same `T` must agree. What the arguments do not decide
+comes from the type the context expects, and an argument that cannot be typed alone (`none`, `[]`, an anonymous function
+whose parameter types depend on `T`) is checked last:
+
+```zylo
+struct Box[T]:
+    value: T
+
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+fn map_all[T, U](xs: list[T], f: fn(T) -> U) -> list[U]:
+    out: list[U] = []
+    for x in xs:
+        append(out, f(x))
+    return out
+
+fn or_default[T](x: T?, fallback: T) -> T:
+    return fallback
+
+lengths = map_all(["a", "bb"], fn(s) => len(s))   # list[int]: U comes from the function's result
+nothing: Maybe[str] = Maybe.Nothing                # T comes from the annotation
+empty: Box[list[int]] = Box(value=[])
+print(or_default(none, 3))                         # 3
+```
+
+A type parameter that nothing determines is an error that tells you so (`cannot infer type parameter T of make`).
+**Write the arguments yourself** when you want to, or must: `first[int](xs)`, `Box[str](value="x")`,
+`Maybe[int].Nothing`, `util.first[Point](points)`, and in types `Box[int]`, `Pair[str, list[int]]`. The brackets after a
+name are read as type arguments when they hold types (built-in names or capitalised names) and a `(` or `.` follows;
+`table[key](x)` still indexes a variable. (`first[point](xs)` with a lowercase struct needs `first` to be generic in the
+same file, or let the compiler infer it.)
+
+**The body is checked once, for every type.** Inside a generic definition a `T` can be stored, passed around and returned,
+but nothing more: `a > b`, `a + b`, `print(a)` or `a == b` on a plain `T` are errors, because some type might not allow them.
+Ask for what you need with a **bound**: `T: Ord`, or several with `+`:
+
+| Bound | Gives `T` | Accepted types |
+|---|---|---|
+| `Eq` | `==`, `!=`, `in` | anything without a function inside |
+| `Show` | `print`, f-strings | anything without a function inside |
+| `Ord` | `<` `>` `<=` `>=`, `min`, `max`, `sorted` | `int`, `float`, `str` |
+| `Num` | arithmetic, `abs`, `float(x)`, `sum` | `int`, `float` |
+| `Key` | dict keys and set elements | `int`, `str`, `bool`, tuples of those |
+
+`Ord`, `Num` and `Key` include `Eq` and `Show` (and `Num`, `Key` include `Ord`).
+
+```zylo
+fn largest[T: Ord](xs: list[T]) -> T:
+    best = xs[0]
+    for x in xs:
+        if x > best:
+            best = x
+    return best
+
+fn describe[T: Eq + Show](a: T, b: T) -> str:
+    if a == b:
+        return f"{a} equals {b}"
+    return f"{a} differs from {b}"
+
+struct Counter[K: Key]:
+    counts: dict[K, int]
+
+    fn add(self, k: K):
+        if k in self.counts:
+            self.counts[k] = self.counts[k] + 1
+        else:
+            self.counts[k] = 1
+
+print(largest([3, 9, 4]), largest(["pear", "apple"]))   # 9 pear
+print(describe("a", "b"))                               # a differs from b
+```
+
+Using a type that lacks the bound is reported where you call: `largest([Point(...)])` says that `Point` cannot be used
+for `T`, which is bound by `Ord`.
+
+### How generics compile
+
+Generics are **monomorphized**: for every list of type arguments a program uses, the compiler makes a copy of the
+definition for those types (`first[int]`, `Box[str]`) and compiles it like hand-written code, so generic code is exactly
+as fast as the specialised version and nothing is boxed. The same goes for `to_json`, `from_json` and `json_schema` on a
+generic struct (`Pair[int, Point]` has its own functions, and appears in schemas as `Pair_int_Point`). Generics work
+across modules and re-exports. See [design.md](design.md#generics) for the reasoning.
+
+- A generic function is called, not passed around: `g = first` is an error (wrap it: `fn(xs: list[int]) => first(xs)`).
+- A method cannot declare its own type parameters; declare them on the struct or enum.
+- A generic that keeps instantiating itself with bigger types (`f[T]` calling `f[list[T]]`) is stopped with an error
+  after 12 levels of nesting.
+- There are no user-defined bounds (traits), no default type arguments, and no numeric literals of type `T`
+  (write `a + b`, not `a + 1`).
+
 ## Typed JSON
 
 `to_json`, `from_json`, `json_schema` and `json_schema_defs` convert between your own types and the `Json` value of
-[`std.json`](stdlib.md#stdjson). Zylo has no generics, so they are compiler-known built-ins: the type is worked out at
+[`std.json`](stdlib.md#stdjson). They are compiler-known built-ins, not generic functions: the type is worked out at
 compile time and the compiler writes the conversion code for it (ordinary Zylo functions, one per type). `std.json` is
 loaded for you when a program uses them.
 
@@ -969,4 +1098,4 @@ These stop the program with exit code **101**: integer overflow (compile with
 
 ## Known limitations
 
-No generics, no list comprehensions, no recursive local functions, and no multi-statement anonymous functions (use a local `fn`). See the [roadmap](../ROADMAP.md).
+No list comprehensions, no recursive local functions, and no multi-statement anonymous functions (use a local `fn`). See the [roadmap](../ROADMAP.md).

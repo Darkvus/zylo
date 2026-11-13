@@ -44,6 +44,26 @@ def describe(tok: Token) -> str:
     return repr(tok.value) if tok.value else KIND_NAMES.get(tok.kind, tok.kind)
 
 
+BUILTIN_TYPE_NAMES = {"int", "float", "bool", "str", "list", "set", "dict", "tuple", "Cell", "Result", "fn"}
+
+
+def typey(t: ast.TypeRef) -> bool:
+    """Whether a type could not be mistaken for a variable: a built-in type name or a capitalised name.
+
+    Args:
+        t: A parsed type.
+
+    Returns:
+        True for `int`, `list[str]`, `Shape`, `mod.Shape`, `T?`..., False for a lowercase user name such as `point`.
+    """
+    if t.name in BUILTIN_TYPE_NAMES or t.name == "?":
+        ok = True
+    else:
+        last = t.name.replace("\u00b7", ".").rsplit(".", 1)[-1]
+        ok = last[:1].isupper()
+    return ok and all(typey(a) for a in t.args) and (t.ret is None or typey(t.ret))
+
+
 class Parser:
     """Recursive-descent parser over a token list.
 
@@ -62,6 +82,10 @@ class Parser:
         self.depth = 0  # how many INDENTs are open: needed to find the end of a bad statement
         self.errors: list[ZyloError] = []
         self.collect = collect
+        # names this file declares with type parameters: `name[...]` after them is always a list of type arguments
+        self.generics = {tokens[i + 1].value for i in range(len(tokens) - 2)
+                         if tokens[i].kind == "KW" and tokens[i].value in ("fn", "struct", "enum")
+                         and tokens[i + 1].kind == "IDENT" and tokens[i + 2].kind == "OP" and tokens[i + 2].value == "["}
 
     # ---- helpers -------------------------------------------------------------
 
@@ -361,7 +385,14 @@ class Parser:
             The function node (an `ExternFn` when `extern` is True).
         """
         kw = self.advance()
-        name = self.expect("IDENT").value
+        name_tok = self.expect("IDENT")
+        name = name_tok.value
+        tparams = self.parse_tparams()
+        if tparams and in_struct:
+            raise ZyloError("a method cannot have its own type parameters; declare them on the struct or enum",
+                            tparams[0].line, tparams[0].col)
+        if tparams and extern:
+            raise ZyloError("an `extern fn` cannot be generic", tparams[0].line, tparams[0].col)
         self.expect("OP", "(")
         params: list[ast.Param] = []
         has_self = False
@@ -381,9 +412,36 @@ class Parser:
             self.expect("OP", "=")
             template = self.expect("STR").value
             self.expect("NEWLINE")
-            return ast.ExternFn(name, params, ret, [], False, False, template, line=kw.line, col=kw.col)
+            return ast.ExternFn(name, params, ret, [], template=template, line=kw.line, col=kw.col)
         body = self.parse_block()
-        return ast.FnDef(name, params, ret, body, has_self, line=kw.line, col=kw.col)
+        return ast.FnDef(name, params, ret, body, has_self, tparams=tparams, line=kw.line, col=kw.col)
+
+    def parse_tparams(self) -> list[ast.TypeParam]:
+        """Parse the optional type parameters after a definition's name: `[T]`, `[K, V]`, `[T: Ord + Show]`.
+
+        Raises:
+            ZyloError: On an empty list, a repeated name or a malformed bound.
+        """
+        if not self.check("OP", "["):
+            return []
+        open_tok = self.advance()
+        found: list[ast.TypeParam] = []
+        while True:
+            name = self.expect("IDENT")
+            if any(p.name == name.value for p in found):
+                raise ZyloError(f"duplicate type parameter {name.value!r}", name.line, name.col)
+            bounds: list[str] = []
+            if self.match("OP", ":"):
+                bounds.append(self.expect("IDENT").value)
+                while self.match("OP", "+"):
+                    bounds.append(self.expect("IDENT").value)
+            found.append(ast.TypeParam(name.value, bounds, line=name.line, col=name.col))
+            if not self.match("OP", ","):
+                break
+        if not found:
+            raise ZyloError("a type parameter list cannot be empty", open_tok.line, open_tok.col)
+        self.expect("OP", "]")
+        return found
 
     def parse_local_fn(self) -> ast.Assign:
         """Parse a `fn name(...)` inside a block: a variable holding a function that may use the variables around it.
@@ -487,6 +545,7 @@ class Parser:
         """
         self.advance()
         name = self.expect("IDENT")
+        tparams = self.parse_tparams()
         self.expect("OP", ":")
         self.expect("NEWLINE")
         if not self.check("INDENT"):
@@ -519,7 +578,7 @@ class Parser:
             else:
                 raise ZyloError("a struct body can only contain fields (`name: type`) and methods (`fn`)", tok.line, tok.col)
         self.expect("DEDENT")
-        d = ast.StructDef(name.value, fields, methods, line=name.line, col=name.col)
+        d = ast.StructDef(name.value, fields, methods, tparams=tparams, line=name.line, col=name.col)
         if doc:
             d.doc, d.doc_line = doc
         return d
@@ -542,6 +601,7 @@ class Parser:
         """
         self.advance()
         name = self.expect("IDENT")
+        tparams = self.parse_tparams()
         self.expect("OP", ":")
         self.expect("NEWLINE")
         if not self.check("INDENT"):
@@ -578,7 +638,7 @@ class Parser:
             self.expect("NEWLINE")
             variants.append(ast.Variant(tok.value, fields, line=tok.line, col=tok.col))
         self.expect("DEDENT")
-        d = ast.EnumDef(name.value, variants, methods=methods, line=name.line, col=name.col)
+        d = ast.EnumDef(name.value, variants, methods=methods, tparams=tparams, line=name.line, col=name.col)
         if doc:
             d.doc, d.doc_line = doc
         return d
@@ -650,7 +710,14 @@ class Parser:
         if first.value == "_":
             return ast.MatchArm(None, "_", [], [], **pos)
         parts = [first.value]
+        targs: list[ast.TypeRef] = []
         while self.match("OP", "."):
+            parts.append(self.expect("IDENT").value)
+            if self.check("OP", "[") and not targs:
+                targs = self.parse_type_args()  # `Opt[int].Some(x)`: the enum with its type arguments
+        if not targs and self.check("OP", "[") and len(parts) == 1:
+            targs = self.parse_type_args()
+            self.expect("OP", ".")
             parts.append(self.expect("IDENT").value)
         if len(parts) < 2 and first.value not in ("some", "ok", "err"):
             raise ZyloError(f"write the enum before the variant: `Enum.{first.value}`", first.line, first.col)
@@ -664,7 +731,7 @@ class Parser:
             if len(binds) != 1:
                 raise ZyloError(f"`{first.value}(...)` binds exactly one name: write `{first.value}(x)`", first.line, first.col)
             return ast.MatchArm(None, first.value, binds, [], **pos)
-        typ = ast.TypeRef(".".join(parts[:-1]), [], line=first.line, col=first.col)
+        typ = ast.TypeRef(".".join(parts[:-1]), targs, line=first.line, col=first.col)
         return ast.MatchArm(typ, parts[-1], binds, [], **pos)
 
     def parse_param(self) -> ast.Param:
@@ -732,7 +799,46 @@ class Parser:
             self.expect("OP", ",")
             args.append(self.parse_type())
             self.expect("OP", "]")
+        elif name not in BUILTIN_TYPE_NAMES and self.check("OP", "["):  # a generic struct or enum: `Box[int]`
+            args = self.parse_type_args()
         return self._optional_suffix(ast.TypeRef(name, args, line=tok.line, col=tok.col))
+
+    def parse_type_args(self) -> list[ast.TypeRef]:
+        """Parse `[A, B, ...]`: the type arguments of a generic struct, enum or function."""
+        open_tok = self.expect("OP", "[")
+        args = [self.parse_type()]
+        while self.match("OP", ","):
+            args.append(self.parse_type())
+        self.expect("OP", "]")
+        if not args:
+            raise ZyloError("a type argument list cannot be empty", open_tok.line, open_tok.col)
+        return args
+
+    def try_type_args(self, name: str, follow: tuple[str, ...]) -> list[ast.TypeRef] | None:
+        """Read explicit type arguments after a name in an expression, if what follows really is one.
+
+        `first[int](xs)` and `Opt[int].Some(1)` look like an index; they are type arguments when the brackets hold
+        types, are followed by one of `follow`, and either name a generic declared in this file or hold only types that
+        cannot be a variable (built-in type names, or capitalised names).
+
+        Args:
+            name: The name before the `[`.
+            follow: Operators allowed right after the closing bracket.
+
+        Returns:
+            The type arguments (the parser is then after the `]`), or None, with the parser where it was.
+        """
+        start = self.pos
+        try:
+            args = self.parse_type_args()
+        except ZyloError:
+            self.pos = start
+            return None
+        nxt = self.cur
+        if nxt.kind != "OP" or nxt.value not in follow or not (name in self.generics or all(typey(a) for a in args)):
+            self.pos = start
+            return None
+        return args
 
     def parse_fn_type(self) -> ast.TypeRef:
         """Parse a function type `fn(A, B) -> R`; without `-> R` it returns nothing."""
@@ -842,11 +948,12 @@ class Parser:
             elif self.check("OP", "."):
                 self.advance()
                 name = self.expect("IDENT")
+                targs = self.try_type_args(name.value, ("(", ".")) if self.check("OP", "[") else None
                 if self.check("OP", "("):
                     args, named = self.parse_args()
-                    expr = ast.MethodCall(expr, name.value, args, named=named, line=name.line, col=name.col)
+                    expr = ast.MethodCall(expr, name.value, args, named=named, targs=targs or [], line=name.line, col=name.col)
                 else:
-                    expr = ast.Attr(expr, name.value, line=name.line, col=name.col)
+                    expr = ast.Attr(expr, name.value, targs=targs or [], line=name.line, col=name.col)
             else:
                 return expr
 
@@ -873,9 +980,12 @@ class Parser:
         if tok.kind == "KW" and tok.value == "fn":
             return self.parse_lambda(tok)
         if tok.kind == "IDENT":
+            targs = self.try_type_args(tok.value, ("(", ".")) if self.check("OP", "[") else None
             if self.check("OP", "("):
-                return self.parse_call(tok)
-            return ast.Name(tok.value, **pos)
+                call = self.parse_call(tok)
+                call.targs = targs or []
+                return call
+            return ast.Name(tok.value, targs=targs or [], **pos)
         if tok.kind == "OP" and tok.value == "(":
             e = self.tuple_tail(self.parse_expr(), tok)
             self.expect("OP", ")")

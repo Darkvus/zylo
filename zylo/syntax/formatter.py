@@ -76,6 +76,18 @@ def type_text(t: ast.TypeRef) -> str:
     return t.name
 
 
+def tparams_text(tparams: list[ast.TypeParam]) -> str:
+    """Return the type parameters of a definition as written (`[T, K: Ord + Show]`), or nothing."""
+    if not tparams:
+        return ""
+    return "[" + ", ".join(p.name + (": " + " + ".join(p.bounds) if p.bounds else "") for p in tparams) + "]"
+
+
+def targs_text(targs: list[ast.TypeRef]) -> str:
+    """Return explicit type arguments as written (`[int, str]`), or nothing."""
+    return f"[{', '.join(type_text(a) for a in targs)}]" if targs else ""
+
+
 def expr_text(e: ast.Expr, min_prec: int = 0, q: str = '"') -> str:
     """Print an expression, adding parentheses only where the grammar needs them.
 
@@ -110,8 +122,8 @@ def _expr(e: ast.Expr, q: str) -> tuple[str, int]:
             return ("true" if v else "false"), ATOM
         case ast.NoneLit():
             return "none", ATOM
-        case ast.Name(i):
-            return i, ATOM
+        case ast.Name(i, targs=targs):
+            return i + targs_text(targs), ATOM
         case ast.TypeRef():  # the type argument of `from_json(list[int], j)`
             return type_text(e), ATOM
         case ast.BinOp(op, left, right):
@@ -129,18 +141,18 @@ def _expr(e: ast.Expr, q: str) -> tuple[str, int]:
             return f"{expr_text(v, IS_PREC, q)} is {kind}", IS_PREC
         case ast.Try(v):
             return f"{expr_text(v, ATOM, q)}?", ATOM
-        case ast.Call(func, args, named=named):
-            return f"{func}({_args(args, q, named)})", ATOM
+        case ast.Call(func, args, named=named, targs=targs):
+            return f"{func}{targs_text(targs)}({_args(args, q, named)})", ATOM
         case ast.CallValue(callee, args):
             return f"{expr_text(callee, ATOM, q)}({_args(args, q)})", ATOM
         case ast.Lambda():
             params = ", ".join(p.name + (f": {type_text(p.type)}" if p.type else "") for p in e.params)
             ret = f" -> {type_text(e.ret)}" if e.ret else ""
             return f"fn({params}){ret} => {expr_text(e.expr, 0, q)}", 0
-        case ast.MethodCall(v, name, args, named=named):
-            return f"{expr_text(v, ATOM, q)}.{name}({_args(args, q, named)})", ATOM
-        case ast.Attr(v, name):
-            return f"{expr_text(v, ATOM, q)}.{name}", ATOM
+        case ast.MethodCall(v, name, args, named=named, targs=targs):
+            return f"{expr_text(v, ATOM, q)}.{name}{targs_text(targs)}({_args(args, q, named)})", ATOM
+        case ast.Attr(v, name, targs=targs):
+            return f"{expr_text(v, ATOM, q)}.{name}{targs_text(targs)}", ATOM
         case ast.Index(v, i):
             return f"{expr_text(v, ATOM, q)}[{expr_text(i, 0, q)}]", ATOM
         case ast.Slice(v, lo, hi):
@@ -229,8 +241,9 @@ class _Layout:
                 return self.expr(v, ind, first, last + len(f" is {kind}"), IS_PREC, ctx) + f" is {kind}"
             case ast.Try(v):
                 return self.expr(v, ind, first, last + 1, ATOM, ctx) + "?"
-            case ast.Attr(v, name):
-                return self.expr(v, ind, first, last + len(name) + 1, ATOM, ctx) + f".{name}"
+            case ast.Attr(v, name, targs=targs):
+                tail = f".{name}{targs_text(targs)}"
+                return self.expr(v, ind, first, last + len(tail), ATOM, ctx) + tail
             case ast.Index() | ast.Slice():
                 tail = expr_text(e)[len(expr_text(e.value, ATOM)):]
                 receiver = self.expr(e.value, ind, first, last + len(tail), ATOM, ctx)
@@ -241,17 +254,18 @@ class _Layout:
             case ast.Lambda() if e.expr is not None:
                 head = expr_text(e)[:-len(expr_text(e.expr))]
                 return head + self.expr(e.expr, ind, first + len(head), last, 0, ctx)
-            case ast.Call(func, args, named=named):
-                return self.bracket(f"{func}(", self.items(args, named), ")", ind, first, last)
+            case ast.Call(func, args, named=named, targs=targs):
+                return self.bracket(f"{func}{targs_text(targs)}(", self.items(args, named), ")", ind, first, last)
             case ast.CallValue(callee, args):
                 head = self.expr(callee, ind, first, last + 1, ATOM, ctx)
                 return self.bracket(head + "(", self.items(args), ")", ind, _end_col(head, first), last)
             case ast.MethodCall():
                 if self.splits_into_lines(e, ind, first, last, ctx):
                     return self.operators(self.chain_parts(e), ind, first, last, ctx)
+                name = e.name + targs_text(e.targs)
                 if not e.args and not e.named:
-                    return self.expr(e.value, ind, first, last + len(e.name) + 3, ATOM, ctx) + f".{e.name}()"
-                head = self.expr(e.value, ind, first, last + len(e.name) + 2, ATOM, ctx) + f".{e.name}("
+                    return self.expr(e.value, ind, first, last + len(name) + 3, ATOM, ctx) + f".{name}()"
+                head = self.expr(e.value, ind, first, last + len(name) + 2, ATOM, ctx) + f".{name}("
                 return self.bracket(head, self.items(e.args, e.named), ")", ind, _end_col(head, first), last)
             case ast.ListLit(items):
                 return self.bracket("[", self.items(items), "]", ind, first, last)
@@ -364,7 +378,7 @@ class _Layout:
             col = _end_col(text, first)
             after = last + sum(len(f) for f in flats[i + 1:])
             if kind == "m" and (node.args or node.named):
-                text += self.bracket(f".{node.name}(", self.items(node.args, node.named), ")", ind, col, after)
+                text += self.bracket(f".{node.name}{targs_text(node.targs)}(", self.items(node.args, node.named), ")", ind, col, after)
             elif kind == "c" and node.args:
                 text += self.bracket("(", self.items(node.args), ")", ind, col, after)
             else:
@@ -376,9 +390,9 @@ class _Layout:
         """A link of a chain written on one line."""
         match kind:
             case "m":
-                return f".{node.name}({_args(node.args, DQ, node.named)})"
+                return f".{node.name}{targs_text(node.targs)}({_args(node.args, DQ, node.named)})"
             case "a":
-                return f".{node.name}"
+                return f".{node.name}{targs_text(node.targs)}"
             case "t":
                 return "?"
             case "c":
@@ -548,7 +562,7 @@ class _Formatter:
             case ast.StructDef():
                 self.struct(s, indent, first_in_block)
             case ast.EnumDef():
-                self.header(s, indent, f"enum {s.name}", first_in_block)
+                self.header(s, indent, f"enum {s.name}{tparams_text(s.tparams)}", first_in_block)
                 if s.doc is not None:
                     self.line(s.doc_line, indent + 1, quote(s.doc), first_in_block=True)
                 for n, v in enumerate(s.variants):
@@ -609,7 +623,7 @@ class _Formatter:
             for p in f.params
         ]
         ret = f" -> {type_text(f.ret)}" if f.ret else ""
-        return self.wrap_signature(indent, f"fn {f.name}", params, ret, last, lead)
+        return self.wrap_signature(indent, f"fn {f.name}{tparams_text(f.tparams)}", params, ret, last, lead)
 
     def wrap_signature(self, indent: int, head: str, params: list[str], ret: str, last: int, lead: int = 0) -> str:
         """Write `head(params)ret` on one line, or with the parameters one per line when it does not fit."""
@@ -646,7 +660,7 @@ class _Formatter:
 
     def struct(self, s: ast.StructDef, indent: int, first_in_block: bool) -> None:
         """Write a struct: its fields, then its methods separated by blank lines."""
-        self.header(s, indent, f"struct {s.name}", first_in_block)
+        self.header(s, indent, f"struct {s.name}{tparams_text(s.tparams)}", first_in_block)
         if s.doc is not None:
             self.line(s.doc_line, indent + 1, quote(s.doc), first_in_block=True)
         for n, f in enumerate(s.fields):

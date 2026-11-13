@@ -31,6 +31,7 @@ from zylo.domain.types import (
     FnT,
     ListT,
     OptionT,
+    ParamT,
     ResultT,
     SetT,
     StructT,
@@ -40,6 +41,16 @@ from zylo.domain.types import (
     is_copy_type,
 )
 from zylo.semantics.derive import JSON_T, Deriver
+from zylo.semantics.generics import (
+    Generic,
+    GenericMixin,
+    allows,
+    has_param,
+    is_num,
+    is_ord,
+    key_ok,
+    sortable,
+)
 
 ARITH = {"+", "-", "*", "/", "%"}
 EQ = {"==", "!="}
@@ -152,7 +163,7 @@ class EnumInfo:
     methods: dict[str, FnT] = field(default_factory=dict)
 
 
-class Checker:
+class Checker(GenericMixin):
     """Type checker for one program.
 
     Resolves types, infers the types of expressions, tracks scopes, decides which variables are mutable and which
@@ -188,6 +199,15 @@ class Checker:
         self.specs: dict[str, list] = {}
         self.deriver = Deriver(self.structs, self.enums, lambda name: name in self.fns)  # typed JSON helpers
         self.program: ast.Program | None = None  # the program being checked: generated functions are added to it
+        # generics (see semantics/generics.py)
+        self.generics: dict[str, Generic] = {}  # templates by name
+        self.itypes: dict[str, Type] = {}  # instance name -> its type, which remembers the type arguments
+        self.insts: dict[tuple, str] = {}  # (generic, type arguments) -> instance name
+        self.idefs: dict[str, ast.StructDef | ast.EnumDef] = {}  # instance name -> its definition
+        self.taken: dict[str, tuple] = {}  # instance names in use, to keep them unique
+        self.deferred: list | None = []  # instances made before enums are resolved: finished later (None once they can be)
+        self.abstract: list[tuple[Generic, ast.Node, str]] = []  # templates to check once, for every type
+        self.ninst = 0  # instances made so far, for the expansion limit
 
     # ---- entry point ---------------------------------------------------------------------
 
@@ -201,9 +221,13 @@ class Checker:
             ZyloError: Never: mistakes are collected in `errors` (see `check_all`).
         """
         self.program = prog
+        prog.body[:] = [s for s in prog.body if not getattr(s, "instance", False)]  # copies of generics are made again
         try:
-            defs = [s for s in prog.body if isinstance(s, ast.StructDef)]
-            enums = [s for s in prog.body if isinstance(s, ast.EnumDef)]
+            gens = [s for s in prog.body if getattr(s, "tparams", None)]
+            defs = [s for s in prog.body if isinstance(s, ast.StructDef) and not s.tparams]
+            enums = [s for s in prog.body if isinstance(s, ast.EnumDef) and not s.tparams]
+            for g in gens:
+                self.register_generic(g)
             for d in defs:
                 self.register_struct(d)
             for en in enums:
@@ -214,16 +238,28 @@ class Checker:
                 self.resolve_enum(en)
             for d in defs:  # field defaults may name enum variants, so they wait until enums are resolved
                 self.check_defaults(d.fields, "field", [f.ty for f in d.fields])
+            late, self.deferred = self.deferred, None
+            for d in late:
+                self.finish_instance(d)
+            for g in self.generics.values():
+                if g.kind != "fn":
+                    self.declare_generic(g)
             self.check_cycles(defs, enums)
             for s in prog.body:  # function signatures, so they can be used before their definition
-                if isinstance(s, ast.FnDef):
+                if isinstance(s, ast.FnDef) and not s.instance and not s.tparams:
                     self.declare_fn(s)
             for d in [*defs, *enums]:
                 self.declare_methods(d)
+            for g in self.generics.values():
+                if g.kind == "fn":
+                    self.declare_generic(g)
         except ZyloError as e:  # a broken declaration makes the rest meaningless: report it and stop
             self.errors.append(e)
             return
+        self.check_abstract()
         for s in prog.body:
+            if getattr(s, "tparams", None) or (getattr(s, "origin", None) and self.generics[s.origin].broken):
+                continue  # a template (checked once above, emitted never), or a copy of one that has a mistake
             try:
                 if isinstance(s, ast.ExternFn):
                     self.check_extern(s)
@@ -254,6 +290,8 @@ class Checker:
         Raises:
             ZyloError: If it names an unknown type or uses an invalid dict key.
         """
+        if t.fixed is not None:  # a type parameter in a copy of a generic definition
+            return t.fixed
         if t.name == "list":
             return ListT(self.resolve(t.args[0]))
         if t.name == "Cell":
@@ -276,6 +314,10 @@ class Checker:
             return DictT(*args) if t.name == "dict" else SetT(args[0])
         if t.name in PRIMS:
             return PRIMS[t.name]
+        if t.name in self.generics:
+            return self.resolve_generic(t)
+        if t.args and (t.name in self.structs or t.name in self.enums):
+            raise err(f"{t.name!r} is not generic, it takes no type arguments", t)
         if t.name in self.structs:
             return StructT(t.name)
         if t.name in self.enums:
@@ -288,6 +330,8 @@ class Checker:
         """Record a struct's name, rejecting duplicates and reserved names."""
         if d.name in self.structs or d.name in self.enums:
             raise err(f"struct {d.name!r} is already defined" if d.name in self.structs else f"{d.name!r} is already an enum", d)
+        if d.name in self.generics:
+            raise err(f"{d.name!r} is already defined", d)
         if d.name in BUILTINS or d.name in PRIMS or d.name in ("list", "unit", "Result", "Cell"):
             raise err(f"{d.name!r} is a reserved name", d)
         self.structs[d.name] = StructInfo(d.name, d)
@@ -342,6 +386,8 @@ class Checker:
         """Record an enum's name, rejecting duplicates and reserved names."""
         if d.name in self.structs or d.name in self.enums:
             raise err(f"enum {d.name!r} is already defined" if d.name in self.enums else f"{d.name!r} is already a struct", d)
+        if d.name in self.generics:
+            raise err(f"{d.name!r} is already defined", d)
         if d.name in BUILTINS or d.name in PRIMS or d.name in ("list", "unit", "Result", "Cell"):
             raise err(f"{d.name!r} is a reserved name", d)
         self.enums[d.name] = EnumInfo(d.name, d)
@@ -372,9 +418,9 @@ class Checker:
         if args is not None and not tys:
             raise err(f"variant {info.name}.{name} carries no data; write {info.name}.{name} without parentheses", e)
         if args is not None:
-            self.check_args(e, f"{info.name}.{name}", args, FnT(tuple(tys), EnumT(info.name)))
+            self.check_args(e, f"{info.name}.{name}", args, FnT(tuple(tys), self.named(info.name)))
         e.variant = (info.name, name)
-        return EnumT(info.name)
+        return self.named(info.name)
 
     def match_stmt(self, s: ast.Match) -> None:
         """Check a `match` on an enum, `int`, `str`, `bool`, `Option` or `Result`.
@@ -469,7 +515,12 @@ class Checker:
         elif arm.type is not None:
             if info is None:
                 raise err(f"`{arm.type.name}.{arm.variant}` is a variant pattern, but the value is {t}", arm)
-            named = self.resolve(arm.type)
+            if arm.type.name in self.generics and not arm.type.args:  # `Opt.Some(x)`: the type arguments come from the value
+                if not (isinstance(t, EnumT) and t.base == arm.type.name):
+                    raise err(f"this `match` is on {t}, not {arm.type.name.rsplit(chr(183), 1)[-1]}", arm)
+                named = t
+            else:
+                named = self.resolve(arm.type)
             if named != t:
                 raise err(f"this `match` is on {t}, not {named}", arm)
             tys = info.variants.get(arm.variant)
@@ -610,7 +661,7 @@ class Checker:
             raise err(f"{f.name!r} is a built-in function", f)
         if f.name in self.structs:
             raise err(f"{f.name!r} is already a struct", f)
-        if f.name in self.fns:
+        if f.name in self.fns or f.name in self.generics:
             raise err(f"function {f.name!r} is already defined", f)
         f.ty = self.fns[f.name] = self.signature(f)
         self.specs[f.name] = f.params
@@ -642,7 +693,7 @@ class Checker:
         self.scopes, self.ret, self.loops, self.owner, self.poisoned = Scopes(), sig.ret, 0, owner, set()
         self.closures = []
         try:
-            self_info = self.scopes.declare("self", EnumT(owner) if owner in self.enums else StructT(owner)) if owner else None
+            self_info = self.scopes.declare("self", self.named(owner)) if owner else None
             for p, pt in zip(f.params, sig.params):
                 p.info = self.scopes.declare(p.name, pt)
             before = len(self.errors)
@@ -1086,6 +1137,11 @@ class Checker:
                         raise err(f"{id!r} is a struct; build it with parentheses: {id}(...)", e)
                     if id in self.enums:
                         raise err(f"{id!r} is an enum; name one of its variants: {id}.Variant", e)
+                    if id in self.generics and self.generics[id].kind == "fn":
+                        raise err(f"{id!r} is a generic function and cannot be used as a value; call it, or wrap it: "
+                                  f"fn(x: int) => {id}(x)", e)
+                    if id in self.generics:
+                        raise err(f"{id!r} is generic; write {id}[...] (a type) or {id}.Variant(...) (an enum)", e)
                     if id in self.fns and id in self.externs:
                         raise err(f"{id!r} is an `extern fn` and cannot be used as a value; wrap it: fn(...) => {id}(...)", e)
                     if id in self.fns:
@@ -1123,9 +1179,9 @@ class Checker:
                         self.format_part(p)
                 return STR
             case ast.MethodCall():
-                return self.method_call(e)
+                return self.method_call(e, expected)
             case ast.Attr(v, name):
-                return self.attr(e, v, name)
+                return self.attr(e, v, name, expected)
             case ast.ListLit(items):
                 return self.list_lit(e, items, expected)
             case ast.DictLit(keys, values):
@@ -1187,8 +1243,8 @@ class Checker:
             if t != BOOL:
                 raise err(f"`not` expects bool, not {t}", e)
             return BOOL
-        if t not in (INT, FLOAT):
-            raise err(f"`-` expects int or float, not {t}", e)
+        if not is_num(t):
+            raise err(f"`-` expects int or float, not {t}" + needs("Num", t), e)
         return t
 
     def binop(self, e: ast.BinOp, op: str, left: ast.Expr, right: ast.Expr) -> Type:
@@ -1220,18 +1276,21 @@ class Checker:
             return BOOL
         if lt != rt:
             hint = " (use float(x) or int(x) to convert)" if {lt, rt} == {INT, FLOAT} else ""
+            if isinstance(lt, ParamT) or isinstance(rt, ParamT):
+                hint = " (a value of a type parameter can only be combined with values of that same type)"
             raise err(f"`{op}` between {lt} and {rt}: types must match{hint}", e)
         if op in ARITH:
-            if lt in (INT, FLOAT) or (op == "+" and lt == STR):
+            if is_num(lt) or (op == "+" and lt == STR):
                 return lt
-            raise err(f"`{op}` is not defined for {lt}", e)
+            raise err(f"`{op}` is not defined for {lt}" + needs("Num", lt), e)
         if op in ORDER:
-            if lt in (INT, FLOAT, STR):
+            if is_ord(lt):
                 return BOOL
-            raise err(f"`{op}` is not defined for {lt}", e)
+            raise err(f"`{op}` is not defined for {lt}" + needs("Ord", lt), e)
         if op in EQ:
             if self.contains_fn(lt):
-                raise err(f"cannot compare {lt} with `{op}`: functions cannot be compared", e)
+                raise err(f"cannot compare {lt} with `{op}`: " + ("a type parameter needs the `Eq` bound" if isinstance(lt, ParamT)
+                                                                   else "functions cannot be compared"), e)
             return BOOL
         raise err(f"unknown operator {op!r}", e)
 
@@ -1287,9 +1346,12 @@ class Checker:
             raise err(f"{t} has no {what}", node)
         return self.structs[t.name]
 
-    def attr(self, e: ast.Attr, v: ast.Expr, name: str) -> Type:
+    def attr(self, e: ast.Attr, v: ast.Expr, name: str, expected: Type | None = None) -> Type:
         """Type a field access `value.name`, or a variant without data `Enum.Variant`."""
         e.unwrap = None
+        generic = self.generic_enum_of(v)
+        if generic:
+            return self.generic_variant(e, generic, name, None, expected)
         enum = self.variant_of(v)
         if enum:
             return self.variant_ctor(e, enum, name, None)
@@ -1327,29 +1389,35 @@ class Checker:
         t = self.expr(e)
         if t == UNIT:
             raise err("the expression produces no value", e)
-        if self.contains_fn(t):
-            raise err(f"cannot print {t}: functions cannot be printed", e)
+        if self.contains_fn(t, need="Show"):
+            why = "a type parameter needs the `Show` bound to be printed" if isinstance(t, ParamT) else "functions cannot be printed"
+            raise err(f"cannot print {t}: {why}", e)
         return t
 
-    def contains_fn(self, t: Type, seen: frozenset[str] = frozenset()) -> bool:
-        """Whether a value of this type holds a function somewhere (functions can be neither compared nor printed)."""
+    def contains_fn(self, t: Type, seen: frozenset[str] = frozenset(), need: str = "Eq") -> bool:
+        """Whether a value of this type holds a function somewhere (functions can be neither compared nor printed).
+
+        A type parameter counts as holding one unless its bounds include `need` (`Eq` to compare, `Show` to print).
+        """
         if isinstance(t, FnT):
             return True
+        if isinstance(t, ParamT):
+            return not allows(t, need)
         if isinstance(t, (ListT, SetT)):
-            return self.contains_fn(t.elem, seen)
+            return self.contains_fn(t.elem, seen, need)
         if isinstance(t, (OptionT, CellT)):
-            return self.contains_fn(t.inner, seen)
+            return self.contains_fn(t.inner, seen, need)
         if isinstance(t, ResultT):
-            return self.contains_fn(t.ok, seen) or self.contains_fn(t.err, seen)
+            return self.contains_fn(t.ok, seen, need) or self.contains_fn(t.err, seen, need)
         if isinstance(t, DictT):
-            return self.contains_fn(t.val, seen)
+            return self.contains_fn(t.val, seen, need)
         if isinstance(t, TupleT):
-            return any(self.contains_fn(x, seen) for x in t.elems)
+            return any(self.contains_fn(x, seen, need) for x in t.elems)
         if isinstance(t, (StructT, EnumT)) and t.name not in seen:
             seen = seen | {t.name}
             if isinstance(t, StructT):
-                return any(self.contains_fn(x, seen) for x in self.structs[t.name].fields.values())
-            return any(self.contains_fn(x, seen) for ts in self.enums[t.name].variants.values() for x in ts)
+                return any(self.contains_fn(x, seen, need) for x in self.structs[t.name].fields.values())
+            return any(self.contains_fn(x, seen, need) for ts in self.enums[t.name].variants.values() for x in ts)
         return False
 
     def type_method(self, e: ast.MethodCall, rt: Type) -> Type:
@@ -1606,8 +1674,11 @@ class Checker:
             return inner
         raise err(f"{rt} has no method {e.name!r} (available: unwrap, unwrap_or)", e)
 
-    def method_call(self, e: ast.MethodCall) -> Type:
+    def method_call(self, e: ast.MethodCall, expected: Type | None = None) -> Type:
         """Type a method call on a struct, a string, a list, a dict, a set, an Option or a Result, or `Enum.Variant(...)`."""
+        generic = self.generic_enum_of(e.value)
+        if generic:
+            return self.generic_variant(e, generic, e.name, e.args, expected)
         enum = self.variant_of(e.value)
         if enum:
             return self.variant_ctor(e, enum, e.name, e.args)
@@ -1802,7 +1873,14 @@ class Checker:
 
     def call(self, e: ast.Call, expected: Type | None = None) -> Type:
         """Type a call: a function-typed variable, a struct constructor, a built-in, or a user function."""
+        e.inst = None
         var = self.lookup_var(e.func, e)
+        if e.targs and (var is not None or e.func not in self.generics):
+            what = "a variable" if var is not None else "not generic"
+            hint = f"; to index it and call the result, write ({e.func}[...])(...)" if var is not None else ""
+            raise err(f"{e.func!r} is {what}, so it takes no type arguments{hint}", e)
+        if e.func in self.generics:
+            return self.generic_call(e, expected)
         if var is not None and isinstance(var.ty, FnT):
             e.var = var
             self.check_args(e, e.func, e.args, var.ty)
@@ -1833,7 +1911,10 @@ class Checker:
         if name == "to_json":
             if len(args) != 1:
                 raise err(f"to_json takes 1 argument, got {len(args)}", e)
-            helper = self.deriver.to_json(self.expr(args[0]), e)
+            ty = self.expr(args[0])
+            if has_param(ty):  # inside a generic template: the real conversion is written for each copy
+                return JSON_T
+            helper = self.deriver.to_json(ty, e)
         else:
             want = 2 if name == "from_json" else 1
             if len(args) != want:
@@ -1841,6 +1922,10 @@ class Checker:
             if not isinstance(args[0], ast.TypeRef):
                 raise err(f"the first argument of {name} must be a type", args[0])
             ty = self.resolve(args[0])
+            if has_param(ty):
+                if name == "from_json" and self.expr(args[1], JSON_T) != JSON_T:
+                    raise err(f"from_json expects a Json value, not {args[1].ty}", args[1])
+                return ResultT(ty, STR) if name == "from_json" else JSON_T
             if name == "from_json":
                 t = self.expr(args[1], JSON_T)
                 if t != JSON_T:
@@ -1888,8 +1973,8 @@ class Checker:
             case "int" | "float":
                 arity(1)
                 t = self.expr(args[0])
-                if t not in (INT, FLOAT, STR):
-                    raise err(f"{name}() cannot convert {t}", args[0])
+                if not (is_num(t) or t == STR):
+                    raise err(f"{name}() cannot convert {t}" + needs("Num", t), args[0])
                 return INT if name == "int" else FLOAT
             case "str":
                 arity(1)
@@ -1935,7 +2020,7 @@ class Checker:
             case "sum":
                 arity(1)
                 t = self.expr(args[0])
-                if not (isinstance(t, ListT) and t.elem in (INT, FLOAT)):
+                if not (isinstance(t, ListT) and is_num(t.elem)):
                     raise err(f"sum expects a list of int or float, not {t}", args[0])
                 return t.elem
             case "min" | "max":
@@ -1947,13 +2032,13 @@ class Checker:
                         raise err(f"{name} of one argument expects a list of comparable values, not {t}", args[0])
                     return t.elem
                 u = self.expr(args[1], t)
-                if t != u or t not in (INT, FLOAT, STR):
+                if t != u or not is_ord(t):
                     raise err(f"{name} compares two int, float or str values of the same type, not {t} and {u}", e)
                 return t
             case "abs":
                 arity(1)
                 t = self.expr(args[0])
-                if t not in (INT, FLOAT):
+                if not is_num(t):
                     raise err(f"abs expects int or float, not {t}", args[0])
                 return t
             case "sorted" | "reversed":
@@ -2016,6 +2101,11 @@ class Checker:
         raise err(f"unknown built-in function {name!r}", e)
 
 
+def needs(bound: str, t: Type) -> str:
+    """A hint for an error about a type parameter that lacks a bound (empty for any other type)."""
+    return f" (declare the type parameter as {t}: {bound})" if isinstance(t, ParamT) else ""
+
+
 def field_path(e: ast.Expr) -> str | None:
     """The dotted path of a variable or a chain of field accesses (`p`, `p.name`, `self.a.b`), or None for anything else."""
     if isinstance(e, ast.Name):
@@ -2023,23 +2113,6 @@ def field_path(e: ast.Expr) -> str | None:
     if isinstance(e, ast.Attr) and not e.variant and (base := field_path(e.value)) is not None:
         return f"{base}.{e.name}"
     return None
-
-
-def key_ok(t: Type) -> bool:
-    """Types usable as dict keys / set elements (ordered and hashable)."""
-    return t in (INT, STR, BOOL) or (isinstance(t, TupleT) and all(key_ok(x) for x in t.elems))
-
-
-def sortable(t: Type) -> bool:
-    """Whether a list of this type can be sorted.
-
-    Args:
-        t: The element type.
-
-    Returns:
-        True for int, float, str, bool and tuples of the orderable ones.
-    """
-    return t == FLOAT or key_ok(t)
 
 
 def always_returns(body: list[ast.Stmt]) -> bool:
