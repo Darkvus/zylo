@@ -14,7 +14,7 @@ from zylo.domain.errors import ZyloError
 from zylo.domain.types import PRIMS
 from zylo.packaging.manifest import package_layout
 from zylo.packaging.stdlib import STD, stdlib_dir, stdlib_module
-from zylo.syntax.parser import parse
+from zylo.syntax.parser import parse, parse_collect
 
 SEP = "·"  # `·`
 RESERVED_TYPES = set(PRIMS) | {"list", "unit", "Result", "Cell"}
@@ -108,7 +108,7 @@ class Linker:
         >>> program = Linker(packages_dir).link(Path("main.zy"))
     """
     def __init__(self, packages_dir: Path | None = None, trusted: set[str] | list[str] = (),
-                 overrides: dict[Path, str] | None = None):
+                 overrides: dict[Path, str] | None = None, tolerant: bool = False):
         """Create a linker.
 
         Args:
@@ -116,7 +116,10 @@ class Linker:
             trusted: Package names the project allows to declare `extern fn`.
             overrides: Source text to use instead of the file's contents, by resolved path (an editor's unsaved
                 buffers).
+            tolerant: Keep going past syntax errors, dropping the statements that do not parse (and, in a library
+                module, the statements a library may not hold), as an editor wants on half-typed text.
         """
+        self.tolerant = tolerant
         self.packages_dir = packages_dir.resolve() if packages_dir else None
         self.trusted = set(trusted)  # packages the project allows to call Rust (`extern fn`)
         self.overrides = overrides or {}
@@ -176,10 +179,15 @@ class Linker:
             raise ZyloError(f"cannot read {path}: {e.strerror}", file=str(path)) from None
         except UnicodeDecodeError:
             raise ZyloError(f"{path} is not valid UTF-8 text", file=str(path)) from None
-        prog = parse(src, str(path))
+        if self.tolerant:
+            prog, _ = parse_collect(src, str(path))
+        else:
+            prog = parse(src, str(path))
         mod = Module("" if is_entry else self.module_id(path), path, prog)
         if not is_entry:
             self.register_id(mod, path)
+            if self.tolerant:
+                prog.body = [s for s in prog.body if isinstance(s, (ast.Import, ast.FromImport, ast.FnDef, ast.StructDef, ast.EnumDef))]
             for s in prog.body:
                 if not isinstance(s, (ast.Import, ast.FromImport, ast.FnDef, ast.StructDef, ast.EnumDef)):
                     raise err("library modules can only contain imports, functions, structs and enums", s, path)

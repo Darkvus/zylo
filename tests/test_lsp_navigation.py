@@ -226,7 +226,7 @@ def test_hover_follows_imports_and_aliases(ws):
 
 def test_hover_on_builtins_and_on_nothing(solo):
     w = solo("print(len([1]))\n")
-    assert "(built-in) len" in w.hover("doc.zy", "len")
+    assert "fn len(x: str | list | dict | set) -> int" in w.hover("doc.zy", "len")
     assert w.hover("doc.zy", "(") is None
     assert w.hover("doc.zy", "1") is None
     assert w.hover("doc.zy", "print", shift=5) is None  # the mouse is on the parenthesis, not on `print`

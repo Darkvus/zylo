@@ -98,7 +98,7 @@ zylo run src/main.zy                     # import textkit, from textkit import s
 
 **Good tooling.** `zylo check` reports every error at once, `zylo fmt` formats your code without ever changing its
 meaning, and `zylo lsp` plus a Visual Studio Code extension give you live diagnostics, formatting, an outline,
-completion, hover, go to definition, rename and signature help in your editor ([docs/editors.md](docs/editors.md)).
+completion (members after a dot, named arguments, imports), hover, go to definition, rename, signature help and quick fixes in your editor ([docs/editors.md](docs/editors.md)).
 
 **Rust when you need it.** `extern fn` calls any Rust function, and `[rust-dependencies]` in `zylo.toml` brings in
 crates. Community packages stay plain Zylo unless you explicitly trust them

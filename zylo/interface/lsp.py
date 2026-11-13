@@ -2,7 +2,7 @@
 
 Speaks JSON-RPC over standard input and output (messages framed by `Content-Length` headers) and provides, to any
 editor that supports the protocol: live diagnostics (every error, checked on the unsaved text), formatting, the
-outline of a document, completion, hover, go to definition, rename and signature help. The logic lives in the application layer; this module only translates.
+outline of a document, completion, hover, go to definition, rename, signature help and quick fixes. The logic lives in the application layer; this module only translates.
 """
 
 import json
@@ -15,12 +15,13 @@ from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
 from zylo import __version__
+from zylo.application.actions import code_actions
 from zylo.application.compile import diagnose_source
+from zylo.application.completion import complete
 from zylo.application.editor import (
     Place,
     RenameError,
     Signature,
-    completions,
     definition,
     document_symbols,
     hover,
@@ -34,7 +35,8 @@ from zylo.domain.errors import ZyloError
 
 ERROR = 1  # DiagnosticSeverity
 SYMBOL_KINDS = {"function": 12, "struct": 23, "enum": 10, "method": 6, "field": 8, "variant": 22, "variable": 13}
-COMPLETION_KINDS = {"keyword": 14, "function": 3, "struct": 22, "enum": 13, "variable": 6}
+COMPLETION_KINDS = {"keyword": 14, "function": 3, "method": 2, "field": 5, "struct": 22, "enum": 13, "variant": 20,
+                    "variable": 6, "parameter": 6, "module": 9, "type": 7}
 REQUEST_FAILED = -32803  # the request was understood but cannot be done (LSP 3.17 `RequestFailed`)
 
 
@@ -251,6 +253,7 @@ class Server:
             "textDocument/prepareRename": self.on_prepare_rename,
             "textDocument/rename": self.on_rename,
             "textDocument/signatureHelp": self.on_signature_help,
+            "textDocument/codeAction": self.on_code_action,
         }.get(method)
         if handler is None:
             if is_request:
@@ -277,6 +280,7 @@ class Server:
             "hoverProvider": True,
             "definitionProvider": True,
             "renameProvider": {"prepareProvider": True},
+            "codeActionProvider": {"codeActionKinds": ["quickfix"]},
             "signatureHelpProvider": {"triggerCharacters": ["(", ","], "retriggerCharacters": [","]},
         }, "serverInfo": {"name": "zylo", "version": __version__}}
 
@@ -327,10 +331,6 @@ class Server:
         """The outline of the document."""
         return [symbol_json(s) for s in document_symbols(self.documents.get(params["textDocument"]["uri"], ""))]
 
-    def on_completion(self, params: dict) -> list[dict]:
-        """Completion candidates for the document."""
-        text = self.documents.get(params["textDocument"]["uri"], "")
-        return [{"label": c.label, "kind": COMPLETION_KINDS[c.kind], "detail": c.detail} for c in completions(text)]
 
     # ---- navigation ----
 
@@ -364,6 +364,20 @@ class Server:
         start = to_character(text, place.col)
         end = to_character(text, place.col + place.length)
         return {"start": {"line": place.line - 1, "character": start}, "end": {"line": place.line - 1, "character": end}}
+
+    def on_completion(self, params: dict) -> list[dict]:
+        """What can be typed at the cursor: members after a dot, names in scope, keywords, named arguments, imports."""
+        uri, path, line, col = self.position(params)
+        items = []
+        for c in complete(self.project_for(uri), path, line, col):
+            item: dict = {"label": c.label, "kind": COMPLETION_KINDS[c.kind], "detail": c.detail,
+                          "sortText": f"{c.rank}{c.label}"}
+            if c.documentation:
+                item["documentation"] = {"kind": "markdown", "value": c.documentation}
+            if c.insert_text is not None:
+                item["insertText"] = c.insert_text
+            items.append(item)
+        return items
 
     def on_hover(self, params: dict) -> dict | None:
         """The type or signature of the name under the cursor."""
@@ -416,6 +430,23 @@ class Server:
         result: dict = {"signatures": [info], "activeSignature": 0}
         result["activeParameter"] = sig.active if sig.active is not None else len(sig.parameters)
         return result
+
+    def on_code_action(self, params: dict) -> list[dict]:
+        """The quick fixes at the start of the selection: add an import, add the missing `match` arms."""
+        uri = params["textDocument"]["uri"]
+        path = uri_to_path(uri)
+        start = params["range"]["start"]
+        lines = self.text_of(path).splitlines()
+        text = lines[start["line"]] if start["line"] < len(lines) else ""
+        actions = code_actions(self.project_for(uri), path, start["line"] + 1, to_column(text, start["character"]))
+        out = []
+        for a in actions:
+            changes: dict[str, list[dict]] = {}
+            for e in a.edits:
+                changes.setdefault(e.place.path.resolve().as_uri(), []).append(
+                    {"range": self.lsp_range(e.place), "newText": e.new_text})
+            out.append({"title": a.title, "kind": "quickfix", "edit": {"changes": changes}})
+        return out
 
     # ---- diagnostics ----
 

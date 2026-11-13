@@ -1,4 +1,4 @@
-"""Use cases for editors: symbols, completion, hover, go to definition, rename and signature help.
+"""Use cases for editors: symbols, hover, go to definition, rename and signature help.
 
 These are independent of any editor protocol; `interface/lsp.py` turns them into Language Server Protocol messages.
 """
@@ -9,12 +9,13 @@ from pathlib import Path
 
 from zylo.application.compile import project_context
 from zylo.domain import ast
-from zylo.domain.builtins import BUILTINS
+from zylo.domain.builtins import FUNCTIONS, METHODS, Builtin, describe, receiver_kind
 from zylo.domain.errors import PackageError, ZyloError
+from zylo.domain.types import Type
 from zylo.packaging.manifest import find_manifest
 from zylo.semantics.navigation import Entity, Project, Ref, RenameError, Resolution, deref, doc_of, show_type
 from zylo.syntax.formatter import expr_text, type_text
-from zylo.syntax.lexer import KEYWORDS, Token, tokenize
+from zylo.syntax.lexer import Token, tokenize
 from zylo.syntax.parser import parse_collect
 
 
@@ -41,31 +42,13 @@ class Symbol:
     children: list["Symbol"] = field(default_factory=list)
 
 
-@dataclass
-class Completion:
-    """A completion candidate.
-
-    Attributes:
-        label: The text to insert.
-        kind: "keyword", "function", "struct", "enum" or "variable".
-        detail: A short description.
-    """
-
-    label: str
-    kind: str
-    detail: str = ""
-
-
-def _type_text(t: ast.TypeRef) -> str:
-    return type_text(t)
-
-
-def _signature(f: ast.FnDef) -> str:
+def signature_text(f: ast.FnDef) -> str:
+    """A function as written in a signature: `fn name(a: int, b: str = "x") -> bool` (methods list `self` first)."""
     params = (["self"] if f.has_self else []) + [
-        f"{p.name}: {_type_text(p.type)}" + (f" = {expr_text(p.default)}" if p.default is not None else "")
+        f"{p.name}: {type_text(p.type)}" + (f" = {expr_text(p.default)}" if p.default is not None else "")
         for p in f.params
     ]
-    return f"fn {f.name}({', '.join(params)})" + (f" -> {_type_text(f.ret)}" if f.ret else "")
+    return f"fn {f.name}({', '.join(params)})" + (f" -> {type_text(f.ret)}" if f.ret else "")
 
 
 def _name_col(line_text: str, name: str, fallback: int) -> int:
@@ -106,47 +89,28 @@ def document_symbols(source: str) -> list[Symbol]:
         if isinstance(s, ast.StructDef):
             sym = Symbol(s.name, "struct", s.line, _name_col(at(s.line), s.name, s.col), end_of(i))
             sym.children += [Symbol(f.name, "field", f.line, _name_col(at(f.line), f.name, f.col), f.line,
-                                    _type_text(f.type) + (f" = {expr_text(f.default)}" if f.default is not None else ""))
+                                    type_text(f.type) + (f" = {expr_text(f.default)}" if f.default is not None else ""))
                              for f in s.fields]
             for j, m in enumerate(s.methods):
                 nxt = s.methods[j + 1].line - 1 if j + 1 < len(s.methods) else sym.end_line
                 sym.children.append(Symbol(m.name, "method", m.line, _name_col(at(m.line), m.name, m.col), max(nxt, m.line),
-                                           _signature(m)))
+                                           signature_text(m)))
         elif isinstance(s, ast.EnumDef):
             sym = Symbol(s.name, "enum", s.line, _name_col(at(s.line), s.name, s.col), end_of(i))
             sym.children += [Symbol(v.name, "variant", v.line, _name_col(at(v.line), v.name, v.col), v.line,
-                                    f"({', '.join(_type_text(t) for t in v.fields)})" if v.fields else "")
+                                    f"({', '.join(type_text(t) for t in v.fields)})" if v.fields else "")
                              for v in s.variants]
             for j, m in enumerate(s.methods):
                 nxt = s.methods[j + 1].line - 1 if j + 1 < len(s.methods) else sym.end_line
                 sym.children.append(Symbol(m.name, "method", m.line, _name_col(at(m.line), m.name, m.col), max(nxt, m.line),
-                                           _signature(m)))
+                                           signature_text(m)))
         elif isinstance(s, ast.FnDef):
             kind_line = at(s.line)
-            sym = Symbol(s.name, "function", s.line, _name_col(kind_line, s.name, s.col), end_of(i), _signature(s))
+            sym = Symbol(s.name, "function", s.line, _name_col(kind_line, s.name, s.col), end_of(i), signature_text(s))
         else:
             sym = Symbol(s.target.id, "variable", s.line, s.col, s.line)
         symbols.append(sym)
     return symbols
-
-
-def completions(source: str) -> list[Completion]:
-    """Suggest what can be typed: keywords, built-in functions, and the document's own functions and structs.
-
-    Args:
-        source: The document's text.
-
-    Returns:
-        The candidates, without duplicates.
-    """
-    items = [Completion(k, "keyword") for k in sorted(KEYWORDS)]
-    items += [Completion(b, "function", "built-in") for b in sorted(BUILTINS)]
-    seen = {c.label for c in items}
-    for sym in document_symbols(source):
-        if sym.name not in seen and sym.kind in ("function", "struct", "enum", "variable"):
-            items.append(Completion(sym.name, sym.kind, sym.detail))
-            seen.add(sym.name)
-    return items
 
 
 # ---- navigation ---------------------------------------------------------------------------------------------
@@ -237,7 +201,7 @@ def _place(e: Entity) -> Place | None:
 
 
 def _fn_text(f: ast.FnDef, owner: str | None = None) -> str:
-    sig = _signature(f)
+    sig = signature_text(f)
     return f"fn {owner}.{sig[3:]}" if owner else sig
 
 
@@ -246,7 +210,7 @@ def _doc_block(node: ast.Node | None) -> str:
     return f"\n\n{doc}" if doc else ""
 
 
-def _variable_type(ent: Entity, ref: Ref, res: Resolution) -> str | None:
+def variable_type(ent: Entity, ref: Ref, res: Resolution) -> str | None:
     """The type of a variable: where it is used (it may be narrowed there), else where it is declared."""
     t = None
     if res.types is not None:
@@ -268,13 +232,13 @@ def _describe(project: Project, ent: Entity, ref: Ref, res: Resolution) -> str:
     node = ent.node
     owner = ent.owner.name if ent.owner is not None else None
     if ent.kind in ("variable", "parameter", "self"):
-        ty = _variable_type(ent, ref, res) if ent.kind != "self" else None
+        ty = variable_type(ent, ref, res) if ent.kind != "self" else None
         if ent.kind == "self":
-            ty = _variable_type(ent, ref, res) or (ent.target.name if ent.target else None)
+            ty = variable_type(ent, ref, res) or (ent.target.name if ent.target else None)
         label = {"variable": "variable", "parameter": "parameter", "self": "self"}[ent.kind]
         return f"```zylo\n({label}) {ent.name}{': ' + ty if ty else ''}\n```"
     if ent.kind == "function" and isinstance(node, ast.FnDef):
-        return f"```zylo\n{_signature(node)}\n```{_doc_block(node)}"
+        return f"```zylo\n{signature_text(node)}\n```{_doc_block(node)}"
     if ent.kind == "method" and isinstance(node, ast.FnDef):
         return f"```zylo\n{_fn_text(node, owner)}\n```{_doc_block(node)}"
     if ent.kind == "struct" and isinstance(node, ast.StructDef):
@@ -295,8 +259,35 @@ def _describe(project: Project, ent: Entity, ref: Ref, res: Resolution) -> str:
         where = f"\n\n{ent.module_path}" if ent.module_path else ""
         return f"```zylo\nmodule {ent.name}\n```{where}"
     if ent.kind == "builtin":
-        return f"```zylo\n(built-in) {ent.name}\n```"
+        b = FUNCTIONS.get(ent.name)
+        return f"```zylo\n{builtin_text(b)}\n```\n\n{b.doc}" if b else f"```zylo\n(built-in) {ent.name}\n```"
+    if ent.kind == "builtin_method":
+        b = METHODS[receiver_name(ent)][ent.name]
+        return f"```zylo\n{builtin_text(b, ent.receiver, str(show_type(ent.receiver)))}\n```\n\n{b.doc}"
     return f"```zylo\n{ent.name}\n```"
+
+
+def receiver_name(ent: Entity) -> str:
+    """The key of `METHODS` for a built-in method's receiver."""
+    kind = receiver_kind(ent.receiver)
+    assert kind is not None
+    return kind
+
+
+def builtin_text(b: Builtin, receiver: Type | None = None, owner: str | None = None) -> str:
+    """A built-in function or method as a signature: `fn len(x: str | list | dict | set) -> int`.
+
+    Args:
+        b: The built-in.
+        receiver: For a method, the type of the value it is called on (fills in the element types).
+        owner: For a method, the receiver's type as shown to the user (`list[int]`).
+
+    Returns:
+        The signature text.
+    """
+    params, ret = describe(b, receiver)
+    head = f"(method) {owner}.{b.name}" if owner else f"fn {b.name}"
+    return f"{head}({', '.join(params)})" + (f" -> {ret}" if ret else "")
 
 
 def hover(project: Project, path: Path, line: int, col: int) -> Hover | None:
@@ -334,7 +325,7 @@ def definition(project: Project, path: Path, line: int, col: int) -> list[Place]
     if hit is None or hit[0].entity is None:
         return []
     ent = deref(hit[0].entity)
-    if ent is None or ent.kind == "builtin":
+    if ent is None or ent.kind in ("builtin", "builtin_method"):
         return []
     if ent.kind == "module":
         return [Place(ent.module_path, 1, 1, 0)] if ent.module_path else []
@@ -400,7 +391,7 @@ _DANGLING = {"=", "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==", "!=", "->
 
 
 @dataclass
-class _Call:
+class Call:
     """A call being typed.
 
     Attributes:
@@ -408,15 +399,21 @@ class _Call:
         index: How many commas precede the cursor inside the call: the position of the argument being written.
         named: The parameter name when that argument is written `name=...`, otherwise None.
         completion: The text that would finish the call: filler after a dangling operator and the missing brackets.
+        used: The parameter names already given as `name=value` arguments.
+        at_start: True when the cursor is at the start of an argument (or in the first word of it).
+        innermost: The innermost bracket open at the cursor: "(" when the cursor is directly in the call's arguments.
     """
 
     callee: Token
     index: int
     named: str | None
     completion: str
+    used: list[str] = field(default_factory=list)
+    at_start: bool = False
+    innermost: str = "("
 
 
-def _call_at(source: str, line: int, col: int) -> _Call | None:
+def call_at(source: str, line: int, col: int) -> Call | None:
     """Find the call being typed at a position.
 
     Args:
@@ -452,7 +449,7 @@ def _call_at(source: str, line: int, col: int) -> _Call | None:
         i -= 1
     if open_at is None:
         return None
-    nested, index, start = 0, 0, open_at + 1
+    nested, index, start, used = 0, 0, open_at + 1, []
     for k in range(open_at + 1, len(toks)):
         t = toks[k]
         if t.kind == "NEWLINE":
@@ -462,6 +459,8 @@ def _call_at(source: str, line: int, col: int) -> _Call | None:
         elif t.kind == "OP" and t.value in ")]}":
             nested -= 1
         elif t.kind == "OP" and t.value == "," and nested == 0:
+            if toks[start].kind == "IDENT" and toks[start + 1].kind == "OP" and toks[start + 1].value == "=":
+                used.append(toks[start].value)
             index, start = index + 1, k + 1
     named = None
     if start + 1 < len(toks) and toks[start].kind == "IDENT" and toks[start + 1].kind == "OP" and toks[start + 1].value == "=":
@@ -476,7 +475,9 @@ def _call_at(source: str, line: int, col: int) -> _Call | None:
             stack.pop()
     last = toks[-1]
     filler = "x" if last.kind == "OP" and last.value == "." else " 0" if last.kind == "OP" and last.value in _DANGLING else ""
-    return _Call(toks[open_at - 1], index, named, filler + "".join(_BRACKETS[b] for b in reversed(stack)))
+    at_start = len(toks) - start <= 1 and (len(toks) == start or toks[start].kind == "IDENT")
+    return Call(toks[open_at - 1], index, named, filler + "".join(_BRACKETS[b] for b in reversed(stack)), used,
+                at_start, stack[-1] if stack else "")
 
 
 def _label(head: str, parts: list[str], tail: str = "") -> tuple[str, list[tuple[int, int]]]:
@@ -488,9 +489,25 @@ def _label(head: str, parts: list[str], tail: str = "") -> tuple[str, list[tuple
     return f"{head}({', '.join(parts)}){tail}", spans
 
 
-def _signature_of(ent: Entity) -> tuple[str, list[tuple[int, int]], list[str], str | None] | None:
+def builtin_signature(ent: Entity) -> tuple[str, list[tuple[int, int]], list[str], str | None] | None:
+    """The label, parameter spans, parameter names and description of a built-in function or method."""
+    if ent.kind == "builtin":
+        b, receiver, owner = FUNCTIONS.get(ent.name), None, None
+    else:
+        b, receiver, owner = METHODS[receiver_name(ent)][ent.name], ent.receiver, show_type(ent.receiver)
+    if b is None:
+        return None
+    params, ret = describe(b, receiver)
+    head = f"{owner}.{b.name}" if owner else f"fn {b.name}"
+    label, spans = _label(head, params, f" -> {ret}" if ret else "")
+    return label, spans, [p.split(":")[0].strip() for p in params], b.doc
+
+
+def signature_of(ent: Entity) -> tuple[str, list[tuple[int, int]], list[str], str | None] | None:
     """The label, parameter spans, parameter names and description of something that can be called."""
     ent = deref(ent)
+    if ent is not None and ent.kind in ("builtin", "builtin_method"):
+        return builtin_signature(ent)
     if ent is None or ent.node is None:
         return None
     node = ent.node
@@ -511,11 +528,39 @@ def _signature_of(ent: Entity) -> tuple[str, list[tuple[int, int]], list[str], s
     return None
 
 
+def callee_entity(path: Path, source: str, line: int, col: int, project: Project, call: Call) -> Entity | None:
+    """What the callee of an unfinished call is, completing the text with its missing brackets when needed.
+
+    Args:
+        path: The file.
+        source: Its current text.
+        line: 1-based line of the cursor.
+        col: 1-based column of the cursor.
+        project: The project, whose buffer for `path` is `source`.
+        call: The call being typed, from `call_at`.
+
+    Returns:
+        The entity of the callee (a function, method, struct, variant or built-in that can be called), or None.
+    """
+    callee = call.callee
+    hit = project.ref_at(path, callee.line, callee.col)
+    ent = hit[0].entity if hit else None
+    if ent is None or signature_of(ent) is None:
+        lines = source.splitlines() or [""]
+        row = min(line, len(lines)) - 1
+        fixed = [*lines[:row], lines[row][:col - 1] + call.completion + lines[row][col - 1:], *lines[row + 1:]]
+        repaired = Project(project.root, {**project.overrides, path.resolve(): "\n".join(fixed) + "\n"},
+                           project.packages_dir, project.trusted)
+        hit = repaired.ref_at(path, callee.line, callee.col)
+        ent = hit[0].entity if hit else None
+    return ent
+
+
 def signature_help(path: Path, source: str, line: int, col: int, project: Project) -> Signature | None:
     """Describe the call being typed at a position and say which parameter the cursor is in.
 
     Works while the call is still unfinished: the text is completed with the missing brackets (and a filler value
-    after a dangling operator) before the callee is resolved.
+    after a dangling operator) before the callee is resolved. Built-in functions and methods are described too.
 
     Args:
         path: The file.
@@ -527,27 +572,19 @@ def signature_help(path: Path, source: str, line: int, col: int, project: Projec
     Returns:
         The signature, or None when the cursor is not in a call of a known function, method, struct or variant.
     """
-    call = _call_at(source, line, col)
+    call = call_at(source, line, col)
     if call is None:
         return None
-    callee = call.callee
-    hit = project.ref_at(path, callee.line, callee.col)
-    ent = hit[0].entity if hit else None
-    if ent is None or _signature_of(ent) is None:
-        lines = source.splitlines() or [""]
-        row = min(line, len(lines)) - 1
-        fixed = [*lines[:row], lines[row][:col - 1] + call.completion + lines[row][col - 1:], *lines[row + 1:]]
-        repaired = Project(project.root, {**project.overrides, path.resolve(): "\n".join(fixed) + "\n"},
-                           project.packages_dir, project.trusted)
-        hit = repaired.ref_at(path, callee.line, callee.col)
-        ent = hit[0].entity if hit else None
-    info = _signature_of(ent) if ent is not None else None
+    ent = callee_entity(path, source, line, col, project, call)
+    info = signature_of(ent) if ent is not None else None
     if info is None:
         return None
     label, spans, names, doc = info
     active: int | None = call.index
     if call.named is not None:
         active = names.index(call.named) if call.named in names else None
+    elif names and names[-1].startswith("*"):  # `print(*values)`: every further argument is the last parameter
+        active = min(call.index, len(spans) - 1)
     elif call.index >= len(spans):
         active = None
     return Signature(label, spans, doc, active)
