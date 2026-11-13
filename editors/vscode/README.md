@@ -5,6 +5,7 @@ Syntax highlighting and a language server for [Zylo](https://github.com/Darkvus/
 - **Highlighting** for `.zy` files: keywords, types, built-in functions, f-strings with their fields, escapes, comments.
 - **Live diagnostics**: every syntax and type error, checked on the text you are typing (not only on save).
 - **Format document** (`zylo fmt`'s style), the **outline** of functions and structs, and **completion**.
+- **Hover** (types, signatures, descriptions), **go to definition** across files, **rename** (F2, checked for collisions) and **signature help**.
 
 Everything but the highlighting comes from `zylo lsp`, so [Zylo must be installed](../../docs/install.md) and on
 your `PATH` (or set `zylo.path`).

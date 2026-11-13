@@ -138,7 +138,7 @@ skipping to the end of the failed statement (and its block), the checker checks 
 "poisons" a variable whose declaration failed so its later uses are not reported again, and `check()` still raises the
 first error for callers that want one. The formatter prints the syntax tree rather than rewriting text, so it cannot
 change a program's meaning, and a test proves it on every program in the repository. The language server is a thin
-translation (in the interface layer) of use cases in the application layer, and the VS Code grammar is generated from
+translation (in the interface layer) of use cases in the application layer. Navigation resolves names on its own tolerant parse of each file (`semantics/navigation.py`), because the linker renames and merges definitions, and borrows from the checker only the types it alone knows, found by source position, and the VS Code grammar is generated from
 the lexer's keywords and the built-in catalog, so highlighting cannot drift from the language.
 
 **Functions are values, and closures capture copies.** A function type is `fn(A, B) -> R` and is `Rc<dyn Fn(A, B) -> R>`
@@ -190,6 +190,6 @@ tree, keeps them for free.
 - `is` narrowing works on plain variables and a single condition (no `and` chains, no fields).
 - Rust generics and traits are not exposed. Rust can call Zylo function values passed to an `extern fn` (see rust-interop.md).
 - No generics or list comprehensions yet; closures are limited (see above). `match` has no guards, no or-patterns (`1 | 2`) and no nested patterns.
-- The language server has no hover, go to definition or rename yet. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
+- The language server's types and member lookups need the file to parse and link (a syntax error elsewhere removes them), and its rename refuses rather than guess. I/O is synchronous and text-only (no binary files, sockets or subprocesses).
 - No central registry, version ranges or dependency resolver: dependencies are pinned to exact refs.
 - Diagnostics are in English only.

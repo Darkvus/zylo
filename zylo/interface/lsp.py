@@ -2,7 +2,7 @@
 
 Speaks JSON-RPC over standard input and output (messages framed by `Content-Length` headers) and provides, to any
 editor that supports the protocol: live diagnostics (every error, checked on the unsaved text), formatting, the
-outline of a document, and completion. The logic lives in the application layer; this module only translates.
+outline of a document, completion, hover, go to definition, rename and signature help. The logic lives in the application layer; this module only translates.
 """
 
 import json
@@ -16,13 +16,73 @@ from urllib.request import url2pathname
 
 from zylo import __version__
 from zylo.application.compile import diagnose_source
-from zylo.application.editor import completions, document_symbols
+from zylo.application.editor import (
+    Place,
+    RenameError,
+    Signature,
+    completions,
+    definition,
+    document_symbols,
+    hover,
+    open_project,
+    prepare_rename,
+    rename,
+    signature_help,
+)
 from zylo.application.format import format_text
 from zylo.domain.errors import ZyloError
 
 ERROR = 1  # DiagnosticSeverity
 SYMBOL_KINDS = {"function": 12, "struct": 23, "enum": 10, "method": 6, "field": 8, "variant": 22, "variable": 13}
 COMPLETION_KINDS = {"keyword": 14, "function": 3, "struct": 22, "enum": 13, "variable": 6}
+REQUEST_FAILED = -32803  # the request was understood but cannot be done (LSP 3.17 `RequestFailed`)
+
+
+class ResponseError(Exception):
+    """A request that fails with a message the editor shows to the user.
+
+    Attributes:
+        code: The JSON-RPC error code.
+        message: The text for the user.
+    """
+
+    def __init__(self, code: int, message: str):
+        """Create the error.
+
+        Args:
+            code: The JSON-RPC error code.
+            message: The text for the user.
+        """
+        super().__init__(message)
+        self.code, self.message = code, message
+
+
+def utf16_length(text: str) -> int:
+    """The length of a text in UTF-16 code units, which is how the protocol counts characters."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def to_column(line_text: str, character: int) -> int:
+    """Convert a protocol character offset (UTF-16 code units) to a 1-based column (characters).
+
+    Args:
+        line_text: The text of the line.
+        character: The 0-based offset in UTF-16 code units.
+
+    Returns:
+        The 1-based column.
+    """
+    units = 0
+    for i, ch in enumerate(line_text):
+        if units >= character:
+            return i + 1
+        units += 2 if ord(ch) > 0xFFFF else 1
+    return len(line_text) + 1 + max(character - units, 0)
+
+
+def to_character(line_text: str, col: int) -> int:
+    """Convert a 1-based column (characters) to a protocol character offset (UTF-16 code units)."""
+    return utf16_length(line_text[:col - 1]) + max(col - 1 - len(line_text), 0)
 
 
 def uri_to_path(uri: str) -> Path:
@@ -186,12 +246,22 @@ class Server:
             "textDocument/formatting": self.on_formatting,
             "textDocument/documentSymbol": self.on_symbols,
             "textDocument/completion": self.on_completion,
+            "textDocument/hover": self.on_hover,
+            "textDocument/definition": self.on_definition,
+            "textDocument/prepareRename": self.on_prepare_rename,
+            "textDocument/rename": self.on_rename,
+            "textDocument/signatureHelp": self.on_signature_help,
         }.get(method)
         if handler is None:
             if is_request:
                 self.fail(msg, -32601, f"method not found: {method}")
             return
-        result = handler(params)
+        try:
+            result = handler(params)
+        except ResponseError as e:
+            if is_request:
+                self.fail(msg, e.code, e.message)
+            return
         if is_request:
             self.reply(msg, result)
 
@@ -204,6 +274,10 @@ class Server:
             "documentFormattingProvider": True,
             "documentSymbolProvider": True,
             "completionProvider": {"triggerCharacters": ["."]},
+            "hoverProvider": True,
+            "definitionProvider": True,
+            "renameProvider": {"prepareProvider": True},
+            "signatureHelpProvider": {"triggerCharacters": ["(", ","], "retriggerCharacters": [","]},
         }, "serverInfo": {"name": "zylo", "version": __version__}}
 
     def on_shutdown(self, params: dict):
@@ -256,6 +330,91 @@ class Server:
         """Completion candidates for the document."""
         text = self.documents.get(params["textDocument"]["uri"], "")
         return [{"label": c.label, "kind": COMPLETION_KINDS[c.kind], "detail": c.detail} for c in completions(text)]
+
+    # ---- navigation ----
+
+    def text_of(self, path: Path) -> str:
+        """The text of a file: the open buffer, else the disk (empty when unreadable)."""
+        for uri, text in self.documents.items():
+            if uri_to_path(uri).resolve() == path.resolve():
+                return text
+        try:
+            return path.read_text()
+        except (OSError, UnicodeDecodeError):
+            return ""
+
+    def project_for(self, uri: str):
+        """The project of a document, with every open buffer as the text of its file."""
+        overrides = {uri_to_path(u): t for u, t in self.documents.items() if u.startswith("file:")}
+        return open_project(uri_to_path(uri), overrides)
+
+    def position(self, params: dict) -> tuple[str, Path, int, int]:
+        """Decode the document and position of a request: the URI, the path, the 1-based line and column."""
+        uri = params["textDocument"]["uri"]
+        pos = params["position"]
+        lines = self.text_of(uri_to_path(uri)).splitlines()
+        text = lines[pos["line"]] if pos["line"] < len(lines) else ""
+        return uri, uri_to_path(uri), pos["line"] + 1, to_column(text, pos["character"])
+
+    def lsp_range(self, place: Place) -> dict:
+        """Convert a place to a protocol range (the file's text gives the UTF-16 offsets)."""
+        lines = self.text_of(place.path).splitlines()
+        text = lines[place.line - 1] if 0 < place.line <= len(lines) else ""
+        start = to_character(text, place.col)
+        end = to_character(text, place.col + place.length)
+        return {"start": {"line": place.line - 1, "character": start}, "end": {"line": place.line - 1, "character": end}}
+
+    def on_hover(self, params: dict) -> dict | None:
+        """The type or signature of the name under the cursor."""
+        uri, path, line, col = self.position(params)
+        found = hover(self.project_for(uri), path, line, col)
+        if found is None:
+            return None
+        return {"contents": {"kind": "markdown", "value": found.markdown}, "range": self.lsp_range(found.place)}
+
+    def on_definition(self, params: dict) -> list[dict]:
+        """Where the name under the cursor is defined."""
+        uri, path, line, col = self.position(params)
+        return [{"uri": p.path.resolve().as_uri(), "range": self.lsp_range(p)}
+                for p in definition(self.project_for(uri), path, line, col)]
+
+    def on_prepare_rename(self, params: dict) -> dict | None:
+        """The range that a rename would change, or an error saying why it cannot be renamed."""
+        uri, path, line, col = self.position(params)
+        try:
+            place = prepare_rename(self.project_for(uri), path, line, col)
+        except RenameError as e:
+            raise ResponseError(REQUEST_FAILED, str(e)) from None
+        if place is None:
+            return None
+        return {"range": self.lsp_range(place), "placeholder": self.text_of(path).splitlines()[line - 1][
+            place.col - 1:place.col - 1 + place.length]}
+
+    def on_rename(self, params: dict) -> dict:
+        """Rename the name under the cursor in every file that uses it."""
+        uri, path, line, col = self.position(params)
+        try:
+            edits = rename(self.project_for(uri), path, line, col, params["newName"])
+        except RenameError as e:
+            raise ResponseError(REQUEST_FAILED, str(e)) from None
+        changes: dict[str, list[dict]] = {}
+        for e in edits:
+            changes.setdefault(e.place.path.resolve().as_uri(), []).append(
+                {"range": self.lsp_range(e.place), "newText": e.new_text})
+        return {"changes": changes}
+
+    def on_signature_help(self, params: dict) -> dict | None:
+        """The signature of the call being typed, with its current parameter highlighted."""
+        uri, path, line, col = self.position(params)
+        sig: Signature | None = signature_help(path, self.text_of(path), line, col, self.project_for(uri))
+        if sig is None:
+            return None
+        info: dict = {"label": sig.label, "parameters": [{"label": [a, b]} for a, b in sig.parameters]}
+        if sig.documentation:
+            info["documentation"] = {"kind": "markdown", "value": sig.documentation}
+        result: dict = {"signatures": [info], "activeSignature": 0}
+        result["activeParameter"] = sig.active if sig.active is not None else len(sig.parameters)
+        return result
 
     # ---- diagnostics ----
 

@@ -11,7 +11,56 @@ Zylo ships a language server (`zylo lsp`), a formatter (`zylo fmt`) and a Visual
 | **Outline** | Functions, structs (with their fields and methods) and top-level variables. |
 | **Completion** | Keywords, built-in functions and the functions, structs and variables of the file. |
 
-Not yet: hover, go to definition, rename and signature help.
+| **Hover** | The type of a variable, parameter or loop variable (narrowed by an `is` check where it is used), the signature and description of a function or method, the fields of a struct, the variants of an enum, and the description of each. |
+| **Go to definition** | Variables, parameters, functions, structs, enums, variants, methods and fields, across files: through `import`, `from ... import ... as ...` and `pub from` re-exports, down to where the thing is really defined. On a module name it opens the module's file; on `self`, its struct. |
+| **Rename** | Safe renaming with a preview of every file changed; see [Renaming](#renaming). |
+| **Signature help** | While you type the arguments of a call, the signature of the function, method, struct constructor or enum variant, with the current parameter highlighted. Defaults are shown (`b: int = 2`), and a named argument (`b=`) highlights its own parameter. It works while the call is still unfinished. |
+
+Not yet: completion of members after a dot and code actions.
+
+## Navigation
+
+Hover and go to definition work on any name in the file, including inside f-strings. They resolve names with the
+language's own scoping rules (a variable belongs to the block where it was first assigned; a function does not see the
+variables of the top level) and use the type checker to tell what `p.x` or `p.move()` means from the type of `p`. So:
+
+- Definitions, imports and the scoping of variables work even when the program has type errors or an unfinished
+  statement elsewhere (a statement that does not parse is skipped).
+- The *types* of variables, and which field or method a `value.name` is, need the program to link and check as far as
+  that expression. While the file has a syntax error, or the type of `value` is unknown, hovering a variable shows no
+  type and `value.name` has no definition.
+- A function's description is a string written as the first statement of its body, like the description of a struct
+  (`fn area(s: Shape) -> float:` then `"Area of a shape."`); a struct, field, enum or variant takes the string right after it.
+
+### Renaming
+
+`prepareRename` selects the name and refuses what cannot be renamed (built-ins, modules, `self`, and anything defined in
+a package or the standard library). A rename then changes **every** occurrence the language server can prove refers to
+the same thing:
+
+| What | Where it is renamed |
+|---|---|
+| A local variable, loop variable, pattern variable or closure parameter | Its own scope only: another function's `n` is untouched. |
+| A function or struct parameter | Its body and every `name=value` argument that sets it, in any file. |
+| A function, struct or enum | Its definition, every use, the type annotations, and the `import`, `from ... import` and `pub from` lines of every file of the workspace that mentions it. |
+| A name imported with `as` | Only the importing file; the original keeps its name. |
+| A field, method or variant | Its definition, every access (`p.x`, `p.move()`, `Shape.Circle(...)`), constructor arguments (`Point(x=1.0)`) and `match` patterns. Other structs with a field of the same name are not touched. |
+
+The workspace is the directory of the project's `zylo.toml` (or the folder of the file when there is none). Hidden
+folders, `node_modules` and `target` are skipped, and the unsaved text of open files is used instead of what is on disk.
+
+A rename is **refused with a reason** rather than done halfway when:
+
+- the new name is not an identifier, is a keyword (`if`, `none`...), `self` or `_`, or a built-in name (`print`, `int`, `Result`...);
+- it would collide: another definition or import with that name in the module, a variable already visible where the
+  name is declared, or any use inside its scope that would be captured by the new name (for example renaming
+  a variable to the name of a function it calls); two members of one struct or enum with the same name;
+- it would make a name that other files use private (`_name`);
+- a file that mentions the name has a syntax error (a statement that does not parse cannot be searched), or the type
+  of a value that a field or method name is used on is unknown, so some use could be missed. Fix the errors first;
+- the thing is defined outside the workspace.
+
+Renaming a field also changes the key that `to_json` and `from_json` use for it, since JSON keys are field names.
 
 ## Visual Studio Code
 
@@ -85,4 +134,6 @@ moves to the indentation of the statement that follows it.
 
 - *No diagnostics appear*: run `zylo lsp` in a terminal; it should wait silently for input (press Ctrl-C to stop).
   If the command is not found, the editor cannot find it either.
+- *Hover shows no type, or a field has no definition*: the language server needs the file to link and type check up to
+  that point (see [Navigation](#navigation)); fix the syntax error or the earlier type error and try again.
 - The language server logs unexpected errors to its standard error, which most editors show in an output panel.
