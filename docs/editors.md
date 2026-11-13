@@ -8,10 +8,10 @@ Zylo ships a language server (`zylo lsp`), a formatter (`zylo fmt`) and a Visual
 |---|---|
 | **Diagnostics** | Every syntax and type error, checked on the text you are typing, not only on save. A syntax error stops type checking (it would only add noise); an error inside an imported module is shown at the top of the file that imports it, naming the module. |
 | **Formatting** | The same canonical style as `zylo fmt`. |
-| **Outline** | Functions, structs (with their fields and methods) and top-level variables. |
+| **Outline** | Functions, structs and enums (with their fields, variants and methods), traits (with their methods) and top-level variables. |
 | **Completion** | See [Completion](#completion): what you can type at the cursor, by what comes before it. |
-| **Hover** | The type of a variable, parameter or loop variable (narrowed by an `is` check where it is used), the signature and description of a function, method or built-in, the fields of a struct, the variants of an enum, and the description of each. Inside a generic definition, a name whose type mentions a type parameter also shows the parameter with its bounds and the types the program instantiated it with (or that it is not instantiated). |
-| **Go to definition** | Variables, parameters, functions, structs, enums, variants, methods and fields, across files: through `import`, `from ... import ... as ...` and `pub from` re-exports, down to where the thing is really defined. On a module name it opens the module's file; on `self`, its struct. |
+| **Hover** | The type of a variable, parameter or loop variable (narrowed by an `is` check where it is used), the signature and description of a function, method or built-in, the fields of a struct, the variants of an enum, the methods of a trait, and the description of each. A struct that implements traits shows them (`struct Circle(Shape)`). Inside a generic definition, a name whose type mentions a type parameter also shows the parameter with its bounds and the types the program instantiated it with (or that it is not instantiated). |
+| **Go to definition** | Variables, parameters, functions, structs, enums, traits, variants, methods and fields, across files (a method called through a trait bound leads to the trait's declaration): through `import`, `from ... import ... as ...` and `pub from` re-exports, down to where the thing is really defined. On a module name it opens the module's file; on `self`, its struct. |
 | **Rename** | Safe renaming with a preview of every file changed; see [Renaming](#renaming). |
 | **Signature help** | While you type the arguments of a call, the signature of the function, method, built-in, struct constructor or enum variant, with the current parameter highlighted. Defaults are shown (`b: int = 2`), and a named argument (`b=`) highlights its own parameter. It works while the call is still unfinished. |
 | **Quick fixes** | Add a missing import; add the missing arms of a `match`. See [Quick fixes](#quick-fixes). |
@@ -23,10 +23,11 @@ line being typed does not have to be valid:
 
 | Where | What you get |
 |---|---|
-| After `value.` | The **fields and methods** of the value's struct or enum (by the type the checker finds for it: `p.`, `p.move(1.0).`, `self.`, `names[0].`), or the **methods of `str`, `list`, `dict`, `set`, `Cell`, options and results**, with their signatures (`append(value: str)` on a `list[str]`) and descriptions. |
+| After `value.` | The **fields and methods** of the value's struct or enum (by the type the checker finds for it: `p.`, `p.move(1.0).`, `self.`, `names[0].`), the **methods the trait bounds declare** for a value whose type is a type parameter (`x.` where `x: T` and `T: Shape`), or the **methods of `str`, `list`, `dict`, `set`, `Cell`, options and results**, with their signatures (`append(value: str)` on a `list[str]`) and descriptions. |
 | After `module.` | The functions, structs and enums the module exports, `pub from` re-exports included; names starting with `_` are private and not offered. |
 | After `Enum.` (also `module.Enum.`) | The variants, with their data (`Circle(float)`) and descriptions. |
 | In the parentheses of a call | The parameters (or struct fields) that have not been given yet, as `name=`, besides the names in scope. Positional arguments already written use up the first parameters. |
+| Where a trait is expected (a bound after `[T:` or `+`, the list after `struct Name(`) | The traits of the file and of its imports (and the built-in bounds `Eq`, `Show`, `Ord`, `Num`, `Key` in a bound), and the modules (for `module.Trait`). |
 | Where a type is expected (after `->`, after the `:` of a parameter, a field or an annotated variable, inside `list[`) | `int`, `str`, `list`..., the structs and enums of the file and of its imports, and the modules (for `module.Type`). |
 | After `import` and `from ... import` | The modules (the standard library, and every `.zy` file of the workspace), then the names a module exports. |
 | Anywhere else | The variables and parameters in scope, the definitions, imports and modules of the file, the built-in functions and the keywords, in that order. |
@@ -81,9 +82,9 @@ the same thing:
 |---|---|
 | A local variable, loop variable, pattern variable (at any depth of a nested pattern; one name bound by every alternative of an or-pattern is a single variable) or closure parameter | Its own scope only: another function's `n` is untouched. |
 | A function or struct parameter | Its body and every `name=value` argument that sets it, in any file. |
-| A function, struct or enum | Its definition, every use, the type annotations, and the `import`, `from ... import` and `pub from` lines of every file of the workspace that mentions it. |
+| A function, struct, enum or trait | Its definition, every use, the type annotations, and the `import`, `from ... import` and `pub from` lines of every file of the workspace that mentions it. |
 | A name imported with `as` | Only the importing file; the original keeps its name. |
-| A field, method or variant | Its definition, every access (`p.x`, `p.move()`, `Shape.Circle(...)`), constructor arguments (`Point(x=1.0)`) and `match` patterns. Other structs with a field of the same name are not touched. |
+| A field, method or variant | Its definition, every access (`p.x`, `p.move()`, `Shape.Circle(...)`), constructor arguments (`Point(x=1.0)`) and `match` patterns. Other structs with a field of the same name are not touched. A trait's method and the methods that implement it are one family: renaming one renames them all, and the calls through a trait bound (`x.area()` where `x: T`). Renaming a parameter of such a method is refused, because parameter names are part of the trait's signature. |
 
 The workspace is the directory of the project's `zylo.toml` (or the folder of the file when there is none). Hidden
 folders, `node_modules` and `target` are skipped, and the unsaved text of open files is used instead of what is on disk.

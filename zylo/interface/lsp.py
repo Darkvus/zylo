@@ -34,8 +34,8 @@ from zylo.application.format import configured_line_length, format_text
 from zylo.domain.errors import ZyloError
 
 ERROR = 1  # DiagnosticSeverity
-SYMBOL_KINDS = {"function": 12, "struct": 23, "enum": 10, "method": 6, "field": 8, "variant": 22, "variable": 13}
-COMPLETION_KINDS = {"keyword": 14, "function": 3, "method": 2, "field": 5, "struct": 22, "enum": 13, "variant": 20,
+SYMBOL_KINDS = {"function": 12, "struct": 23, "enum": 10, "trait": 11, "method": 6, "field": 8, "variant": 22, "variable": 13}
+COMPLETION_KINDS = {"keyword": 14, "function": 3, "method": 2, "field": 5, "struct": 22, "enum": 13, "trait": 8, "variant": 20,
                     "variable": 6, "parameter": 6, "module": 9, "type": 7}
 REQUEST_FAILED = -32803  # the request was understood but cannot be done (LSP 3.17 `RequestFailed`)
 

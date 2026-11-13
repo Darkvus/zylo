@@ -10,7 +10,7 @@ from zylo.domain.errors import ZyloError
 
 KEYWORDS = {
     "fn", "if", "elif", "else", "while", "for", "in", "return", "break", "continue", "pass",
-    "and", "or", "not", "true", "false", "struct", "enum", "match", "is", "none", "import", "from", "as", "extern", "pub",
+    "and", "or", "not", "true", "false", "struct", "enum", "match", "is", "none", "import", "from", "as", "extern", "pub", "trait",
 }
 THREE_CHAR = {"..="}
 TWO_CHAR = {"..", "==", "!=", "<=", ">=", "->", "=>", "+=", "-=", "*=", "/=", "%="}

@@ -14,7 +14,7 @@ from zylo.domain.errors import PackageError, ZyloError
 from zylo.domain.types import Type
 from zylo.packaging.manifest import find_manifest
 from zylo.semantics.navigation import Entity, Project, Ref, RenameError, Resolution, deref, doc_of, show_type
-from zylo.syntax.formatter import expr_text, tparams_text, type_text
+from zylo.syntax.formatter import bases_text, expr_text, tparams_text, type_text
 from zylo.syntax.lexer import Token, tokenize
 from zylo.syntax.parser import parse_collect
 
@@ -25,7 +25,7 @@ class Symbol:
 
     Attributes:
         name: Its name.
-        kind: "function", "struct", "enum", "method", "field", "variant" or "variable".
+        kind: "function", "struct", "enum", "trait", "method", "field", "variant" or "variable".
         line: 1-based line where it starts.
         col: 1-based column of its name.
         end_line: 1-based last line it occupies.
@@ -71,7 +71,7 @@ def document_symbols(source: str) -> list[Symbol]:
     program, _ = parse_collect(source)
     lines = source.splitlines()
     total = max(len(lines), 1)
-    items = [s for s in program.body if isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef)) or
+    items = [s for s in program.body if isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef, ast.TraitDef)) or
              (isinstance(s, ast.Assign) and isinstance(s.target, ast.Name))]
     starts = [s.line for s in items]
 
@@ -104,6 +104,10 @@ def document_symbols(source: str) -> list[Symbol]:
                 nxt = s.methods[j + 1].line - 1 if j + 1 < len(s.methods) else sym.end_line
                 sym.children.append(Symbol(m.name, "method", m.line, _name_col(at(m.line), m.name, m.col), max(nxt, m.line),
                                            signature_text(m)))
+        elif isinstance(s, ast.TraitDef):
+            sym = Symbol(s.name, "trait", s.line, _name_col(at(s.line), s.name, s.col), end_of(i))
+            sym.children += [Symbol(m.name, "method", m.line, _name_col(at(m.line), m.name, m.col), m.line, signature_text(m))
+                             for m in s.methods]
         elif isinstance(s, ast.FnDef):
             kind_line = at(s.line)
             sym = Symbol(s.name, "function", s.line, _name_col(kind_line, s.name, s.col), end_of(i), signature_text(s))
@@ -282,11 +286,14 @@ def _describe(project: Project, ent: Entity, ref: Ref, res: Resolution) -> str:
     if ent.kind == "struct" and isinstance(node, ast.StructDef):
         fields = "".join(f"\n    {f.name}: {type_text(f.type)}" + (f" = {expr_text(f.default)}" if f.default is not None else "")
                          for f in node.fields)
-        return f"```zylo\nstruct {ent.name}{tparams_text(node.tparams)}{fields}\n```{_doc_block(node)}{_template_note(ent, res, node)}"
+        return f"```zylo\nstruct {ent.name}{tparams_text(node.tparams)}{bases_text(node.traits)}{fields}\n```{_doc_block(node)}{_template_note(ent, res, node)}"
     if ent.kind == "enum" and isinstance(node, ast.EnumDef):
         variants = "".join(f"\n    {v.name}" + (f"({', '.join(type_text(t) for t in v.fields)})" if v.fields else "")
                            for v in node.variants)
-        return f"```zylo\nenum {ent.name}{tparams_text(node.tparams)}{variants}\n```{_doc_block(node)}{_template_note(ent, res, node)}"
+        return f"```zylo\nenum {ent.name}{tparams_text(node.tparams)}{bases_text(node.traits)}{variants}\n```{_doc_block(node)}{_template_note(ent, res, node)}"
+    if ent.kind == "trait" and isinstance(node, ast.TraitDef):
+        methods = "".join(f"\n    {signature_text(m)}" for m in node.methods)
+        return f"```zylo\ntrait {ent.name}{methods}\n```{_doc_block(node)}"
     if ent.kind == "variant" and isinstance(node, ast.Variant):
         data = f"({', '.join(type_text(t) for t in node.fields)})" if node.fields else ""
         return f"```zylo\n{owner}.{ent.name}{data}\n```{_doc_block(node)}"

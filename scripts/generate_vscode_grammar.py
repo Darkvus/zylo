@@ -16,7 +16,7 @@ OUTPUT = Path(__file__).parent.parent / "editors" / "vscode" / "syntaxes" / "zyl
 
 CONTROL = {"if", "elif", "else", "while", "for", "in", "return", "break", "continue", "pass", "import", "from", "as", "match"}
 WORD_OPERATORS = {"and", "or", "not", "is"}
-STORAGE = {"fn", "struct", "enum", "extern", "pub"}
+STORAGE = {"fn", "struct", "enum", "extern", "pub", "trait"}
 CONSTANTS = {"true", "false", "none"}
 TYPES = ["int", "float", "bool", "str", "list", "dict", "set", "tuple", "Result", "Cell"]
 ESCAPE = r"\\[nrt0\\\"']"
@@ -74,7 +74,9 @@ def grammar() -> dict:
                 {"match": r"\b(fn)\s+([A-Za-z_]\w*)",
                  "captures": {"1": {"name": "storage.type.function.zylo"}, "2": {"name": "entity.name.function.zylo"}}},
                 {"match": r"\b(struct)\s+([A-Za-z_]\w*)",
-                 "captures": {"1": {"name": "storage.type.struct.zylo"}, "2": {"name": "entity.name.type.struct.zylo"}}}]},
+                 "captures": {"1": {"name": "storage.type.struct.zylo"}, "2": {"name": "entity.name.type.struct.zylo"}}},
+                {"match": r"\b(trait)\s+([A-Za-z_]\w*)",
+                 "captures": {"1": {"name": "storage.type.trait.zylo"}, "2": {"name": "entity.name.type.interface.zylo"}}}]},
             "keywords": {"patterns": [
                 {"name": "keyword.control.zylo", "match": words(CONTROL)},
                 {"name": "keyword.operator.word.zylo", "match": words(WORD_OPERATORS)},

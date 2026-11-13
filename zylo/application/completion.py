@@ -7,6 +7,7 @@ The position decides what is offered:
   options and results;
 - on the `import` and `from ... import` lines, modules and the names a module exports;
 - where a type is expected (after `->`, after a parameter's or a field's `:`), types;
+- where a trait is expected (a bound after `[T:` or `+`, the list after `struct Name(`), traits;
 - inside the parentheses of a call, the parameters (or struct fields) not yet given by name, as `name=`;
 - anywhere else, the variables and parameters in scope, the names of the file (definitions, imports, modules), the
   built-in functions and the keywords.
@@ -23,7 +24,9 @@ from pathlib import Path
 from zylo.application.editor import Call, call_at, callee_entity, signature_of, signature_text, variable_type
 from zylo.domain import ast
 from zylo.domain.builtins import FUNCTIONS, METHODS, Builtin, describe, receiver_kind
+from zylo.domain.types import ParamT
 from zylo.packaging.stdlib import stdlib_module, stdlib_modules
+from zylo.semantics.generics import BOUND_HELP, BOUNDS
 from zylo.semantics.navigation import Entity, FileIndex, Project, Resolution, deref, doc_of
 from zylo.syntax.formatter import expr_text, type_text
 from zylo.syntax.lexer import KEYWORDS
@@ -34,7 +37,9 @@ TYPE_NAMES = {"int": "A whole number.", "float": "A decimal number.", "bool": "`
               "Result": "A success or an error: `Result[int, str]`.", "Cell": "A shared mutable box: `Cell[int]`."}
 TYPE_CHARS = r"[\w\[\], .?|]*"
 IDENT = r"[^\W\d]\w*"
-DEF_HEADER = re.compile(r"(?:pub\s+)?(?:extern\s+)?(fn|struct|enum)\b")
+DEF_HEADER = re.compile(r"(?:pub\s+)?(?:extern\s+)?(fn|struct|enum|trait)\b")
+BOUND_POSITION = re.compile(rf"\b(?:fn|struct|enum)\s+{IDENT}\[[^\]]*?{IDENT}\s*:\s*(?:[\w.]+\s*\+\s*)*[\w.]*$")
+BASE_POSITION = re.compile(rf"^\s*(?:struct|enum)\s+{IDENT}(?:\[[^\]]*\])?\((?:[\w.]+\s*,\s*)*[\w.]*$")
 BLOCK_HEADERS = {"if", "elif", "while", "for", "match"}
 
 
@@ -44,8 +49,8 @@ class Completion:
 
     Attributes:
         label: The text shown (and inserted, unless `insert_text` says otherwise).
-        kind: "keyword", "function", "method", "field", "struct", "enum", "variant", "variable", "parameter", "module"
-            or "type".
+        kind: "keyword", "function", "method", "field", "struct", "enum", "trait", "variant", "variable", "parameter",
+            "module" or "type".
         detail: A short description, such as a signature or a type.
         documentation: The longer description (Markdown), or "".
         insert_text: What to insert when it differs from the label.
@@ -203,7 +208,7 @@ def entity_item(label: str, ent: Entity | None, rank: int = 5) -> Completion:
     if ent.kind == "variant" and isinstance(node, ast.Variant):
         data = f"({', '.join(type_text(t) for t in node.fields)})" if node.fields else ""
         return Completion(label, "variant", data, doc, rank=rank)
-    if ent.kind in ("struct", "enum"):
+    if ent.kind in ("struct", "enum", "trait"):
         return Completion(label, ent.kind, ent.kind, doc, rank=rank)
     if ent.kind == "module":
         return Completion(label, "module", rank=rank)
@@ -286,36 +291,38 @@ def enclosing_self(res: Resolution, line: int) -> str | None:
     return None
 
 
-def file_names(fx: FileIndex, types_only: bool, with_variables: bool = True) -> list[Completion]:
+def file_names(fx: FileIndex, types_only: bool, with_variables: bool = True, traits: bool = False) -> list[Completion]:
     """The names a file binds at its top level: its definitions, the names it imports and the modules it imports.
 
     Args:
         fx: The file.
         types_only: Whether only structs and enums (and modules, to reach theirs) are wanted.
         with_variables: Whether to include the variables of the top level (a function does not see them).
+        traits: Whether only traits (and modules, to reach theirs) are wanted.
 
     Returns:
         The candidates.
     """
     out: list[Completion] = []
+    wanted = ("trait",) if traits else ("struct", "enum")
     for name in fx.defs:
         ent = fx.def_entity(name)
-        if not types_only or (ent is not None and ent.kind in ("struct", "enum")):
+        if not (types_only or traits) or (ent is not None and ent.kind in wanted):
             out.append(entity_item(name, ent, 2))
     for local in fx.froms:
         ent = fx.local_import(local)
-        if not types_only or (deref(ent) is not None and deref(ent).kind in ("struct", "enum")):
+        if not (types_only or traits) or (deref(ent) is not None and deref(ent).kind in wanted):
             out.append(entity_item(local, ent, 2))
     for local in fx.aliases:
         out.append(Completion(local, "module", fx.aliases[local].dotted, rank=2))
-    if with_variables and not types_only:
+    if with_variables and not types_only and not traits:
         out += [Completion(g, "variable", rank=2) for g in sorted(fx.globals)]
     return out
 
 
 # ---- members ------------------------------------------------------------------------------------------------------
 
-def module_exports(project: Project, mod: Path, types_only: bool) -> list[Completion]:
+def module_exports(project: Project, mod: Path, types_only: bool, traits: bool = False) -> list[Completion]:
     """What a module exposes: its functions, structs and enums, and the names it re-exports (never the private ones)."""
     fx = project.file(mod)
     if fx is None:
@@ -325,13 +332,15 @@ def module_exports(project: Project, mod: Path, types_only: bool) -> list[Comple
         if name.startswith("_"):
             continue
         ent = project.export_entity(mod, name)
-        if types_only and (deref(ent) is None or deref(ent).kind not in ("struct", "enum")):
+        wanted = ("trait",) if traits else ("struct", "enum")
+        if (types_only or traits) and (deref(ent) is None or deref(ent).kind not in wanted):
             continue
         out.append(entity_item(name, ent, 1))
     return out
 
 
-def static_members(project: Project, fx: FileIndex, names: set[str], recv: str, types_only: bool) -> list[Completion] | None:
+def static_members(project: Project, fx: FileIndex, names: set[str], recv: str, types_only: bool,
+                   traits: bool = False) -> list[Completion] | None:
     """The members of `recv` when it names a module or an enum (`shapes`, `shapes.Shape`, `Shape`), else None.
 
     Args:
@@ -340,6 +349,7 @@ def static_members(project: Project, fx: FileIndex, names: set[str], recv: str, 
         names: The variables visible at the cursor: one of them hides a module or definition of the same name.
         recv: The text in front of the dot.
         types_only: Whether only types are wanted (in a type annotation).
+        traits: Whether only traits are wanted (in a bound or a list of traits).
 
     Returns:
         The candidates, or None when `recv` is not a module or an enum (so it is a value).
@@ -360,8 +370,8 @@ def static_members(project: Project, fx: FileIndex, names: set[str], recv: str, 
     if cur is None:
         return None
     if cur.kind == "module" and cur.module_path:
-        return module_exports(project, cur.module_path, types_only)
-    if cur.kind == "enum" and isinstance(cur.node, ast.EnumDef) and not types_only:
+        return module_exports(project, cur.module_path, types_only, traits)
+    if cur.kind == "enum" and isinstance(cur.node, ast.EnumDef) and not types_only and not traits:
         return [entity_item(v.name, project.member(cur, v.name), 1) for v in cur.node.variants]
     return None
 
@@ -399,6 +409,15 @@ def value_members(project: Project, path: Path, lines: list[str], line: int, rec
     kind = receiver_kind(t)
     if kind is not None:
         return [builtin_item(b, "method", 1, t) for b in METHODS[kind].values()]
+    if isinstance(t, ParamT):  # a value of a type parameter: the methods its trait bounds declare
+        out: list[Completion] = []
+        for b in sorted(t.bounds):
+            found_trait = types.owners.get(b)
+            tfx = project.file(found_trait[0]) if found_trait else None
+            trait = tfx.def_entity(found_trait[1]) if tfx and found_trait else None
+            if trait is not None and isinstance(trait.node, ast.TraitDef):
+                out += [entity_item(m.name, project.member(trait, m.name), 0) for m in trait.node.methods]
+        return out
     owner = types.owner_of(t)
     fx = project.file(owner[0]) if owner else None
     ent = fx.def_entity(owner[1]) if fx and owner else None
@@ -508,6 +527,8 @@ def complete(project: Project, path: Path, line: int, col: int) -> list[Completi
     partial = re.search(r"\w*$", code).group(0)
     head = code[:len(code) - len(partial)]
     types_only = in_type_position(code)
+    in_bound = BOUND_POSITION.search(code) is not None
+    traits = in_bound or BASE_POSITION.match(code) is not None
     if head.endswith("."):
         dot = len(head) - 1
         recv = code[receiver_start(code, dot):dot]
@@ -517,11 +538,15 @@ def complete(project: Project, path: Path, line: int, col: int) -> list[Completi
         names = {e.name for e, _ in visible_locals(res, line, indent_of(text))} if res else set()
         if enclosing_self(res, line) if res else None:
             names.add("self")
-        found = static_members(project, fx, names, recv, types_only)
+        found = static_members(project, fx, names, recv, types_only, traits)
         if found is not None:
             return found
-        return [] if types_only else value_members(project, path, lines, line, recv)
+        return [] if types_only or traits else value_members(project, path, lines, line, recv)
     out: list[Completion] = []
+    if traits:
+        if in_bound:
+            out += [Completion(b, "type", BOUND_HELP[b], rank=1) for b in BOUNDS]
+        return unique(out + file_names(fx, False, False, traits=True))
     call = call_at(source, line, col)
     if call is not None and call.innermost == "(" and call.at_start and not types_only:
         out += named_arguments(project, path, source, line, col, call)

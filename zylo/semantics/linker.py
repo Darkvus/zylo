@@ -14,10 +14,13 @@ from zylo.domain.errors import ZyloError
 from zylo.domain.types import PRIMS
 from zylo.packaging.manifest import package_layout
 from zylo.packaging.stdlib import STD, stdlib_dir, stdlib_module
+from zylo.semantics.generics import BOUNDS
 from zylo.syntax.parser import parse, parse_collect
 
 SEP = "·"  # `·`
+TYPE_KINDS = ("struct", "enum", "trait")  # what a written type name may refer to (a trait only as a bound or a base)
 RESERVED_TYPES = set(PRIMS) | {"list", "unit", "Result", "Cell"}
+DEFINITIONS = (ast.FnDef, ast.StructDef, ast.EnumDef, ast.TraitDef)  # what a library module may define
 
 
 @dataclass
@@ -150,7 +153,7 @@ class Linker:
         body: list[ast.Stmt] = []
         for m in self.order:
             if m is not main:
-                body += [s for s in m.program.body if isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef))]
+                body += [s for s in m.program.body if isinstance(s, DEFINITIONS)]
         body += [s for s in main.program.body if not isinstance(s, (ast.Import, ast.FromImport))]
         return ast.Program(body, line=1, col=1, file=str(entry))
 
@@ -188,10 +191,10 @@ class Linker:
         if not is_entry:
             self.register_id(mod, path)
             if self.tolerant:
-                prog.body = [s for s in prog.body if isinstance(s, (ast.Import, ast.FromImport, ast.FnDef, ast.StructDef, ast.EnumDef))]
+                prog.body = [s for s in prog.body if isinstance(s, (ast.Import, ast.FromImport, *DEFINITIONS))]
             for s in prog.body:
-                if not isinstance(s, (ast.Import, ast.FromImport, ast.FnDef, ast.StructDef, ast.EnumDef)):
-                    raise err("library modules can only contain imports, functions, structs and enums", s, path)
+                if not isinstance(s, (ast.Import, ast.FromImport, *DEFINITIONS)):
+                    raise err("library modules can only contain imports, functions, structs, enums and traits", s, path)
         self.check_trust(mod)
         self.collect_defs(mod)
         for s in prog.body:
@@ -278,13 +281,16 @@ class Linker:
     # ---- definitions and bindings ------------------------------------------------------------------
 
     def collect_defs(self, mod: Module) -> None:
-        """Record a module's top-level functions and structs, rejecting duplicates and reserved names."""
+        """Record a module's top-level functions, structs, enums and traits, rejecting duplicates and reserved names."""
         for s in mod.program.body:
-            if not isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef)):
+            if not isinstance(s, DEFINITIONS):
                 continue
-            kind = "fn" if isinstance(s, ast.FnDef) else "struct" if isinstance(s, ast.StructDef) else "enum"
+            kind = ("fn" if isinstance(s, ast.FnDef) else "struct" if isinstance(s, ast.StructDef)
+                    else "enum" if isinstance(s, ast.EnumDef) else "trait")
             if s.name in mod.defs:
                 raise err(f"{s.name!r} is already defined in this module", s, mod.path)
+            if kind == "trait" and (s.name in BOUNDS or s.name in RESERVED_TYPES or s.name == "Self"):
+                raise err(f"{s.name!r} is a reserved name", s, mod.path)
             if not mod.is_entry and (s.name in BUILTINS - SHADOWABLE or s.name in RESERVED_TYPES):
                 raise err(f"{s.name!r} is a reserved name", s, mod.path)
             mod.defs[s.name] = kind
@@ -345,7 +351,8 @@ class Linker:
         found = hit[2] if hit else None
         kinds = (kind,) if isinstance(kind, str) else kind
         if found is None:
-            what = "struct or enum" if kinds == ("struct", "enum") else {"struct": "struct", "enum": "enum", "fn": "function"}.get(kind or "", "function, struct or enum")
+            what = ("struct, enum or trait" if kinds == TYPE_KINDS else "struct or enum" if kinds == ("struct", "enum")
+                    else {"struct": "struct", "enum": "enum", "fn": "function", "trait": "trait"}.get(kind or "", "function, struct or enum"))
             raise err(f"module {dep.display!r} has no {what} {name!r}", node, importer.path)
         if kinds and found not in kinds:
             raise err(f"{name!r} in module {dep.display!r} is a {found}, not a {' or '.join(kinds)}", node, importer.path)
@@ -375,8 +382,8 @@ class Linker:
             self.locals = local_names(s)
             self.tparams = {p.name for p in getattr(s, "tparams", [])}
             self.rw(s, mod)
-            if isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef)):
-                if isinstance(s, (ast.StructDef, ast.EnumDef)) and not mod.is_entry:
+            if isinstance(s, DEFINITIONS):
+                if not isinstance(s, ast.FnDef) and not mod.is_entry:
                     s.display = s.name
                 s.name = mod.mangled(s.name)
 
@@ -450,7 +457,24 @@ class Linker:
                 node.func = self.export(dep, orig, node, mod)
         elif isinstance(node, ast.TypeRef):
             self.rw_type(node, mod)
+        elif isinstance(node, ast.TypeParam):
+            node.bounds = [self.rw_bound(b, node, mod) for b in node.bounds]
         return node
+
+    def rw_bound(self, name: str, node: ast.Node, mod: Module) -> str:
+        """Rewrite the name of a trait used as a bound (`T: Shape`, `T: shapes.Shape`); built-in bounds stay as written."""
+        if "." in name:
+            head, _, last = name.rpartition(".")
+            dep = mod.aliases.get(head)
+            if dep is None:
+                raise err(f"unknown module {head!r} in bound {name!r}", node, mod.path)
+            return self.export(dep, last, node, mod, kind="trait")
+        if mod.defs.get(name) == "trait":
+            return mod.mangled(name)
+        if name in mod.froms and self.kind_of(*mod.froms[name]) == "trait":
+            dep, orig = mod.froms[name]
+            return self.export(dep, orig, node, mod, kind="trait")
+        return name
 
     def instantiation(self, node: ast.Index, mod: Module) -> ast.Name | None:
         """Read `fn_name[type, ...]` as a generic function with written type arguments, when `fn_name` is a function.
@@ -501,7 +525,7 @@ class Linker:
                   e, mod.path)
 
     def rw_type(self, t: ast.TypeRef, mod: Module) -> None:
-        """Rewrite a type name that refers to a struct of this or an imported module."""
+        """Rewrite a type name that refers to a struct, enum or trait of this or an imported module."""
         if t.name in self.tparams and not t.args:
             return  # a type parameter of the generic definition being rewritten
         if "." in t.name:
@@ -509,9 +533,9 @@ class Linker:
             dep = mod.aliases.get(head)
             if dep is None:
                 raise err(f"unknown module {head!r} in type {t.name!r}", t, mod.path)
-            t.name = self.export(dep, name, t, mod, kind=("struct", "enum"))
-        elif mod.defs.get(t.name) in ("struct", "enum"):
+            t.name = self.export(dep, name, t, mod, kind=TYPE_KINDS)
+        elif mod.defs.get(t.name) in TYPE_KINDS:
             t.name = mod.mangled(t.name)
         elif t.name in mod.froms:
             dep, orig = mod.froms[t.name]
-            t.name = self.export(dep, orig, t, mod, kind=("struct", "enum"))
+            t.name = self.export(dep, orig, t, mod, kind=TYPE_KINDS)

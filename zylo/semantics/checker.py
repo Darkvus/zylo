@@ -53,6 +53,7 @@ from zylo.semantics.generics import (
     key_ok,
     sortable,
 )
+from zylo.semantics.traits import TraitInfo, TraitMixin
 from zylo.syntax.formatter import pattern_text
 
 ARITH = {"+", "-", "*", "/", "%"}
@@ -144,12 +145,14 @@ class StructInfo:
         fields: Field types by name, in declaration order.
         methods: Method signatures by name.
         gmethods: The generic methods (`fn map[U](self, ...)`), which are templates: their copies are in `methods`.
+        traits: The (linked) names of the traits the struct implements.
     """
     name: str
     defn: ast.StructDef
     fields: dict[str, Type] = field(default_factory=dict)
     methods: dict[str, FnT] = field(default_factory=dict)
     gmethods: dict[str, ast.FnDef] = field(default_factory=dict)
+    traits: tuple[str, ...] = ()
 
 
 @dataclass
@@ -162,15 +165,17 @@ class EnumInfo:
         variants: The types of each variant's data, by variant name, in declaration order.
         methods: Method signatures by name.
         gmethods: The generic methods, which are templates: their copies are in `methods`.
+        traits: The (linked) names of the traits the enum implements.
     """
     name: str
     defn: ast.EnumDef
     variants: dict[str, list[Type]] = field(default_factory=dict)
     methods: dict[str, FnT] = field(default_factory=dict)
     gmethods: dict[str, ast.FnDef] = field(default_factory=dict)
+    traits: tuple[str, ...] = ()
 
 
-class Checker(GenericMixin):
+class Checker(GenericMixin, TraitMixin):
     """Type checker for one program.
 
     Resolves types, infers the types of expressions, tracks scopes, decides which variables are mutable and which
@@ -219,6 +224,10 @@ class Checker(GenericMixin):
         self.mbroken: dict[tuple[str, str], bool] = {}  # (struct or template, generic method) -> its template has a mistake
         self.fn_insts: dict[tuple, str] = {}  # (generic function, type arguments) -> instance name
         self.minsts: list[tuple[str, str, tuple]] = []  # (struct or template, generic method, type arguments) in use
+        # traits (see semantics/traits.py)
+        self.traits: dict[str, TraitInfo] = {}
+        self.type_names: set[str] = set()  # the structs and enums the program defines, to tell "not a trait" from "unknown"
+        self.self_ty: Type | None = None  # what `Self` stands for while a trait's signatures are resolved
         self.in_copy = False  # checking the copy of a generic definition (its integer literals may stand for a float `T`)
 
     # ---- entry point ---------------------------------------------------------------------
@@ -237,7 +246,11 @@ class Checker(GenericMixin):
         for s in prog.body:
             if isinstance(s, (ast.StructDef, ast.EnumDef)):
                 s.methods[:] = [m for m in s.methods if not m.instance]  # and so are those of generic methods
+        self.type_names = {s.name for s in prog.body if isinstance(s, (ast.StructDef, ast.EnumDef))}
         try:
+            for s in prog.body:
+                if isinstance(s, ast.TraitDef):
+                    self.register_trait(s)
             gens = [s for s in prog.body if getattr(s, "tparams", None)]
             defs = [s for s in prog.body if isinstance(s, ast.StructDef) and not s.tparams]
             enums = [s for s in prog.body if isinstance(s, ast.EnumDef) and not s.tparams]
@@ -247,10 +260,12 @@ class Checker(GenericMixin):
                 self.register_struct(d)
             for en in enums:
                 self.register_enum(en)
+            self.check_trait_lists(prog.body)
             for d in defs:
                 self.resolve_struct(d)
             for en in enums:
                 self.resolve_enum(en)
+            self.resolve_traits()
             for d in defs:  # field defaults may name enum variants, so they wait until enums are resolved
                 self.check_defaults(d.fields, "field", [f.ty for f in d.fields])
             late, self.deferred = self.deferred, None
@@ -286,6 +301,8 @@ class Checker(GenericMixin):
                 continue
             s = prog.body[done]
             done += 1
+            if isinstance(s, ast.TraitDef):
+                continue  # a trait only exists for the checker
             if getattr(s, "tparams", None) or (getattr(s, "origin", None) and self.generics[s.origin].broken):
                 continue  # a template (checked once above, emitted never), or a copy of one that has a mistake
             try:
@@ -343,8 +360,12 @@ class Checker(GenericMixin):
             if not key_ok(args[0]):
                 raise err(f"{'dict keys' if t.name == 'dict' else 'set elements'} must be int, str, bool or tuples of those, not {args[0]}", t)
             return DictT(*args) if t.name == "dict" else SetT(args[0])
+        if t.name == "Self" and self.self_ty is not None:
+            return self.self_ty
         if t.name in PRIMS:
             return PRIMS[t.name]
+        if t.name in self.traits:
+            raise err(f"{t.name.rsplit(chr(183), 1)[-1]!r} is a trait, not a type: use it as a bound (`[T: {t.name.rsplit(chr(183), 1)[-1]}]`)", t)
         if t.name in self.generics:
             return self.resolve_generic(t)
         if t.args and (t.name in self.structs or t.name in self.enums):
@@ -365,7 +386,7 @@ class Checker(GenericMixin):
             raise err(f"{d.name!r} is already defined", d)
         if d.name in BUILTINS or d.name in PRIMS or d.name in ("list", "unit", "Result", "Cell"):
             raise err(f"{d.name!r} is a reserved name", d)
-        self.structs[d.name] = StructInfo(d.name, d)
+        self.structs[d.name] = StructInfo(d.name, d, traits=tuple(r.name for r in d.traits))
 
     def resolve_struct(self, d: ast.StructDef) -> None:
         """Resolve the field types of a struct, rejecting duplicate fields and empty structs."""
@@ -421,7 +442,7 @@ class Checker(GenericMixin):
             raise err(f"{d.name!r} is already defined", d)
         if d.name in BUILTINS or d.name in PRIMS or d.name in ("list", "unit", "Result", "Cell"):
             raise err(f"{d.name!r} is a reserved name", d)
-        self.enums[d.name] = EnumInfo(d.name, d)
+        self.enums[d.name] = EnumInfo(d.name, d, traits=tuple(r.name for r in d.traits))
 
     def resolve_enum(self, d: ast.EnumDef) -> None:
         """Resolve the data types of an enum's variants, rejecting empty enums and duplicate variants."""
@@ -659,6 +680,8 @@ class Checker(GenericMixin):
                 continue
             m.ty = info.methods[m.name] = self.signature(m)
             self.specs[f"{d.name}.{m.name}"] = m.params
+        if d.traits:
+            self.check_impls(d, info)
 
     def is_constant(self, e: ast.Expr) -> bool:
         """Whether an expression may be a default value.
@@ -1826,6 +1849,8 @@ class Checker(GenericMixin):
             return self.builtin_method(e, rt)
         if rt == STR or isinstance(rt, (ListT, DictT, SetT, CellT)):
             return self.type_method(e, rt)
+        if isinstance(rt, ParamT):
+            return self.param_method(e, rt)
         info = self.enums[rt.name] if isinstance(rt, EnumT) else self.struct_of(rt, e, "methods")
         sig = info.methods.get(e.name)
         if sig is None and e.name in info.gmethods:

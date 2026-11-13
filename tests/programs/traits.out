@@ -1,0 +1,8 @@
+bo=12
+12
+<hard> Hard
+<cy> Player(nick="cy", points=1)
+red
+<blue> Team(members=[Easy], label="blue")
+0 2
+0 0.0

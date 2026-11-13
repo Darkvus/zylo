@@ -266,6 +266,8 @@ class Parser:
                     return self.parse_fn(extern=True)
                 case "struct":
                     return self.parse_struct()
+                case "trait":
+                    return self.parse_trait()
                 case "enum":
                     return self.parse_enum()
                 case "match":
@@ -384,12 +386,13 @@ class Parser:
         self.expect("NEWLINE")
         return ast.Return(value, line=kw.line, col=kw.col)
 
-    def parse_fn(self, in_struct: bool = False, extern: bool = False) -> ast.FnDef:
-        """Parse a function, a method or an `extern fn`.
+    def parse_fn(self, in_struct: bool = False, extern: bool = False, signature: bool = False) -> ast.FnDef:
+        """Parse a function, a method, a trait's method signature or an `extern fn`.
 
         Args:
-            in_struct: True inside a struct or enum body, where a leading `self` parameter is allowed.
+            in_struct: True inside a struct, enum or trait body, where a leading `self` parameter is allowed.
             extern: True when the `extern` keyword was already consumed: the body is a Rust string after `=`.
+            signature: True inside a trait: the line ends after the return type and there is no body.
 
         Returns:
             The function node (an `ExternFn` when `extern` is True).
@@ -415,6 +418,12 @@ class Parser:
                 params.append(self.parse_param())
         self.expect("OP", ")")
         ret = self.parse_type() if self.match("OP", "->") else None
+        if signature:
+            if not self.check("NEWLINE"):
+                raise ZyloError("a trait method is only a signature: `fn name(self, ...) -> type` with no body",
+                                self.cur.line, self.cur.col)
+            self.advance()
+            return ast.FnDef(name, params, ret, [], has_self, tparams=tparams, line=kw.line, col=kw.col)
         if extern:
             self.expect("OP", "=")
             template = self.expect("STR").value
@@ -424,10 +433,10 @@ class Parser:
         return ast.FnDef(name, params, ret, body, has_self, tparams=tparams, line=kw.line, col=kw.col)
 
     def parse_tparams(self) -> list[ast.TypeParam]:
-        """Parse the optional type parameters after a definition's name: `[T]`, `[K, V]`, `[T: Ord + Show]`.
+        """Parse the optional type parameters after a definition's name: `[T]`, `[K, V]`, `[T: Ord + Show]`, `[T = int]`.
 
         Raises:
-            ZyloError: On an empty list, a repeated name or a malformed bound.
+            ZyloError: On an empty list, a repeated name, a malformed bound, or a parameter without a default after one with.
         """
         if not self.check("OP", "["):
             return []
@@ -439,10 +448,15 @@ class Parser:
                 raise ZyloError(f"duplicate type parameter {name.value!r}", name.line, name.col)
             bounds: list[str] = []
             if self.match("OP", ":"):
-                bounds.append(self.expect("IDENT").value)
+                bounds.append(self.parse_dotted())
                 while self.match("OP", "+"):
-                    bounds.append(self.expect("IDENT").value)
-            found.append(ast.TypeParam(name.value, bounds, line=name.line, col=name.col))
+                    bounds.append(self.parse_dotted())
+            default = None
+            if self.match("OP", "="):
+                default = self.parse_type()
+            elif any(p.default is not None for p in found):
+                raise ZyloError(f"type parameter {name.value!r} has no default but follows one that has", name.line, name.col)
+            found.append(ast.TypeParam(name.value, bounds, default, line=name.line, col=name.col))
             if not self.match("OP", ","):
                 break
         if not found:
@@ -544,8 +558,54 @@ class Parser:
         self.expect("NEWLINE")
         return ast.FromImport(module, names, line=kw.line, col=kw.col)
 
+    def parse_bases(self) -> list[ast.TypeRef]:
+        """Parse the optional traits after a struct's or enum's name: `(Shape)`, `(Shape, shapes.Named)`."""
+        if not self.match("OP", "("):
+            return []
+        found: list[ast.TypeRef] = []
+        while True:
+            tok = self.cur
+            found.append(ast.TypeRef(self.parse_dotted(), [], line=tok.line, col=tok.col))
+            if not self.match("OP", ",") or self.check("OP", ")"):
+                break
+        self.expect("OP", ")")
+        return found
+
+    def parse_trait(self) -> ast.TraitDef:
+        """Parse a trait: an optional description, then method signatures (`fn name(self, ...) -> type`).
+
+        Raises:
+            ZyloError: If the body contains anything else or a method has a body.
+        """
+        self.advance()
+        name = self.expect("IDENT")
+        if self.check("OP", "["):
+            raise ZyloError("a trait takes no type parameters", self.cur.line, self.cur.col)
+        self.expect("OP", ":")
+        self.expect("NEWLINE")
+        if not self.check("INDENT"):
+            raise ZyloError("expected an indented block", self.cur.line, self.cur.col)
+        self.advance()
+        methods: list[ast.FnDef] = []
+        doc: tuple[str, int] | None = None
+        while not self.check("DEDENT"):
+            tok = self.cur
+            if tok.kind == "EOF":
+                raise ZyloError("unclosed block", tok.line, tok.col)
+            if tok.kind == "STR" and not methods and doc is None:
+                doc = self.parse_doc()
+            elif self.check("KW", "fn"):
+                methods.append(self.parse_fn(in_struct=True, signature=True))
+            else:
+                raise ZyloError("a trait body can only contain method signatures (`fn name(self) -> type`)", tok.line, tok.col)
+        self.expect("DEDENT")
+        d = ast.TraitDef(name.value, methods, line=name.line, col=name.col)
+        if doc:
+            d.doc, d.doc_line = doc
+        return d
+
     def parse_struct(self) -> ast.StructDef:
-        """Parse a struct: its fields (`name: type`) and methods (`fn`).
+        """Parse a struct: its traits, fields (`name: type`) and methods (`fn`).
 
         Raises:
             ZyloError: If the body contains anything else.
@@ -553,6 +613,7 @@ class Parser:
         self.advance()
         name = self.expect("IDENT")
         tparams = self.parse_tparams()
+        traits = self.parse_bases()
         self.expect("OP", ":")
         self.expect("NEWLINE")
         if not self.check("INDENT"):
@@ -585,7 +646,7 @@ class Parser:
             else:
                 raise ZyloError("a struct body can only contain fields (`name: type`) and methods (`fn`)", tok.line, tok.col)
         self.expect("DEDENT")
-        d = ast.StructDef(name.value, fields, methods, tparams=tparams, line=name.line, col=name.col)
+        d = ast.StructDef(name.value, fields, methods, tparams=tparams, traits=traits, line=name.line, col=name.col)
         if doc:
             d.doc, d.doc_line = doc
         return d
@@ -609,6 +670,7 @@ class Parser:
         self.advance()
         name = self.expect("IDENT")
         tparams = self.parse_tparams()
+        traits = self.parse_bases()
         self.expect("OP", ":")
         self.expect("NEWLINE")
         if not self.check("INDENT"):
@@ -645,7 +707,7 @@ class Parser:
             self.expect("NEWLINE")
             variants.append(ast.Variant(tok.value, fields, line=tok.line, col=tok.col))
         self.expect("DEDENT")
-        d = ast.EnumDef(name.value, variants, methods=methods, tparams=tparams, line=name.line, col=name.col)
+        d = ast.EnumDef(name.value, variants, methods=methods, tparams=tparams, traits=traits, line=name.line, col=name.col)
         if doc:
             d.doc, d.doc_line = doc
         return d

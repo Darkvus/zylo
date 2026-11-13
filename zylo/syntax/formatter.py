@@ -135,7 +135,14 @@ def tparams_text(tparams: list[ast.TypeParam]) -> str:
     """Return the type parameters of a definition as written (`[T, K: Ord + Show]`), or nothing."""
     if not tparams:
         return ""
-    return "[" + ", ".join(p.name + (": " + " + ".join(p.bounds) if p.bounds else "") for p in tparams) + "]"
+    return "[" + ", ".join(
+        p.name + (": " + " + ".join(p.bounds) if p.bounds else "") + (f" = {type_text(p.default)}" if p.default else "")
+        for p in tparams) + "]"
+
+
+def bases_text(traits: list[ast.TypeRef]) -> str:
+    """Return the traits a struct or enum implements as written (`(Shape, Named)`), or nothing."""
+    return f"({', '.join(t.name for t in traits)})" if traits else ""
 
 
 def targs_text(targs: list[ast.TypeRef]) -> str:
@@ -571,7 +578,7 @@ class _Formatter:
         """Write a list of statements."""
         previous_def = False
         for n, s in enumerate(body):
-            is_def = isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef))
+            is_def = isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef, ast.TraitDef))
             if top and n and (is_def or previous_def):
                 self.blank()
             self.stmt(s, indent, first_in_block=n == 0 and not top)
@@ -621,7 +628,7 @@ class _Formatter:
             case ast.StructDef():
                 self.struct(s, indent, first_in_block)
             case ast.EnumDef():
-                self.header(s, indent, f"enum {s.name}{tparams_text(s.tparams)}", first_in_block)
+                self.header(s, indent, f"enum {s.name}{tparams_text(s.tparams)}{bases_text(s.traits)}", first_in_block)
                 if s.doc is not None:
                     self.line(s.doc_line, indent + 1, quote(s.doc), first_in_block=True)
                 for n, v in enumerate(s.variants):
@@ -632,6 +639,12 @@ class _Formatter:
                 for m in s.methods:
                     self.blank()
                     self.stmt(m, indent + 1, first_in_block=True)
+            case ast.TraitDef():
+                self.header(s, indent, f"trait {s.name}", first_in_block)
+                if s.doc is not None:
+                    self.line(s.doc_line, indent + 1, quote(s.doc), first_in_block=True)
+                for n, m in enumerate(s.methods):
+                    self.line(m.line, indent + 1, self.signature(m, indent + 1, 0), first_in_block=n == 0 and s.doc is None)
             case ast.Match():
                 self.header(s, indent, self.fit(indent, "match ", s.value, 1), first_in_block)
                 for n, arm in enumerate(s.arms):
@@ -704,7 +717,7 @@ class _Formatter:
 
     def struct(self, s: ast.StructDef, indent: int, first_in_block: bool) -> None:
         """Write a struct: its fields, then its methods separated by blank lines."""
-        self.header(s, indent, f"struct {s.name}{tparams_text(s.tparams)}", first_in_block)
+        self.header(s, indent, f"struct {s.name}{tparams_text(s.tparams)}{bases_text(s.traits)}", first_in_block)
         if s.doc is not None:
             self.line(s.doc_line, indent + 1, quote(s.doc), first_in_block=True)
         for n, f in enumerate(s.fields):

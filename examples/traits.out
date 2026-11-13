@@ -1,0 +1,4 @@
+rectangles: 13.00
+circles: 22.78
+Rect(w=2.0, h=3.0): area 6.00, perimeter 10.00
+Circle(r=5.0): area 78.54, perimeter 31.42

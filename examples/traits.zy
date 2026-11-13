@@ -1,0 +1,56 @@
+# Traits: one interface, several types, and generic code that works with any of them.
+
+trait Shape:
+    "Something with an area and a perimeter."
+    fn area(self) -> float
+    fn perimeter(self) -> float
+    fn scale(self, by: float) -> Self
+
+struct Rect(Shape):
+    w: float
+    h: float
+
+    fn area(self) -> float:
+        return self.w * self.h
+
+    fn perimeter(self) -> float:
+        return 2.0 * (self.w + self.h)
+
+    fn scale(self, by: float) -> Rect:
+        return Rect(w=self.w * by, h=self.h * by)
+
+struct Circle(Shape):
+    r: float
+
+    fn area(self) -> float:
+        return 3.14159 * self.r * self.r
+
+    fn perimeter(self) -> float:
+        return 2.0 * 3.14159 * self.r
+
+    fn scale(self, by: float) -> Circle:
+        return Circle(r=self.r * by)
+
+fn total_area[T: Shape](shapes: list[T]) -> float:
+    total = 0.0
+    for s in shapes:
+        total += s.area()
+    return total
+
+fn largest[T: Shape](shapes: list[T]) -> T:
+    best = shapes[0]
+    for s in shapes:
+        if s.area() > best.area():
+            best = s
+    return best
+
+fn report[T: Shape + Show](s: T) -> str:
+    return f"{s}: area {s.area():.2f}, perimeter {s.perimeter():.2f}"
+
+rects = [Rect(w=2.0, h=3.0), Rect(w=4.0, h=1.5), Rect(w=1.0, h=1.0)]
+circles = [Circle(r=1.0), Circle(r=2.5)]
+
+print(f"rectangles: {total_area(rects):.2f}")
+print(f"circles: {total_area(circles):.2f}")
+print(report(largest(rects)))
+print(report(largest(circles).scale(2.0)))

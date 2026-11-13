@@ -242,6 +242,17 @@
               "name": "entity.name.type.struct.zylo"
             }
           }
+        },
+        {
+          "match": "\\b(trait)\\s+([A-Za-z_]\\w*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.trait.zylo"
+            },
+            "2": {
+              "name": "entity.name.type.interface.zylo"
+            }
+          }
         }
       ]
     },
@@ -257,7 +268,7 @@
         },
         {
           "name": "storage.type.zylo",
-          "match": "\\b(enum|extern|fn|pub|struct)\\b"
+          "match": "\\b(enum|extern|fn|pub|struct|trait)\\b"
         }
       ]
     },

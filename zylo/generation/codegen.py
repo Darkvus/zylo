@@ -396,7 +396,7 @@ class Gen:
         structs = [s for s in body if isinstance(s, ast.StructDef)]
         fns = [s for s in body if isinstance(s, ast.FnDef) and not isinstance(s, ast.ExternFn)]
         enums = [s for s in body if isinstance(s, ast.EnumDef)]
-        rest = [s for s in body if not isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef))]
+        rest = [s for s in body if not isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef, ast.TraitDef))]
         self.opaque = fn_holders(structs, enums)
         for ed in enums:
             self.enum(ed)

@@ -57,6 +57,11 @@ MAX_DEPTH = 12  # how deeply nested a type argument may be: stops `f[T]` calling
 MAX_INSTANCES = 500  # how many copies of generic definitions one program may need
 
 
+def shown(name: str) -> str:
+    """A linked name as the user wrote it (`shapes·Shape` is `Shape`)."""
+    return name.rsplit("\u00b7", 1)[-1]
+
+
 def _err(msg: str, node: ast.Node | None) -> ZyloError:
     if node is None:
         return ZyloError(msg)
@@ -67,7 +72,7 @@ def _err(msg: str, node: ast.Node | None) -> ZyloError:
 
 def allows(t: ParamT, bound: str) -> bool:
     """Whether a type parameter's declared bounds give it a capability."""
-    return any(bound in IMPLIES[b] for b in t.bounds)
+    return any(bound in IMPLIES.get(b, {b}) for b in t.bounds)
 
 
 def key_ok(t: Type) -> bool:
@@ -141,6 +146,17 @@ def param_types(t: Type) -> dict[str, ParamT]:
     for x in parts(t):
         found.update(param_types(x))
     return found
+
+
+def required(params: list[ast.TypeParam]) -> int:
+    """How many type arguments a generic needs to be told: the parameters without a default."""
+    return sum(p.default is None for p in params)
+
+
+def arity(params: list[ast.TypeParam]) -> str:
+    """The number of type arguments a generic takes, for messages: `2`, or `1 to 2` when some have defaults."""
+    lo, hi = required(params), len(params)
+    return str(hi) if lo == hi else f"{lo} to {hi}"
 
 
 def int_literal(e: ast.Expr) -> bool:
@@ -220,10 +236,11 @@ class GenericMixin:
         kind = "fn" if isinstance(d, ast.FnDef) else "struct" if isinstance(d, ast.StructDef) else "enum"
         if d.name in self.generics or d.name in self.structs or d.name in self.enums:
             raise _err(f"{d.name!r} is already defined", d)
+        if d.name in self.traits:
+            raise _err(f"{d.name!r} is already a trait", d)
         for p in d.tparams:
-            for b in p.bounds:
-                if b not in BOUNDS:
-                    raise _err(f"unknown bound {b!r} on type parameter {p.name!r} (available: {', '.join(BOUNDS)})", p)
+            self.check_bound_names(p)
+        self.check_defaults_of(d.tparams)
         if kind != "fn":
             for m in d.methods:
                 if m.tparams:
@@ -244,9 +261,17 @@ class GenericMixin:
             if any(q.name == p.name for q in owner_params):
                 raise _err(f"type parameter {p.name!r} of method {m.name!r} hides the one of the same name on the "
                            f"struct or enum; use another name", p)
-            for b in p.bounds:
-                if b not in BOUNDS:
-                    raise _err(f"unknown bound {b!r} on type parameter {p.name!r} (available: {', '.join(BOUNDS)})", p)
+            self.check_bound_names(p)
+            if p.default is not None:
+                raise _err(f"default type arguments are for functions, structs and enums, not for the methods of a "
+                           f"generic: remove `= {p.default.name}` from {p.name!r}", p)
+
+    def check_defaults_of(self, params: list[ast.TypeParam]) -> None:
+        """Reject a default type argument that mentions a type parameter (a default is a plain type)."""
+        names = {p.name for p in params}
+        for p in params:
+            if p.default is not None and any(isinstance(n, ast.TypeRef) and n.name in names for n in ast.walk(p.default)):
+                raise _err(f"the default of type parameter {p.name!r} cannot mention a type parameter", p.default)
 
     def fix_method_params(self, m: ast.FnDef) -> tuple[ParamT, ...]:
         """Make a generic method's own type parameters opaque types in its template, and return them."""
@@ -354,6 +379,13 @@ class GenericMixin:
         methods. The template itself is what gets checked (so the editor can show types inside it); copies are made from it
         afterwards, and they overwrite everything the check left on it.
         """
+        for p in g.params:
+            if p.default is not None:
+                t = self.resolve(p.default)
+                for b in p.bounds:
+                    if not self.satisfies(t, b):
+                        raise _err(f"the default {t} of type parameter {p.name!r} does not satisfy its bound {shown(b)}",
+                                   p.default)
         by_name = dict(zip((p.name for p in g.params), g.own))
         for n in ast.walk(g.defn):
             if isinstance(n, ast.TypeRef) and n.name in by_name and not n.args and n.ret is None:
@@ -432,6 +464,8 @@ class GenericMixin:
         """Whether a type has the capability a bound names."""
         if isinstance(t, ParamT):
             return allows(t, bound)
+        if bound in self.traits:
+            return bound in self.implemented(t)
         if bound == "Eq":
             return not self.contains_fn(t, need="Eq")
         if bound == "Show":
@@ -446,9 +480,22 @@ class GenericMixin:
         """Reject a type argument that lacks what its parameter's bounds ask for."""
         for p in g.params:
             for b in p.bounds:
-                if not self.satisfies(bind[p.name], b):
-                    raise _err(f"{label}: {bind[p.name]} cannot be used for {p.name}, which is bound by `{b}`: the type must be "
-                               f"one that {BOUND_HELP[b]}", node)
+                if self.satisfies(bind[p.name], b):
+                    continue
+                if b in self.traits:
+                    raise _err(f"{label}: {shown(str(bind[p.name]))} does not implement trait {shown(b)}, which bounds "
+                               f"{p.name} ({self.how_to_implement(bind[p.name], b)})", node)
+                raise _err(f"{label}: {bind[p.name]} cannot be used for {p.name}, which is bound by `{b}`: the type must be "
+                           f"one that {BOUND_HELP[b]}", node)
+
+    def how_to_implement(self, t: Type, trait: str) -> str:
+        """The hint for a type argument that lacks a trait: what to write to make it implement it."""
+        if isinstance(t, ParamT):
+            return f"declare it: `{t}: {shown(trait)}`"
+        if isinstance(t, (StructT, EnumT)):
+            kind = "struct" if isinstance(t, StructT) else "enum"
+            return f"list the trait in its definition: `{kind} {shown(t.base or t.name)}({shown(trait)}):`"
+        return "only a struct or enum can implement a trait"
 
     # ---- inference -------------------------------------------------------------------------------------
 
@@ -482,8 +529,8 @@ class GenericMixin:
         """
         bind: dict[str, Type] = dict(known or {})
         if written:
-            if len(written) != len(g.params):
-                raise _err(f"{label} takes {len(g.params)} type argument(s) ({', '.join(p.name for p in g.params)}), "
+            if not required(g.params) <= len(written) <= len(g.params):
+                raise _err(f"{label} takes {arity(g.params)} type argument(s) ({', '.join(p.name for p in g.params)}), "
                            f"got {len(written)}", e)
             for p, w in zip(g.params, written):
                 bind[p.name] = self.resolve(w)
@@ -513,6 +560,9 @@ class GenericMixin:
         for p in g.params:
             if p.name not in bind and p.name in hint:
                 bind[p.name] = hint[p.name]
+        for p in g.params:
+            if p.name not in bind and p.default is not None:
+                bind[p.name] = self.resolve(p.default)  # what nothing determines takes its default
         for p in g.params:
             if p.name not in bind:
                 raise _err(f"cannot infer type parameter {p.name} of {label}: nothing determines it; write the type arguments "
@@ -601,10 +651,11 @@ class GenericMixin:
         shown = t.name.rsplit("·", 1)[-1]
         if g.kind == "fn":
             raise _err(f"{shown!r} is a generic function, not a type", t)
-        if len(t.args) != len(g.params):
-            want = ", ".join(p.name for p in g.params)
-            raise _err(f"{shown} takes {len(g.params)} type argument(s) ({shown}[{want}]), got {len(t.args)}", t)
-        return self.instance_type(g, tuple(self.resolve(a) for a in t.args), t)
+        if not required(g.params) <= len(t.args) <= len(g.params):
+            want = ", ".join(p.name + (" = " + p.default.name if p.default else "") for p in g.params)
+            raise _err(f"{shown} takes {arity(g.params)} type argument(s) ({shown}[{want}]), got {len(t.args)}", t)
+        args = [self.resolve(a) for a in t.args] + [self.resolve(p.default) for p in g.params[len(t.args):]]
+        return self.instance_type(g, tuple(args), t)
 
     # ---- generic methods -------------------------------------------------------------------------------
 
@@ -690,8 +741,8 @@ class GenericMixin:
         shown = e.id.rsplit("\u00b7", 1)[-1]
         bind: dict[str, Type] = {}
         if e.targs:
-            if len(e.targs) != len(g.params):
-                raise _err(f"{shown} takes {len(g.params)} type argument(s) ({', '.join(p.name for p in g.params)}), "
+            if not required(g.params) <= len(e.targs) <= len(g.params):
+                raise _err(f"{shown} takes {arity(g.params)} type argument(s) ({', '.join(p.name for p in g.params)}), "
                            f"got {len(e.targs)}", e)
             for p, w in zip(g.params, e.targs):
                 bind[p.name] = self.resolve(w)
@@ -704,6 +755,9 @@ class GenericMixin:
                 if not ok:
                     want = expected if expected is not None else f"fn({', '.join(map(str, params))})"
                     raise _err(f"generic function {shown} has type {g.sig}, which does not fit {want}", e)
+        for p in g.params:
+            if p.name not in bind and p.default is not None:
+                bind[p.name] = self.resolve(p.default)
         for p in g.params:
             if p.name not in bind:
                 raise _err(f"cannot infer type parameter {p.name} of {shown} used as a value: write the type arguments "
