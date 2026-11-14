@@ -1,0 +1,35 @@
+# A router-like registry: a struct holding a Cell, and the constant everyone registers on.
+import std.web as web
+
+struct Route:
+    method: str
+    path: str
+    ep: web.Endpoint
+
+fn _appended(rs: list[Route], r: Route) -> list[Route]:
+    out = rs
+    out.append(r)
+    return out
+
+fn _logged(l: list[str], line: str) -> list[str]:
+    out = l
+    out.append(line)
+    return out
+
+struct Registry:
+    routes: Cell[list[Route]]
+    log: Cell[list[str]]
+
+    fn get(self, path: str, ep: web.Endpoint):
+        self.add("GET", path, ep)
+
+    fn post(self, path: str, ep: web.Endpoint, status: int = 200):
+        self.add("POST", path, ep)
+
+    fn add(self, method: str, path: str, ep: web.Endpoint):
+        self.routes.update(
+            fn(rs: list[Route]) => _appended(rs, Route(method, path, ep)),
+        )
+        self.log.update(fn(l: list[str]) => _logged(l, method + " " + path))
+
+const router = Registry(cell([]), cell([]))

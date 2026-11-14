@@ -65,6 +65,21 @@ class Module:
         """
         return name if self.is_entry else f"{self.id.replace('.', SEP)}{SEP}{name}"
 
+    def const_name(self, name: str) -> str:
+        """Return the linked name of one of this module's constants.
+
+        Unlike a function, a constant of the entry file is renamed too (`·name`), so it cannot be seen from, or clash with
+        a variable of, the modules the entry file imports: a constant is visible only in its own module and where it is
+        imported by name.
+
+        Args:
+            name: The constant's own name.
+
+        Returns:
+            `·name` for the entry module, otherwise `module·name`.
+        """
+        return f"{SEP}{name}" if self.is_entry else self.mangled(name)
+
 
 def local_names(stmt: ast.Stmt) -> set[str]:
     """The variable names a top-level definition (or statement) declares, so they are not mistaken for functions.
@@ -155,6 +170,9 @@ class Linker:
         for m in self.order:
             if m is not main:
                 body += [s for s in m.program.body if isinstance(s, DEFINITIONS)]
+        for m in self.order:  # what decorators in library modules register, once, in import order, before the entry's statements
+            if m is not main:
+                body += [s for s in m.program.body if isinstance(s, ast.ExprStmt)]
         body += [s for s in main.program.body if not isinstance(s, (ast.Import, ast.FromImport))]
         return ast.Program(body, line=1, col=1, file=str(entry))
 
@@ -201,10 +219,12 @@ class Linker:
         if not is_entry:
             self.register_id(mod, path)
             if self.tolerant:
-                prog.body = [s for s in prog.body if isinstance(s, (ast.Import, ast.FromImport, *DEFINITIONS))]
+                prog.body = [s for s in prog.body if isinstance(s, (ast.Import, ast.FromImport, *DEFINITIONS))
+                             or (isinstance(s, ast.ExprStmt) and s.sugar)]
             for s in prog.body:
-                if not isinstance(s, (ast.Import, ast.FromImport, *DEFINITIONS)):
-                    raise err("library modules can only contain imports, constants, functions, structs, enums and traits", s, path)
+                if not isinstance(s, (ast.Import, ast.FromImport, *DEFINITIONS)) and not (isinstance(s, ast.ExprStmt) and s.sugar):
+                    raise err("library modules can only contain imports, constants, functions (decorated or not), structs, "
+                              "enums and traits", s, path)
         self.check_trust(mod)
         self.collect_defs(mod)
         for s in prog.body:
@@ -212,10 +232,42 @@ class Linker:
                 self.bind_import(mod, s, stack + [key])
             elif isinstance(s, ast.FromImport):
                 self.bind_from(mod, s, stack + [key])
+        if not is_entry:
+            self.check_registrations(mod)
         self.rewrite(mod)
         self.by_path[key] = mod
         self.order.append(mod)
         return mod
+
+    def check_registrations(self, mod: Module) -> None:
+        """A decorator in a library module may only register on a constant: `@router.get(...)` with `router` a `const`.
+
+        The statement a decorator stands for runs when the program starts (see docs/guide.md, "Decorators"), so its
+        target must be a `const` of this module, imported by name (`from routes import router`) or reached through a
+        module (`@api.router.get(...)`); a plain function call (`@name(args)`) has no such target and is rejected.
+
+        Raises:
+            ZyloError: If a decorator of the library module has any other target.
+        """
+        keep = []
+        for s in mod.program.body:
+            if not (isinstance(s, ast.ExprStmt) and s.sugar):
+                keep.append(s)
+                continue
+            call, base = s.expr, None
+            if isinstance(call, ast.MethodCall):
+                base = call.value
+            if isinstance(base, ast.Name) and (mod.defs.get(base.id) == "const" or (
+                    base.id in mod.froms and self.kind_of(*mod.froms[base.id]) == "const")):
+                keep.append(s)
+            elif (isinstance(base, ast.Attr) and isinstance(base.value, ast.Name) and base.value.id in mod.aliases
+                  and self.kind_of(mod.aliases[base.value.id], base.name) == "const"):
+                keep.append(s)
+            elif not self.tolerant:
+                raise err("a decorator in a library module must register on a `const` of the module or one imported by name: "
+                          "`@router.get(...)` with `const router = ...` (it runs at start-up, so the target cannot be a "
+                          "variable or a function call)", s, mod.path)
+        mod.program.body = keep
 
     def check_trust(self, mod: Module) -> None:
         """A package from the community is plain Zylo unless the project trusts it with Rust access."""
@@ -402,7 +454,7 @@ class Linker:
             self.tparams = {p.name for p in getattr(s, "tparams", [])}
             self.rw(s, mod)
             if isinstance(s, ast.ConstDef):
-                s.target.id = mod.mangled(s.target.id)
+                s.target.id = mod.const_name(s.target.id)
             elif isinstance(s, DEFINITIONS):
                 if not isinstance(s, ast.FnDef) and not mod.is_entry:
                     s.display = s.name
@@ -482,8 +534,10 @@ class Linker:
                 dep, orig = mod.froms[node.id]
                 node.id = self.export(dep, orig, node, mod, kind="enum")
             elif node.id not in self.locals:  # a function or constant of this module, or imported by name
-                if mod.defs.get(node.id) in ("fn", "const"):
+                if mod.defs.get(node.id) == "fn":
                     node.id = mod.mangled(node.id)
+                elif mod.defs.get(node.id) == "const":
+                    node.id = mod.const_name(node.id)
                 elif node.id in mod.froms and self.kind_of(*mod.froms[node.id]) in ("fn", "const"):
                     dep, orig = mod.froms[node.id]
                     node.id = self.export(dep, orig, node, mod, kind=self.kind_of(dep, orig))

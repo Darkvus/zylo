@@ -202,3 +202,61 @@ def test_hover_works_on_a_decorated_function_and_its_decorator(tmp_path):
     assert "fn f(n: int) -> int" in hover(project, path, fn_line, 4).markdown
     dec_line = next(i for i, ln in enumerate(lines) if ln.startswith("@reg")) + 1
     assert "reg" in hover(project, path, dec_line, 3).markdown
+
+
+# ---- decorators in library modules (v0.35) -------------------------------------------------------------------------
+
+REGISTRY = ("import std.web as web\n\nstruct Router:\n    names: Cell[list[str]]\n\n"
+            "    fn get(self, path: str, e: web.Endpoint):\n        self.names.set([path])\n\n"
+            "const router = Router(cell([]))\n")
+
+
+def lib_project(tmp_path: Path, files: dict[str, str], main: str) -> Path:
+    for name, text in {**files, "main.zy": main}.items():
+        (tmp_path / name).write_text(text)
+    return tmp_path / "main.zy"
+
+
+@needs_cargo
+def test_library_decorators_register_in_import_order_before_the_entry(build):
+    """`registry` holds the const; `things` imports `users` first; the entry's own decorator runs last."""
+    assert build(PROGRAMS / "libdeco" / "main.zy") == (PROGRAMS / "libdeco" / "main.expected").read_text()
+
+
+def test_library_decorators_type_check_and_precede_the_entry_statements(tmp_path):
+    files = {"registry.zy": REGISTRY,
+             "users.zy": "from registry import router\n@router.get(\"/u\")\nfn u() -> int:\n    return 1\n"}
+    main = "import std.web as web\nfrom registry import router\nimport users\n@router.get(\"/m\")\nfn m() -> int:\n    return 2\n"
+    prog = load_program(lib_project(tmp_path, files, main))
+    check(prog)
+    calls_ = [s for s in prog.body if isinstance(s, ast.ExprStmt)]
+    assert [c.expr.args[0].value for c in calls_] == ["/u", "/m"]  # the library first, then the entry
+
+
+def test_a_library_decorator_target_must_be_a_constant(tmp_path):
+    reg = REGISTRY.replace("const router", "fn make() -> Router:\n    return Router(cell([]))\nconst router")
+    for target, line in [("make()", "@make().get"), ("var", "@var.get")]:
+        main = "import users\n"
+        users = f"from registry import make\n{line}(\"/u\")\nfn u() -> int:\n    return 1\n"
+        with pytest.raises(ZyloError, match="must register on a `const`") as e:
+            load_program(lib_project(tmp_path, {"registry.zy": reg, "users.zy": users}, main))
+        assert e.value.file.endswith("users.zy"), target
+
+
+def test_a_plain_decorator_call_is_rejected_in_a_library(tmp_path):
+    files = {"registry.zy": REGISTRY, "users.zy": "from registry import router\nfn reg(e: int):\n    pass\n"
+             "@reg()\nfn u() -> int:\n    return 1\n"}
+    with pytest.raises(ZyloError, match="must register on a `const`"):
+        load_program(lib_project(tmp_path, files, "import users\n"))
+
+
+def test_a_registration_written_by_hand_is_still_rejected_in_a_library(tmp_path):
+    files = {"registry.zy": REGISTRY, "users.zy": "from registry import router\nfn u() -> int:\n    return 1\n"
+             "router.get(\"/u\", endpoint(u))\n"}
+    with pytest.raises(ZyloError, match="library modules can only contain"):
+        load_program(lib_project(tmp_path, files, "import users\n"))
+
+
+def test_a_decorator_may_use_a_constant_reached_through_a_module(tmp_path):
+    files = {"registry.zy": REGISTRY, "users.zy": "import registry\n@registry.router.get(\"/u\")\nfn u() -> int:\n    return 1\n"}
+    check(load_program(lib_project(tmp_path, files, "import std.web as web\nimport users\n")))

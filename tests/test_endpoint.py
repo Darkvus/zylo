@@ -264,3 +264,66 @@ def test_a_decorator_success_status_is_also_the_endpoints():
     assert call.named[0].name == "status" and call.args[1].named[0].value.value == 201
     other = parse("@app.post('/', status=404)\nfn f() -> int:\n    return 1\n").body[1].expr
     assert other.args[1].named == []  # only a success status literal is copied
+
+
+# ---- query(...) and path(...) (v0.35) ----------------------------------------------------------------------------
+
+@needs_cargo
+def test_query_and_path_constraints(build):
+    """Defaults, constraints with FastAPI's 422 types and ctx, descriptions and the schemas of the parameters."""
+    assert build(PROGRAMS / "endpoint_query.zy") == (PROGRAMS / "endpoint_query.expected").read_text()
+
+
+def test_query_marker_forms_type_check(tmp_path):
+    src = ("fn f(a: int = query(10, ge=1, le=100, description=\"x\"), b: int = query(ge=-5), c: float? = query(none, gt=-0.5),"
+           " d: str = query(\"x\", min_length=1, max_length=3)) -> int:\n    return a\ne = endpoint(f)\n")
+    # a required parameter after a defaulted one is the usual error, so put the required one first
+    src = src.replace("a: int = query(10, ge=1, le=100, description=\"x\"), b: int = query(ge=-5)", "b: int = query(ge=-5), a: int = query(10, ge=1, le=100, description=\"x\")")
+    check(load_program(project(tmp_path, {"main.zy": HEAD + src})))
+
+
+def test_a_query_default_can_be_used_when_calling_the_function(tmp_path):
+    src = "fn f(n: int = query(7, ge=1)) -> int:\n    return n\nx = f()\n"
+    check(load_program(project(tmp_path, {"main.zy": HEAD + src})))
+    fails(tmp_path, "fn f(n: int = query(ge=1)) -> int:\n    return n\nx = f()\n", "missing argument 'n'")
+
+
+@pytest.mark.parametrize("params, message", [
+    ("a: str = query(ge=1)", "ge constrains an int or float, but parameter 'a' is str"),
+    ("a: bool = query(le=1)", "le constrains an int or float"),
+    ("a: int = query(min_length=1)", "min_length constrains a str, but parameter 'a' is int"),
+    ("a: list[int] = query(max_length=2)", "max_length constrains a str"),
+    ("a: int = query(ge=1.5)", "ge of the int parameter 'a' must be a whole number"),
+    ("a: int = query(ge=lo)", "ge must be a number literal"),
+    ("a: int = query(ge=1 + 1)", "ge must be a number literal"),
+    ("a: str = query(min_length=-1)", "min_length must be a whole number literal, 0 or more"),
+    ("a: str = query(description=name)", "description must be a string literal"),
+    ("a: int = query(ge=1, ge=2)", "'ge' is given more than once"),
+    ("a: int = query(1, 2)", "only positional argument"),
+    ("a: int = query(eq=1)", "unknown argument 'eq'"),
+    ("a: int = path(5)", "a path parameter is always required"),
+    ("a: str = query(5)", "the default of parameter 'a' is int but it is declared str"),
+])
+def test_query_marker_errors(tmp_path, params, message):
+    fails(tmp_path, f"lo = 1\nname = \"n\"\nfn f({params}) -> int:\n    return 1\n", message)
+
+
+def test_a_marker_is_not_an_ordinary_expression_nor_for_non_scalars(tmp_path):
+    fails(tmp_path, "x = query(1)\n", "can only be the default of a parameter")
+    fails(tmp_path, "struct A:\n    n: int = query(1)\n", "goes in the default of a function parameter")
+    fails(tmp_path, "struct A:\n    n: int\n    fn m(self, k: int = query(1)):\n        pass\n", "not on methods")
+    fails(tmp_path, "struct A:\n    n: int\nfn f(a: A = query()) -> int:\n    return 1\ne = endpoint(f)\n", "describes an int, float, bool, str or enum")
+
+
+def test_constraints_conflict_between_an_endpoint_and_its_dependency(tmp_path):
+    dep = "fn dep(n: int = query(1, ge=1, le=10)) -> int:\n    return n\n"
+    fails(tmp_path, dep + "fn f(n: int = query(1, ge=2), x: int = depends(dep)) -> int:\n    return n\ne = endpoint(f)\n",
+          "parameter 'n' has ge=1 in dep but ge=2 in f|parameter 'n' has ge=2 in f but ge=1 in dep")
+    # the same value, or different constraints, merge
+    ok = dep + "fn f(n: int = query(1, ge=1, lt=20), x: int = depends(dep)) -> int:\n    return n\ne = endpoint(f)\n"
+    check(load_program(project(tmp_path, {"main.zy": HEAD + ok})))
+
+
+def test_query_and_path_are_ordinary_names_for_user_functions(tmp_path):
+    src = "fn query(a: int) -> int:\n    return a\nfn path(a: int) -> int:\n    return a + query(1)\nx = path(2)\n"
+    check(load_program(project(tmp_path, {"main.zy": src})))

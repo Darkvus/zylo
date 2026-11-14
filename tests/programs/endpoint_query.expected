@@ -1,0 +1,15 @@
+200 "abc 10 3"
+422 {"detail":[{"ctx":{"ge":1},"loc":["path","id"],"msg":"Input should be greater than or equal to 1","type":"greater_than_equal"},{"ctx":{"min_length":2},"loc":["query","q"],"msg":"String should have at least 2 characters","type":"string_too_short"},{"ctx":{"ge":1},"loc":["query","limit"],"msg":"Input should be greater than or equal to 1","type":"greater_than_equal"},{"ctx":{"ge":0},"loc":["query","offset"],"msg":"Input should be greater than or equal to 0","type":"greater_than_equal"},{"ctx":{"gt":0.5},"loc":["query","score"],"msg":"Input should be greater than 0.5","type":"greater_than"}]}
+422 {"detail":[{"ctx":{"max_length":5},"loc":["query","q"],"msg":"String should have at most 5 characters","type":"string_too_long"},{"ctx":{"le":100},"loc":["query","limit"],"msg":"Input should be less than or equal to 100","type":"less_than_equal"},{"ctx":{"ge":0},"loc":["query","offset"],"msg":"Input should be greater than or equal to 0","type":"greater_than_equal"},{"ctx":{"lt":9.5},"loc":["query","score"],"msg":"Input should be less than 9.5","type":"less_than"}]}
+200 "ab 100 2"
+422 {"detail":[{"loc":["query","id"],"msg":"Field required","type":"missing"},{"loc":["query","q"],"msg":"Field required","type":"missing"}]}
+200 7
+422 {"detail":[{"loc":["query","n"],"msg":"Input should be a valid integer","type":"int_parsing"}]}
+422 {"detail":[{"ctx":{"ge":5},"loc":["query","n"],"msg":"Input should be greater than or equal to 5","type":"greater_than_equal"}]}
+200 12
+7 zz 1 2
+id true integer [The item] {"minimum":1,"type":"integer"}
+q true string [Search text] {"maxLength":5,"minLength":2,"type":"string"}
+limit false integer [Page size] {"maximum":100,"minimum":1,"type":"integer"}
+offset false integer [] {"minimum":0,"type":"integer"}
+score false number [] {"exclusiveMaximum":9.5,"exclusiveMinimum":0.5,"type":"number"}

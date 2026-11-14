@@ -202,6 +202,199 @@ fn _body_item(text: str) -> Json:
         kind = "type_error"
     return _item(loc, msg, kind)
 
+# What `query(...)` and `path(...)` constraints check and write. The error is FastAPI's: the type names the constraint and
+# `ctx` holds its value.
+fn _limit_item(
+    where: str,
+    name: str,
+    msg: str,
+    kind: str,
+    key: str,
+    bound: float,
+) -> Json:
+    item = _bad(where, name, msg, kind)
+    fields = json.as_dict(item).unwrap_or(_no_schemas())
+    ctx: dict[str, Json] = {}
+    ctx[key] = Json.Num(bound)
+    fields["ctx"] = Json.Obj(ctx)
+    return Json.Obj(fields)
+
+fn _range_int(
+    v: int,
+    where: str,
+    name: str,
+    ge: int?,
+    gt: int?,
+    le: int?,
+    lt: int?,
+) -> Json?:
+    if ge is some:
+        if v < ge:
+            return some(
+                _limit_item(
+                    where,
+                    name,
+                    "Input should be greater than or equal to " + str(ge),
+                    "greater_than_equal",
+                    "ge",
+                    float(ge),
+                ),
+            )
+    if gt is some:
+        if v <= gt:
+            return some(
+                _limit_item(
+                    where,
+                    name,
+                    "Input should be greater than " + str(gt),
+                    "greater_than",
+                    "gt",
+                    float(gt),
+                ),
+            )
+    if le is some:
+        if v > le:
+            return some(
+                _limit_item(
+                    where,
+                    name,
+                    "Input should be less than or equal to " + str(le),
+                    "less_than_equal",
+                    "le",
+                    float(le),
+                ),
+            )
+    if lt is some:
+        if v >= lt:
+            return some(
+                _limit_item(
+                    where,
+                    name,
+                    "Input should be less than " + str(lt),
+                    "less_than",
+                    "lt",
+                    float(lt),
+                ),
+            )
+    return none
+
+fn _range_float(
+    v: float,
+    where: str,
+    name: str,
+    ge: float?,
+    gt: float?,
+    le: float?,
+    lt: float?,
+) -> Json?:
+    if ge is some:
+        if v < ge:
+            return some(
+                _limit_item(
+                    where,
+                    name,
+                    "Input should be greater than or equal to " + str(ge),
+                    "greater_than_equal",
+                    "ge",
+                    ge,
+                ),
+            )
+    if gt is some:
+        if v <= gt:
+            return some(
+                _limit_item(
+                    where,
+                    name,
+                    "Input should be greater than " + str(gt),
+                    "greater_than",
+                    "gt",
+                    gt,
+                ),
+            )
+    if le is some:
+        if v > le:
+            return some(
+                _limit_item(
+                    where,
+                    name,
+                    "Input should be less than or equal to " + str(le),
+                    "less_than_equal",
+                    "le",
+                    le,
+                ),
+            )
+    if lt is some:
+        if v >= lt:
+            return some(
+                _limit_item(
+                    where,
+                    name,
+                    "Input should be less than " + str(lt),
+                    "less_than",
+                    "lt",
+                    lt,
+                ),
+            )
+    return none
+
+fn _characters(n: int) -> str:
+    if n == 1:
+        return "1 character"
+    return str(n) + " characters"
+
+fn _length(v: str, where: str, name: str, lo: int?, hi: int?) -> Json?:
+    if lo is some:
+        if len(v) < lo:
+            return some(
+                _limit_item(
+                    where,
+                    name,
+                    "String should have at least " + _characters(lo),
+                    "string_too_short",
+                    "min_length",
+                    float(lo),
+                ),
+            )
+    if hi is some:
+        if len(v) > hi:
+            return some(
+                _limit_item(
+                    where,
+                    name,
+                    "String should have at most " + _characters(hi),
+                    "string_too_long",
+                    "max_length",
+                    float(hi),
+                ),
+            )
+    return none
+
+# The JSON Schema of a constrained parameter.
+fn _limited(
+    kind: str,
+    minimum: float?,
+    maximum: float?,
+    ex_min: float?,
+    ex_max: float?,
+    min_len: float?,
+    max_len: float?,
+) -> Json:
+    m: dict[str, Json] = {}
+    m["type"] = Json.Str(kind)
+    if minimum is some:
+        m["minimum"] = Json.Num(minimum)
+    if maximum is some:
+        m["maximum"] = Json.Num(maximum)
+    if ex_min is some:
+        m["exclusiveMinimum"] = Json.Num(ex_min)
+    if ex_max is some:
+        m["exclusiveMaximum"] = Json.Num(ex_max)
+    if min_len is some:
+        m["minLength"] = Json.Num(min_len)
+    if max_len is some:
+        m["maxLength"] = Json.Num(max_len)
+    return Json.Obj(m)
+
 fn _unprocessable(errors: list[Json]) -> Response:
     m: dict[str, Json] = {}
     m["detail"] = Json.Arr(errors)
