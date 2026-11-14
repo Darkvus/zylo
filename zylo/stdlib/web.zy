@@ -12,13 +12,15 @@ struct HttpError:
     status: int
     detail: str
 
-# One parameter of an operation. `location` is "path", "query" or "header"; `type_name` is an OpenAPI primitive.
+# One parameter of an operation. `location` is "path", "query" or "header"; `type_name` is an OpenAPI primitive;
+# `schema` is a JSON Schema that describes the parameter more exactly than `type_name` (an enum, an array), or none.
 struct Param:
     name: str
     location: str
     description: str = ""
     required: bool = true
     type_name: str = "string"
+    schema: Json? = none
 
 # One response of an operation. `schema` is a JSON Schema, or none for no body.
 struct ResponseSpec:
@@ -62,7 +64,7 @@ fn route_operation(op: Operation, method: str, path: str) -> Operation:
     params: list[Param] = []
     for p in op.params:
         if path.count("{" + p.name + "}") > 0:
-            params.append(Param(p.name, "path", p.description, true, p.type_name))
+            params.append(Param(p.name, "path", p.description, true, p.type_name, p.schema))
         else:
             params.append(p)
     return Operation(
@@ -138,6 +140,16 @@ fn _bool(s: str, where: str, name: str) -> Result[bool, Json]:
     if t == "false" or t == "0" or t == "no" or t == "off":
         return ok(false)
     return err(_bad(where, name, "Input should be a valid boolean", "bool_parsing"))
+
+fn _enum_param[T](r: Result[T, str], where: str, name: str) -> Result[T, Json]:
+    match r:
+        ok(v):
+            return ok(v)
+        err(text):
+            msg = text
+            if text.startswith("$: "):
+                msg = text[3:len(text)]
+            return err(_bad(where, name, msg, "enum"))
 
 fn _str(s: str, where: str, name: str) -> Result[str, Json]:
     return ok(s)
