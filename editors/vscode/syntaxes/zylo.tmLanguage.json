@@ -282,7 +282,7 @@
         },
         {
           "name": "storage.type.zylo",
-          "match": "\\b(enum|extern|fn|pub|struct|trait)\\b"
+          "match": "\\b(const|enum|extern|fn|pub|struct|trait)\\b"
         }
       ]
     },
