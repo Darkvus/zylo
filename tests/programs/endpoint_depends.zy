@@ -1,0 +1,111 @@
+# endpoint(f) with depends(g), status= and the extra operation data; constants hold the shared state.
+import std.web as web
+from std.http import Request, Response
+import std.json as json
+
+struct Pet:
+    id: int
+    name: str
+
+struct NewPet:
+    name: str
+
+struct Store:
+    next_id: int
+    pets: list[Pet]
+
+const store: Cell[Store] = cell(Store(1, []))
+const calls = cell(0)
+
+fn get_store() -> Store:
+    calls.update(fn(n) => n + 1)
+    return store.get()
+
+fn counted() -> int:
+    calls.update(fn(n) => n + 1)
+    return calls.get()
+
+fn user(req: Request) -> Result[str, web.HttpError]:
+    if req.query.get("user") is none:
+        return err(web.HttpError(401, "who are you?"))
+    return ok(req.query.get("user").unwrap())
+
+fn greeting(who: str = depends(user), s: Store = depends(get_store)) -> str:
+    return "hello " + who + " " + str(s.next_id)
+
+fn add_pet(body: NewPet, s: Store = depends(get_store)) -> Pet:
+    "Add a pet."
+    pet = Pet(s.next_id, body.name)
+    pets = s.pets
+    pets.append(pet)
+    store.set(Store(s.next_id + 1, pets))
+    return pet
+
+fn list_pets(s: Store = depends(get_store), g: str = depends(greeting)) -> list[Pet]:
+    return s.pets
+
+fn find(id: int, s: Store = depends(get_store)) -> Result[Pet, web.HttpError]:
+    "Find one."
+    for p in s.pets:
+        if p.id == id:
+            return ok(p)
+    if id < 0:
+        return err(web.HttpError(status=400, detail="negative"))
+    return err(web.HttpError(404, "no such pet"))
+
+fn me(name: str = depends(user)) -> str:
+    return name
+
+fn whole(r: Result[str, web.HttpError] = depends(user)) -> str:
+    if r is ok:
+        return "ok"
+    return "err"
+
+fn request(
+    method: str,
+    query: dict[str, str],
+    body: str,
+    pp: dict[str, str],
+) -> Request:
+    h: dict[str, str] = {}
+    return Request(method, "/x", query, h, body, pp)
+
+fn show(r: Response):
+    print(r.status, r.body)
+
+fn main():
+    q: dict[str, str] = {}
+    p: dict[str, str] = {}
+    add = endpoint(add_pet, status=201)
+    show(add.handler(request("POST", q, "{\"name\": \"rex\"}", p)))
+    show(add.handler(request("POST", q, "{}", p)))
+    print("calls", calls.get())
+
+    calls.set(0)
+    pets = endpoint(list_pets)
+    show(pets.handler(request("GET", q, "", p)))
+    print("calls after list without user", calls.get())
+    q["user"] = "ann"
+    calls.set(0)
+    show(pets.handler(request("GET", q, "", p)))
+    print("calls after list", calls.get())
+
+    one = endpoint(find)
+    p["id"] = "1"
+    show(one.handler(request("GET", q, "", p)))
+    p["id"] = "9"
+    show(one.handler(request("GET", q, "", p)))
+    show(endpoint(me).handler(request("GET", q, "", p)))
+    q.clear()
+    show(endpoint(me).handler(request("GET", q, "", p)))
+    show(endpoint(whole).handler(request("GET", q, "", p)))
+
+    op = one.operation
+    print(op.operation_id, add.operation.operation_id, len(op.params))
+    for r in op.responses:
+        print(r.status, r.description)
+    for r in add.operation.responses:
+        print(r.status, r.description)
+    print(len(endpoint(list_pets).operation.responses))
+
+main()

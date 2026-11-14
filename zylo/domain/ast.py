@@ -722,6 +722,11 @@ def range_bounds(p: Pattern) -> tuple[int, int]:
 _ANNOTATIONS = {"tys", "variant", "enum", "ty", "var", "vars", "info", "infos", "unwrap", "then_bind", "else_bind", "after_bind", "captures", "inst", "fixed", "slots"}
 
 
+def is_depends(e: "Expr | None") -> bool:
+    """Whether a parameter default is `depends(f)`: the parameter is injected by `endpoint`, not passed by callers."""
+    return isinstance(e, Call) and e.func == "depends"
+
+
 def children(node: Node) -> Iterator[Node]:
     """Direct child nodes (skipping checker annotations such as types and variable infos)."""
     for f in dataclasses.fields(node):

@@ -251,7 +251,11 @@ class Parser:
         out: list[ast.Stmt] = [fn]
         for at, d in decorators:
             call = copy.deepcopy(d)
-            call.args.append(ast.Call("endpoint", [ast.Name(fn.name, line=at.line, col=at.col)], line=at.line, col=at.col))
+            # a success status written on the decorator (`status=201`) is also the endpoint's: copied, not moved
+            moved = [copy.deepcopy(n) for n in call.named if n.name == "status" and isinstance(n.value, ast.Int)
+                     and 200 <= n.value.value <= 299]
+            call.args.append(ast.Call("endpoint", [ast.Name(fn.name, line=at.line, col=at.col)], named=moved,
+                                      line=at.line, col=at.col))
             out.append(ast.ExprStmt(call, sugar=True, line=at.line, col=at.col))
         return out
 

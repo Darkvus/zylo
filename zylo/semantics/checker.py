@@ -41,7 +41,7 @@ from zylo.domain.types import (
     is_copy_type,
 )
 from zylo.semantics.derive import JSON_T, Deriver
-from zylo.semantics.endpoint import EndpointDeriver
+from zylo.semantics.endpoint import HTTP_ERROR, EndpointDeriver
 from zylo.semantics.exhaustive import Pat, Space, lower
 from zylo.semantics.generics import (
     Generic,
@@ -813,6 +813,11 @@ class Checker(GenericMixin, TraitMixin):
                 if previous is not None:
                     raise err(f"{what} {item.name!r} has no default but follows {previous!r}, which has one", item)
                 continue
+            if ast.is_depends(item.default):  # injected by `endpoint`: it is not an optional argument
+                d = item.default
+                if what != "parameter" or len(d.args) != 1 or d.named or not isinstance(d.args[0], ast.Name):
+                    raise err("depends(f) goes in the default of a function parameter and takes the name of a top-level function", d)
+                continue
             previous = previous or item.name
             if not self.is_constant(item.default):
                 raise err("a default value must be a constant: a number, string, true/false, none, an empty list or dict, "
@@ -846,6 +851,38 @@ class Checker(GenericMixin, TraitMixin):
         params = tuple(self.resolve(p.type) for p in f.params)
         self.check_defaults(f.params, "parameter", list(params))
         return FnT(params, ret)
+
+    def plain_fn(self, name: str) -> tuple[ast.FnDef, FnT] | None:
+        """A top-level function `endpoint` can build on: its definition and type, or None for a generic or `extern fn`."""
+        if name in self.fn_defs and name not in self.generics and name not in self.externs:
+            return self.fn_defs[name], self.fns[name]
+        return None
+
+    def check_depends(self, p: ast.Param, ty: Type, owner: str | None) -> None:
+        """Check a parameter whose default is `depends(g)`: `g` is a plain top-level function whose result fits the parameter.
+
+        The parameter's type is what `g` returns, or `T` when `g` returns `Result[T, HttpError]` (an `err` then answers the
+        request instead). The functions `g` itself calls on the way are checked when `endpoint` builds the handler.
+
+        Raises:
+            ZyloError: If the function is a method, or `g` is unknown, generic, an `extern fn`, or returns the wrong type.
+        """
+        target = p.default.args[0]
+        name = target.id
+        if owner:
+            raise err("depends(...) works on top-level functions, not on methods", p.default)
+        if name in self.generics:
+            raise err(f"depends cannot take the generic function {name!r}; write a plain function that calls it", target)
+        if name in self.externs or name not in self.fn_defs:
+            what = "an `extern fn`; wrap it in a plain function" if name in self.externs else "not a top-level function"
+            raise err(f"depends({name.rsplit('·', 1)[-1]}): {name.rsplit('·', 1)[-1]!r} is {what}", target)
+        ret = self.fns[name].ret
+        if ret == UNIT:
+            raise err(f"depends({name.rsplit('·', 1)[-1]}): the function returns nothing, so there is nothing to inject", target)
+        unwrapped = ret.ok if isinstance(ret, ResultT) and isinstance(ret.err, StructT) and ret.err.name == HTTP_ERROR else None
+        if ty != ret and ty != unwrapped:
+            want = f"{ret} or {unwrapped}" if unwrapped is not None else str(ret)
+            raise err(f"parameter {p.name!r} is {ty} but {name.rsplit('·', 1)[-1]} returns {ret}; declare it {want}", p)
 
     def declare_fn(self, f: ast.FnDef) -> None:
         """Record a top-level function (or `extern fn`) so it can be called before it is defined."""
@@ -892,6 +929,8 @@ class Checker(GenericMixin, TraitMixin):
             self_info = self.scopes.declare("self", self.named(owner)) if owner else None
             for p, pt in zip(f.params, sig.params):
                 p.info = self.scopes.declare(p.name, pt)
+                if ast.is_depends(p.default):
+                    self.check_depends(p, pt, owner)
             before = len(self.errors)
             self.block(f.body)
             # a `return` that failed to check is not a missing return: do not pile a second error on the first
@@ -2205,6 +2244,9 @@ class Checker(GenericMixin, TraitMixin):
             raise err(f"{name} is missing {'argument' if len(missing) == 1 else 'arguments'} "
                       f"{', '.join(repr(m) for m in missing)}", e)
         for i, p in enumerate(specs):
+            if slots[i] is None and ast.is_depends(p.default):
+                raise err(f"parameter {p.name!r} of {name} is injected by `endpoint`; pass it explicitly when calling "
+                          f"{name} yourself", e)
             if slots[i] is None:
                 slots[i] = copy.deepcopy(p.default)
         e.named = []
@@ -2229,7 +2271,7 @@ class Checker(GenericMixin, TraitMixin):
         if e.func in self.structs:
             return self.ctor(e)
         if e.func in BUILTINS and not (e.func in SHADOWABLE and e.func in self.fns):
-            if e.named:
+            if e.named and e.func != "endpoint":
                 raise err(f"{e.func} takes positional arguments only", e.named[0])
             return self.builtin(e, expected)
         sig = self.fns.get(e.func)
@@ -2296,8 +2338,15 @@ class Checker(GenericMixin, TraitMixin):
         """
         if not self.endpoints.available:
             raise err("endpoint needs the module std.web; compile a file instead of a string", e)
-        if len(e.args) != 1 or e.named:
-            raise err(f"endpoint takes 1 argument, the name of a function, got {len(e.args)}", e)
+        if len(e.args) != 1 or any(n.name != "status" for n in e.named) or len(e.named) > 1:
+            raise err(f"endpoint takes the name of a function and optionally status=<number>, got {len(e.args)} argument(s)"
+                      + (f" and {e.named[0].name}=" if e.named and e.named[0].name != "status" else ""), e)
+        status = 200
+        if e.named:
+            value = e.named[0].value
+            if not isinstance(value, ast.Int) or not 200 <= value.value <= 299:
+                raise err("status must be a number literal from 200 to 299 (the success status; errors come from HttpError)", value)
+            status = value.value
         arg = e.args[0]
         name = arg.id if isinstance(arg, ast.Name) else None
         if name is None or self.scopes.lookup(name) is not None or name not in self.fn_defs and name not in self.generics:
@@ -2306,11 +2355,11 @@ class Checker(GenericMixin, TraitMixin):
             raise err(f"endpoint cannot take the generic function {name!r}; write a plain function that calls it", arg)
         if name in self.externs:
             raise err(f"endpoint cannot take the `extern fn` {name!r}; wrap it in a plain function", arg)
-        helper = self.endpoints.endpoint(name, self.fn_defs[name], self.fns[name], e)
+        helper = self.endpoints.endpoint(name, self.fn_defs[name], self.fns[name], e, self.plain_fn, status)
         for f in self.deriver.take():
             self.declare_fn(f)
             self.program.body.append(f)
-        e.func, e.args = helper, []
+        e.func, e.args, e.named = helper, [], []
         return self.fns[helper].ret
 
     def type_name(self, e: ast.Call) -> Type:
@@ -2357,6 +2406,8 @@ class Checker(GenericMixin, TraitMixin):
                 return self.type_name(e)
             case "endpoint":
                 return self.endpoint(e)
+            case "depends":
+                raise err("depends(f) can only be the default of a parameter of a function you give to endpoint(...)", e)
             case "print":  # any number of values, separated by spaces
                 for a in args:
                     self.printable(a)

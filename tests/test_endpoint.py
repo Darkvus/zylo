@@ -74,7 +74,7 @@ def test_the_error_of_a_result_must_be_http_error(tmp_path):
 def test_the_argument_must_be_a_top_level_function(tmp_path):
     fails(tmp_path, "e = endpoint(fn(x: int) => x)\n", "name of a top-level function", 1)
     fails(tmp_path, "e = endpoint(3)\n", "name of a top-level function", 1)
-    fails(tmp_path, "fn f() -> int:\n    return 1\ng = fn() => endpoint(f)\nh = endpoint(f, f)\n", "takes 1 argument", 4)
+    fails(tmp_path, "fn f() -> int:\n    return 1\ng = fn() => endpoint(f)\nh = endpoint(f, f)\n", "endpoint takes the name of a function", 4)
 
 
 def test_generic_and_extern_functions_are_rejected(tmp_path):
@@ -190,3 +190,50 @@ def test_endpoints_of_functions_from_other_modules(build, tmp_path):
         "Read one item.",
         "1 1",
     ]
+
+
+@needs_cargo
+def test_depends_status_operation_id_and_error_statuses(build):
+    """Dependencies run once per request; `err` short-circuits; `status=` and the listed error statuses reach the spec."""
+    assert build(PROGRAMS / "endpoint_depends.zy") == (PROGRAMS / "endpoint_depends.expected").read_text()
+
+
+# ---- depends(g) ---------------------------------------------------------------------------------------------------
+
+DEP = "fn dep() -> int:\n    return 1\n"
+
+
+def test_depends_checks(tmp_path):
+    fails(tmp_path, DEP + "fn f(x: str = depends(dep)) -> int:\n    return 1\n", "parameter 'x' is str but dep returns int")
+    fails(tmp_path, DEP + "fn f(x: int = depends(nope)) -> int:\n    return 1\n", "not a top-level function")
+    fails(tmp_path, "fn f[T](x: T) -> T:\n    return x\nfn g(x: int = depends(f)) -> int:\n    return 1\n", "generic function")
+    fails(tmp_path, "fn dep() -> Result[int, web.HttpError]:\n    return ok(1)\nfn f(x: str = depends(dep)) -> int:\n    return 1\n",
+          "declare it Result\\[int, std.web.HttpError\\] or int")
+    fails(tmp_path, "fn dep():\n    pass\nfn f(x: int = depends(dep)) -> int:\n    return 1\n", "returns nothing")
+    fails(tmp_path, "x = depends(3)\n", "can only be the default of a parameter")
+    fails(tmp_path, DEP + "fn f(x: int = depends(dep)) -> int:\n    return 1\nf()\n", "injected by `endpoint`")
+
+
+def test_a_dependency_may_only_take_request_and_depends_parameters(tmp_path):
+    src = "fn dep(n: int) -> int:\n    return n\nfn f(x: int = depends(dep)) -> int:\n    return x\ne = endpoint(f)\n"
+    e = fails(tmp_path, src, "the dependency dep has the parameter 'n'")
+    assert "not merged" in str(e)
+
+
+def test_a_dependency_cycle_is_an_error(tmp_path):
+    src = ("fn a(x: int = depends(b)) -> int:\n    return x\nfn b(y: int = depends(a)) -> int:\n    return y\n"
+           "fn f(z: int = depends(a)) -> int:\n    return z\ne = endpoint(f)\n")
+    fails(tmp_path, src, "dependency cycle: a -> b -> a")
+
+
+def test_status_must_be_a_success_literal(tmp_path):
+    fails(tmp_path, DEP + "e = endpoint(dep, status=404)\n", "from 200 to 299")
+    fails(tmp_path, DEP + "e = endpoint(dep, code=201)\n", "optionally status")
+
+
+def test_a_decorator_success_status_is_also_the_endpoints():
+    prog = parse("@app.post('/', status=201)\nfn f() -> int:\n    return 1\n")
+    call = prog.body[1].expr
+    assert call.named[0].name == "status" and call.args[1].named[0].value.value == 201
+    other = parse("@app.post('/', status=404)\nfn f() -> int:\n    return 1\n").body[1].expr
+    assert other.args[1].named == []  # only a success status literal is copied
