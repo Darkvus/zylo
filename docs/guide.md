@@ -44,7 +44,8 @@ There is **no implicit coercion**: `1 + 2.0` is an error. Convert explicitly wit
 `x = 1` declares `x` the first time and reassigns it afterwards (the type cannot change).
 Annotate when you want to be explicit, or when the type cannot be inferred (an empty list).
 Variables are scoped to their block: one declared inside an `if` or loop does not exist after it.
-Functions only see their own parameters and locals, never top-level variables.
+Functions only see their own parameters and locals, never top-level variables; to share a value with them, define a
+[`const`](#constants-module-level-bindings).
 
 ```zylo
 total = 0
@@ -309,6 +310,51 @@ and structs holding cells still compare and print. Assigning a cell (`b = a`) or
 the handle. Two cells are equal when their values are equal (identity does not matter), and a cell prints as
 `Cell(value)`. A cell is not JSON data: `to_json` rejects a struct that holds one. Cells are single-threaded (they are
 `Rc<RefCell<T>>`); the server in `std.http` runs handlers on one thread, so handlers can share a cell.
+
+### Constants: module-level bindings
+
+A function cannot see the variables of the top level, but it can see a **`const`**: a module-level binding written
+`const NAME = value` (or `const NAME: T = value`) at the top level of a file.
+
+```zylo
+struct Pet:
+    id: int
+    name: str
+
+const limit = 10
+const greeting = "hello " + "world"
+const store: Cell[list[Pet]] = cell([])      # shared, mutable state lives in a Cell
+
+fn add(p: Pet):
+    pets = store.get()
+    pets.append(p)
+    store.set(pets)
+
+fn how_many() -> int:
+    return len(store.get())
+
+add(Pet(1, "rex"))
+print(how_many(), limit)                    # 1 10
+```
+
+The rules:
+
+- **Where**: only at the top level of a module (a `const` inside a function, `if` or loop is a syntax error). Every
+  function, method and closure of the module reads it by its name; a parameter or local with the same name hides it.
+- **The value** is computed once, the first time it is read, so it can only build data: literals, operators, list,
+  dict, set and tuple literals, struct and enum-variant constructors, `cell(...)`, `some`, `ok`, `err`, and **the
+  constants defined above it**. Calling a function or a method, an f-string, a closure or a variable is an error. So
+  constants cannot depend on each other in a cycle: a value can only use constants that come before it.
+- **Reading** a constant gives a copy of its value, like reading a variable. It cannot be reassigned or modified in
+  place (`x = 2`, `xs.append(1)`, `p.a = 2` are errors, at the top level too). A `Cell` is how a constant holds state
+  that changes: the constant (the handle) never changes, `store.set(...)` and `store.update(...)` change what it holds.
+  An empty collection needs the annotation (`const names: Cell[list[str]] = cell([])`).
+- **Modules**: constants of a library module are importable like functions (`import lib` then `lib.store`, or
+  `from lib import store`); a name starting with `_` is private. All the importers see the same cell. A constant has
+  to be of the module that defines it: assigning to an imported one is an error.
+- **Threads**: a constant compiles to a Rust `thread_local!` (consistent with `Cell` being `Rc<RefCell<T>>`), so every
+  thread has its own copy. The `std.http` server runs handlers on the thread that called `serve`, so handlers share
+  the state of the constants initialised there. Zylo has no threads of its own.
 
 ### Calling function values
 
@@ -1478,6 +1524,7 @@ How each parameter is read:
 | `T?` of these | optional; `none` when missing |
 | a struct, enum, `Json`, list or dict | the JSON request body (at most one); required unless it has a default |
 | `Request` | the raw request |
+| default `depends(g)` | a dependency, see [Dependencies](#dependencies-depends) |
 
 Anything else (a tuple, a set, a `Cell`, a function) is a compile error naming the parameter. Query values are
 converted with `int`, `float`, `bool` (`true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`) or as they are.
@@ -1494,8 +1541,66 @@ What the handler answers:
   is not JSON answers `400` with `{"detail": "invalid JSON body: ..."}`.
 
 The handler and the `Endpoint` constructor are ordinary Zylo functions written by the checker (`_zw_h_*`, `_zw_ep_*`),
-like the helpers of typed JSON, so they work across modules and are checked and compiled like user code. Dependencies
-(`depends(...)`) are not part of `endpoint`.
+like the helpers of typed JSON, so they work across modules and are checked and compiled like user code.
+
+### Success status, operation id and error statuses
+
+- `endpoint(f, status=201)` sets the success status: the handler answers it and the operation's success
+  `ResponseSpec` has it. It must be a number literal from 200 to 299 (default 200). A decorator that says
+  `status=201` (`@pets.post("/", status=201)`) is still passed to the route function as written, and a success status
+  literal is also given to `endpoint(f, status=...)`, so the handler answers 201 too; the route function must declare
+  a `status` parameter, as before.
+- `operation.operation_id` is the function's name (the part after the module prefix).
+- For a function that returns `Result[T, HttpError]` (or uses a dependency that does), `operation.responses` also
+  lists one entry per status found in `HttpError(404, ...)` constructors written in the function's own body (and in the
+  dependencies it uses), described by the standard reason phrase (`Not Found`). Only a number literal as the first
+  argument (or `status=`) is detected; an `HttpError` built elsewhere or with a computed status is still answered but
+  not listed.
+
+### Dependencies: `depends`
+
+A parameter whose default is `depends(g)` is not read from the request: the handler calls `g` and passes the result.
+
+```zylo
+import std.web as web
+from std.http import Request
+
+struct Pet:
+    id: int
+    name: str
+
+const store: Cell[list[Pet]] = cell([])
+
+fn get_store() -> list[Pet]:
+    return store.get()
+
+fn current_user(req: Request) -> Result[str, web.HttpError]:
+    match req.query.get("user"):
+        some(name):
+            return ok(name)
+        none:
+            return err(web.HttpError(401, "who are you?"))
+
+fn list_pets(limit: int = 10, pets: list[Pet] = depends(get_store), user: str = depends(current_user)) -> list[Pet]:
+    return pets
+
+ep = endpoint(list_pets)
+```
+
+- `g` is a top-level function (not generic, not an `extern fn`) that returns a value. Its own parameters may only be a
+  `Request` and further `depends(...)` parameters; any other parameter is a compile error, because **a dependency's
+  own query, path and body parameters are not merged into the endpoint's operation in this version**.
+- It runs **once per request**: the handler calls each distinct dependency once, dependencies before their
+  dependents, and every parameter or dependency that names it receives that same value. (The order is known at compile
+  time, so there is no run-time cache.) Dependency cycles are a compile error.
+- The parameter's type is what `g` returns. If `g` returns `Result[T, HttpError]`, the parameter may be declared `T`
+  (an `err` answers the request with its status and `{"detail": ...}` and the function is not called) or the whole
+  `Result` (the function sees the outcome itself). Any other type is a compile error.
+- Dependencies run after the parameters were read and validated: bad input answers 422 before any dependency runs.
+- Dependency parameters are not part of the operation (no `Param`, no request body).
+- `depends(g)` only means something in a function given to `endpoint`. Calling such a function yourself must pass the
+  parameter explicitly; leaving it out is an error. A dependency parameter does not count as optional for the rule that
+  required parameters cannot follow optional ones. `depends` is a built-in name (no import) and cannot be redefined.
 
 ### Decorators
 
@@ -1627,11 +1732,12 @@ trust rules are in [rust-interop.md](rust-interop.md).
 | `exit(code)` | stop the program with an exit code |
 | `cell(v)` | a shared mutable `Cell[T]`, see above |
 | `to_json(x)`, `from_json(T, j)`, `json_schema(T)`, `json_schema_defs(T)` | typed JSON, see above |
-| `endpoint(f)` | an HTTP `Endpoint` for the function `f`, see [Endpoints](#endpoints) |
+| `endpoint(f)`, `endpoint(f, status=201)` | an HTTP `Endpoint` for the function `f`, see [Endpoints](#endpoints) |
+| `depends(g)` | only as a parameter default of a function given to `endpoint`: injects the result of `g`, see [Endpoints](#endpoints) |
 | `range(n)`, `range(a, b)` | only in a `for` |
 
 A program may define its own function with the name of any built-in above except the core ones
-(`print`, `len`, `int`, `float`, `str`, `append`, `range`, `exit`, `some`, `ok`, `err`) `endpoint` and the typed JSON built-ins.
+(`print`, `len`, `int`, `float`, `str`, `append`, `range`, `exit`, `some`, `ok`, `err`), `endpoint`, `depends` and the typed JSON built-ins.
 
 ## Runtime errors
 

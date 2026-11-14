@@ -41,7 +41,7 @@ from zylo.domain.types import (
     is_copy_type,
 )
 from zylo.semantics.derive import JSON_T, Deriver
-from zylo.semantics.endpoint import EndpointDeriver
+from zylo.semantics.endpoint import HTTP_ERROR, EndpointDeriver
 from zylo.semantics.exhaustive import Pat, Space, lower
 from zylo.semantics.generics import (
     Generic,
@@ -213,6 +213,7 @@ class Checker(GenericMixin, TraitMixin):
         self.deriver = Deriver(self.structs, self.enums, lambda name: name in self.fns)  # typed JSON helpers
         self.endpoints = EndpointDeriver(self.deriver)  # `endpoint(f)` handlers
         self.fn_defs: dict[str, ast.FnDef] = {}  # top-level functions by name, for `endpoint(f)`
+        self.globals: dict[str, VarInfo] = {}  # module-level `const`s by (linked) name
         self.program: ast.Program | None = None  # the program being checked: generated functions are added to it
         # generics (see semantics/generics.py)
         self.generics: dict[str, Generic] = {}  # templates by name
@@ -293,6 +294,13 @@ class Checker(GenericMixin, TraitMixin):
             self.errors.append(e)
             return
         self.check_abstract()
+        for s in prog.body:  # constants before any function body, in order: a value may use the constants above it
+            if isinstance(s, ast.ConstDef):
+                try:
+                    self.check_const(s)
+                except ZyloError as e:
+                    self.errors.append(e)
+                    self.poisoned.add(s.target.id)
         done = 0
         while done < len(prog.body) or self.pending:  # checking can add copies of generics: check those too
             if self.pending:
@@ -304,8 +312,8 @@ class Checker(GenericMixin, TraitMixin):
                 continue
             s = prog.body[done]
             done += 1
-            if isinstance(s, ast.TraitDef):
-                continue  # a trait only exists for the checker
+            if isinstance(s, (ast.TraitDef, ast.ConstDef)):
+                continue  # a trait only exists for the checker; a constant was checked above
             if getattr(s, "tparams", None) or (getattr(s, "origin", None) and self.generics[s.origin].broken):
                 continue  # a template (checked once above, emitted never), or a copy of one that has a mistake
             try:
@@ -805,6 +813,11 @@ class Checker(GenericMixin, TraitMixin):
                 if previous is not None:
                     raise err(f"{what} {item.name!r} has no default but follows {previous!r}, which has one", item)
                 continue
+            if ast.is_depends(item.default):  # injected by `endpoint`: it is not an optional argument
+                d = item.default
+                if what != "parameter" or len(d.args) != 1 or d.named or not isinstance(d.args[0], ast.Name):
+                    raise err("depends(f) goes in the default of a function parameter and takes the name of a top-level function", d)
+                continue
             previous = previous or item.name
             if not self.is_constant(item.default):
                 raise err("a default value must be a constant: a number, string, true/false, none, an empty list or dict, "
@@ -838,6 +851,38 @@ class Checker(GenericMixin, TraitMixin):
         params = tuple(self.resolve(p.type) for p in f.params)
         self.check_defaults(f.params, "parameter", list(params))
         return FnT(params, ret)
+
+    def plain_fn(self, name: str) -> tuple[ast.FnDef, FnT] | None:
+        """A top-level function `endpoint` can build on: its definition and type, or None for a generic or `extern fn`."""
+        if name in self.fn_defs and name not in self.generics and name not in self.externs:
+            return self.fn_defs[name], self.fns[name]
+        return None
+
+    def check_depends(self, p: ast.Param, ty: Type, owner: str | None) -> None:
+        """Check a parameter whose default is `depends(g)`: `g` is a plain top-level function whose result fits the parameter.
+
+        The parameter's type is what `g` returns, or `T` when `g` returns `Result[T, HttpError]` (an `err` then answers the
+        request instead). The functions `g` itself calls on the way are checked when `endpoint` builds the handler.
+
+        Raises:
+            ZyloError: If the function is a method, or `g` is unknown, generic, an `extern fn`, or returns the wrong type.
+        """
+        target = p.default.args[0]
+        name = target.id
+        if owner:
+            raise err("depends(...) works on top-level functions, not on methods", p.default)
+        if name in self.generics:
+            raise err(f"depends cannot take the generic function {name!r}; write a plain function that calls it", target)
+        if name in self.externs or name not in self.fn_defs:
+            what = "an `extern fn`; wrap it in a plain function" if name in self.externs else "not a top-level function"
+            raise err(f"depends({name.rsplit('·', 1)[-1]}): {name.rsplit('·', 1)[-1]!r} is {what}", target)
+        ret = self.fns[name].ret
+        if ret == UNIT:
+            raise err(f"depends({name.rsplit('·', 1)[-1]}): the function returns nothing, so there is nothing to inject", target)
+        unwrapped = ret.ok if isinstance(ret, ResultT) and isinstance(ret.err, StructT) and ret.err.name == HTTP_ERROR else None
+        if ty != ret and ty != unwrapped:
+            want = f"{ret} or {unwrapped}" if unwrapped is not None else str(ret)
+            raise err(f"parameter {p.name!r} is {ty} but {name.rsplit('·', 1)[-1]} returns {ret}; declare it {want}", p)
 
     def declare_fn(self, f: ast.FnDef) -> None:
         """Record a top-level function (or `extern fn`) so it can be called before it is defined."""
@@ -884,6 +929,8 @@ class Checker(GenericMixin, TraitMixin):
             self_info = self.scopes.declare("self", self.named(owner)) if owner else None
             for p, pt in zip(f.params, sig.params):
                 p.info = self.scopes.declare(p.name, pt)
+                if ast.is_depends(p.default):
+                    self.check_depends(p, pt, owner)
             before = len(self.errors)
             self.block(f.body)
             # a `return` that failed to check is not a missing return: do not pile a second error on the first
@@ -1294,8 +1341,64 @@ class Checker(GenericMixin, TraitMixin):
                           f"loop over the indexes (`for i in range(len(...))`, then `xs[i].field = ...`), or use the "
                           f"copy afterwards (append it to a new list)", s)
 
+    CONST_VALUES = (ast.Int, ast.Float, ast.Str, ast.Bool, ast.NoneLit, ast.BinOp, ast.UnaryOp, ast.ListLit, ast.DictLit,
+                    ast.SetLit, ast.TupleLit, ast.Index, ast.Attr, ast.NamedArg, ast.TypeRef)
+
+    def check_const(self, s: ast.ConstDef) -> None:
+        """Check a `const`: its value is built from literals, constructors and earlier constants, then it is a global.
+
+        Args:
+            s: The constant.
+
+        Raises:
+            ZyloError: If the value calls a function or uses a variable, or its type does not match the annotation.
+        """
+        name = s.target.id
+        shown = name.rsplit("·", 1)[-1]
+        if name in self.globals:
+            raise err(f"{shown!r} is already defined", s)
+        self.check_const_value(s.value, shown)
+        declared = self.resolve(s.annotation) if s.annotation else None
+        t = self.expr(s.value, declared)
+        if declared is not None and t != declared:
+            raise err(f"{shown!r} is {declared} but {t} is assigned", s.value)
+        if t == UNIT or isinstance(t, FnT):
+            raise err(f"the value of a constant must be data, not {'nothing' if t == UNIT else 'a function'}", s.value)
+        s.var = self.globals[name] = VarInfo(name, t, captured=True, glob=True)
+        s.target.ty = t
+
+    def check_const_value(self, e: ast.Expr, shown: str) -> None:
+        """Reject what a constant's value may not hold: it is computed once, so it only builds data.
+
+        Allowed: literals, operators, list/dict/set/tuple literals, struct and enum constructors, `cell`, `some`, `ok`,
+        `err`, and the constants defined above it. Anything else (function calls, methods, closures, variables,
+        interpolated strings) is an error.
+        """
+        for n in ast.walk(e):
+            if isinstance(n, ast.Name):
+                if n.id not in self.globals and n.id not in self.enums and not (n.id in self.generics and self.generics[n.id].kind == "enum"):
+                    what = ("a function" if n.id in self.fns or n.id in self.generics else "not a constant defined above it")
+                    raise err(f"the value of constant {shown!r} cannot use {n.id.rsplit('·', 1)[-1]!r}: it is {what}", n)
+            elif isinstance(n, ast.Call):
+                ok = n.func in ("cell", "some", "ok", "err") or n.func in self.structs or (
+                    n.func in self.generics and self.generics[n.func].kind == "struct")
+                if not ok:
+                    raise err(f"the value of constant {shown!r} cannot call {n.func.rsplit('·', 1)[-1]!r}: only constructors "
+                              f"(structs, enum variants, `cell`, `some`, `ok`, `err`) run in a constant", n)
+            elif isinstance(n, ast.MethodCall):
+                base = n.value
+                if not (isinstance(base, ast.Name) and (base.id in self.enums or base.id in self.generics)):
+                    raise err(f"the value of constant {shown!r} cannot call a method: only enum variants can be built here", n)
+            elif not isinstance(n, self.CONST_VALUES):
+                raise err(f"this expression cannot be the value of constant {shown!r}: use literals, collections, constructors "
+                          f"and other constants", n)
+
     def captured_error(self, name: str, node: ast.Node) -> ZyloError:
-        """The error for modifying a variable that a closure captured."""
+        """The error for modifying a variable that a closure captured, or a constant."""
+        if name in self.globals and self.scopes.lookup(name) is None:
+            shown = name.rsplit("·", 1)[-1]
+            return err(f"cannot modify the constant {shown!r}: a `const` is fixed once defined; hold changing state in a "
+                       f"`Cell` (`const {shown} = cell(...)`, then `{shown}.set(...)`)", node)
         return err(f"cannot modify {name!r} inside a function that captured it: closures capture a copy of the variables "
                    f"they use, so the change would be lost; share state with a `Cell` (`c = cell(0)`, then `c.set(...)`) or return the new value", node)
 
@@ -1318,7 +1421,7 @@ class Checker(GenericMixin, TraitMixin):
                 found, info = i, self.scopes.stack[i][name]
                 break
         if info is None:
-            return None
+            return self.globals.get(name)  # a module-level `const`: visible everywhere, never captured
         info.uses.add(id(node))
         for frame in self.closures:  # outermost first, so a nested closure copies the outer closure's copy
             if frame.base > found:
@@ -2141,6 +2244,9 @@ class Checker(GenericMixin, TraitMixin):
             raise err(f"{name} is missing {'argument' if len(missing) == 1 else 'arguments'} "
                       f"{', '.join(repr(m) for m in missing)}", e)
         for i, p in enumerate(specs):
+            if slots[i] is None and ast.is_depends(p.default):
+                raise err(f"parameter {p.name!r} of {name} is injected by `endpoint`; pass it explicitly when calling "
+                          f"{name} yourself", e)
             if slots[i] is None:
                 slots[i] = copy.deepcopy(p.default)
         e.named = []
@@ -2165,7 +2271,7 @@ class Checker(GenericMixin, TraitMixin):
         if e.func in self.structs:
             return self.ctor(e)
         if e.func in BUILTINS and not (e.func in SHADOWABLE and e.func in self.fns):
-            if e.named:
+            if e.named and e.func != "endpoint":
                 raise err(f"{e.func} takes positional arguments only", e.named[0])
             return self.builtin(e, expected)
         sig = self.fns.get(e.func)
@@ -2232,8 +2338,15 @@ class Checker(GenericMixin, TraitMixin):
         """
         if not self.endpoints.available:
             raise err("endpoint needs the module std.web; compile a file instead of a string", e)
-        if len(e.args) != 1 or e.named:
-            raise err(f"endpoint takes 1 argument, the name of a function, got {len(e.args)}", e)
+        if len(e.args) != 1 or any(n.name != "status" for n in e.named) or len(e.named) > 1:
+            raise err(f"endpoint takes the name of a function and optionally status=<number>, got {len(e.args)} argument(s)"
+                      + (f" and {e.named[0].name}=" if e.named and e.named[0].name != "status" else ""), e)
+        status = 200
+        if e.named:
+            value = e.named[0].value
+            if not isinstance(value, ast.Int) or not 200 <= value.value <= 299:
+                raise err("status must be a number literal from 200 to 299 (the success status; errors come from HttpError)", value)
+            status = value.value
         arg = e.args[0]
         name = arg.id if isinstance(arg, ast.Name) else None
         if name is None or self.scopes.lookup(name) is not None or name not in self.fn_defs and name not in self.generics:
@@ -2242,11 +2355,11 @@ class Checker(GenericMixin, TraitMixin):
             raise err(f"endpoint cannot take the generic function {name!r}; write a plain function that calls it", arg)
         if name in self.externs:
             raise err(f"endpoint cannot take the `extern fn` {name!r}; wrap it in a plain function", arg)
-        helper = self.endpoints.endpoint(name, self.fn_defs[name], self.fns[name], e)
+        helper = self.endpoints.endpoint(name, self.fn_defs[name], self.fns[name], e, self.plain_fn, status)
         for f in self.deriver.take():
             self.declare_fn(f)
             self.program.body.append(f)
-        e.func, e.args = helper, []
+        e.func, e.args, e.named = helper, [], []
         return self.fns[helper].ret
 
     def type_name(self, e: ast.Call) -> Type:
@@ -2293,6 +2406,8 @@ class Checker(GenericMixin, TraitMixin):
                 return self.type_name(e)
             case "endpoint":
                 return self.endpoint(e)
+            case "depends":
+                raise err("depends(f) can only be the default of a parameter of a function you give to endpoint(...)", e)
             case "print":  # any number of values, separated by spaces
                 for a in args:
                     self.printable(a)

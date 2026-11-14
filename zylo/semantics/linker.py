@@ -20,7 +20,7 @@ from zylo.syntax.parser import parse, parse_collect
 SEP = "·"  # `·`
 TYPE_KINDS = ("struct", "enum", "trait")  # what a written type name may refer to (a trait only as a bound or a base)
 RESERVED_TYPES = set(PRIMS) | {"list", "unit", "Result", "Cell"}
-DEFINITIONS = (ast.FnDef, ast.StructDef, ast.EnumDef, ast.TraitDef)  # what a library module may define
+DEFINITIONS = (ast.FnDef, ast.StructDef, ast.EnumDef, ast.TraitDef, ast.ConstDef)  # what a library module may define
 
 
 @dataclass
@@ -31,7 +31,7 @@ class Module:
         id: Dotted module id (empty for the entry file).
         path: The file.
         program: Its parsed statements.
-        defs: Top-level names it defines, mapped to "fn" or "struct".
+        defs: Top-level names it defines, mapped to "fn", "struct", "enum", "trait" or "const".
         aliases: Names bound by `import a.b [as c]`.
         froms: Names bound by `from a import x [as y]`.
         pubs: The names in `froms` that `pub from` re-exports as part of this module's public surface.
@@ -204,7 +204,7 @@ class Linker:
                 prog.body = [s for s in prog.body if isinstance(s, (ast.Import, ast.FromImport, *DEFINITIONS))]
             for s in prog.body:
                 if not isinstance(s, (ast.Import, ast.FromImport, *DEFINITIONS)):
-                    raise err("library modules can only contain imports, functions, structs, enums and traits", s, path)
+                    raise err("library modules can only contain imports, constants, functions, structs, enums and traits", s, path)
         self.check_trust(mod)
         self.collect_defs(mod)
         for s in prog.body:
@@ -295,6 +295,14 @@ class Linker:
         for s in mod.program.body:
             if not isinstance(s, DEFINITIONS):
                 continue
+            if isinstance(s, ast.ConstDef):
+                name = s.target.id
+                if name in mod.defs:
+                    raise err(f"{name!r} is already defined in this module", s, mod.path)
+                if not mod.is_entry and (name in BUILTINS - SHADOWABLE or name in RESERVED_TYPES):
+                    raise err(f"{name!r} is a reserved name", s, mod.path)
+                mod.defs[name] = "const"
+                continue
             kind = ("fn" if isinstance(s, ast.FnDef) else "struct" if isinstance(s, ast.StructDef)
                     else "enum" if isinstance(s, ast.EnumDef) else "trait")
             if s.name in mod.defs:
@@ -362,7 +370,7 @@ class Linker:
         kinds = (kind,) if isinstance(kind, str) else kind
         if found is None:
             what = ("struct, enum or trait" if kinds == TYPE_KINDS else "struct or enum" if kinds == ("struct", "enum")
-                    else {"struct": "struct", "enum": "enum", "fn": "function", "trait": "trait"}.get(kind or "", "function, struct or enum"))
+                    else {"struct": "struct", "enum": "enum", "fn": "function", "trait": "trait", "const": "constant"}.get(kind or "", "function, struct or enum"))
             raise err(f"module {dep.display!r} has no {what} {name!r}", node, importer.path)
         if kinds and found not in kinds:
             raise err(f"{name!r} in module {dep.display!r} is a {found}, not a {' or '.join(kinds)}", node, importer.path)
@@ -389,13 +397,42 @@ class Linker:
         for s in mod.program.body:
             if isinstance(s, (ast.Import, ast.FromImport)):
                 continue
+            self.reject_global_assignment(s, mod)
             self.locals = local_names(s)
             self.tparams = {p.name for p in getattr(s, "tparams", [])}
             self.rw(s, mod)
-            if isinstance(s, DEFINITIONS):
+            if isinstance(s, ast.ConstDef):
+                s.target.id = mod.mangled(s.target.id)
+            elif isinstance(s, DEFINITIONS):
                 if not isinstance(s, ast.FnDef) and not mod.is_entry:
                     s.display = s.name
                 s.name = mod.mangled(s.name)
+
+    def reject_global_assignment(self, stmt: ast.Stmt, mod: Module) -> None:
+        """A constant cannot be reassigned: `x = ...` where `x` is a constant and nothing in the definition binds `x` itself.
+
+        A parameter, loop variable or pattern binding with the constant's name hides it, and assigning to that is fine.
+        """
+        consts = {n for n, k in mod.defs.items() if k == "const"}
+        consts |= {n for n, (dep, orig) in mod.froms.items() if self.kind_of(dep, orig) == "const"}
+        if not consts:
+            return
+        bound: set[str] = set()
+        for n in ast.walk(stmt):
+            if isinstance(n, ast.Param):
+                bound.add(n.name)
+            elif isinstance(n, ast.For):
+                bound.update(n.targets or [n.var])
+            elif isinstance(n, ast.Unpack):
+                bound.update(t.id for t in n.targets)
+            elif isinstance(n, ast.Pattern) and n.kind == "bind":
+                bound.add(n.name)
+        for n in ast.walk(stmt):
+            if isinstance(n, ast.Assign) and not isinstance(n, ast.ConstDef) and isinstance(n.target, ast.Name):
+                name = n.target.id
+                if name in consts and name not in bound:
+                    raise err(f"cannot assign to the constant {name!r}: a `const` is fixed once defined; hold changing state "
+                              f"in a `Cell` (`const {name} = cell(...)`, then `{name}.set(...)`)", n, mod.path)
 
     def rw(self, node: ast.Node, mod: Module) -> ast.Node:
         """Rewrite one node (and its children) for linking.
@@ -431,8 +468,8 @@ class Linker:
             if self.kind_of(dep, node.name) == "enum":  # `module.Enum` in `module.Enum.Variant`
                 return ast.Name(self.export(dep, node.name, node, mod, kind="enum"), targs=[self.rw(t, mod) for t in node.targs],
                                 line=node.line, col=node.col, file=node.file)
-            if self.kind_of(dep, node.name) == "fn":  # `module.function` used as a value
-                return ast.Name(self.export(dep, node.name, node, mod, kind="fn"), targs=[self.rw(t, mod) for t in node.targs],
+            if self.kind_of(dep, node.name) in ("fn", "const"):  # `module.function` or `module.CONSTANT` used as a value
+                return ast.Name(self.export(dep, node.name, node, mod, kind=self.kind_of(dep, node.name)), targs=[self.rw(t, mod) for t in node.targs],
                                 line=node.line, col=node.col, file=node.file)
             raise err(f"module {node.value.id!r} has no values; call a function: {node.value.id}.name(...)", node, mod.path)
         if isinstance(node, ast.Name) and node.id in mod.aliases:
@@ -444,12 +481,12 @@ class Linker:
             elif node.id in mod.froms and self.kind_of(*mod.froms[node.id]) == "enum":
                 dep, orig = mod.froms[node.id]
                 node.id = self.export(dep, orig, node, mod, kind="enum")
-            elif node.id not in self.locals:  # a function of this module, or imported by name, used as a value
-                if mod.defs.get(node.id) == "fn":
+            elif node.id not in self.locals:  # a function or constant of this module, or imported by name
+                if mod.defs.get(node.id) in ("fn", "const"):
                     node.id = mod.mangled(node.id)
-                elif node.id in mod.froms and self.kind_of(*mod.froms[node.id]) == "fn":
+                elif node.id in mod.froms and self.kind_of(*mod.froms[node.id]) in ("fn", "const"):
                     dep, orig = mod.froms[node.id]
-                    node.id = self.export(dep, orig, node, mod, kind="fn")
+                    node.id = self.export(dep, orig, node, mod, kind=self.kind_of(dep, orig))
             return node
         for f in dataclasses.fields(node):
             if f.name in ast._ANNOTATIONS:

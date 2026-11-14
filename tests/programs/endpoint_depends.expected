@@ -1,0 +1,20 @@
+201 {"id":1,"name":"rex"}
+422 {"detail":[{"loc":["body","name"],"msg":"missing required field","type":"missing"}]}
+calls 1
+401 {"detail":"who are you?"}
+calls after list without user 1
+200 [{"id":1,"name":"rex"}]
+calls after list 1
+200 {"id":1,"name":"rex"}
+404 {"detail":"no such pet"}
+200 "ann"
+401 {"detail":"who are you?"}
+200 "err"
+find add_pet 1
+200 Successful Response
+422 Validation Error
+400 Bad Request
+404 Not Found
+201 Successful Response
+422 Validation Error
+2

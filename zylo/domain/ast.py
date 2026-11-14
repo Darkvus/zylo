@@ -358,6 +358,15 @@ class Assign(Node):
 
 
 @dataclass
+class ConstDef(Assign):
+    """`const NAME = value` / `const NAME: T = value`: a module-level binding every function of the module can read.
+
+    The value is computed once, the first time it is needed; it cannot be reassigned. Shared mutable state lives in a
+    `Cell` held by the constant (`const store = cell([])`). See docs/guide.md ("Constants").
+    """
+
+
+@dataclass
 class If(Node):
     """An `if` / `elif` / `else` statement (an `elif` is a nested `If` in `else_`).
 
@@ -678,7 +687,7 @@ class FromImport(Node):
     pub: bool = False
 
 
-Stmt = (ExprStmt | Assign | Unpack | If | While | For | Return | Break | Continue | Pass | FnDef | StructDef
+Stmt = (ExprStmt | Assign | ConstDef | Unpack | If | While | For | Return | Break | Continue | Pass | FnDef | StructDef
         | EnumDef | TraitDef | Match | Import | FromImport)
 
 
@@ -711,6 +720,11 @@ def range_bounds(p: Pattern) -> tuple[int, int]:
 # ---- generic traversal -----------------------------------------------------------------------
 
 _ANNOTATIONS = {"tys", "variant", "enum", "ty", "var", "vars", "info", "infos", "unwrap", "then_bind", "else_bind", "after_bind", "captures", "inst", "fixed", "slots"}
+
+
+def is_depends(e: "Expr | None") -> bool:
+    """Whether a parameter default is `depends(f)`: the parameter is injected by `endpoint`, not passed by callers."""
+    return isinstance(e, Call) and e.func == "depends"
 
 
 def children(node: Node) -> Iterator[Node]:

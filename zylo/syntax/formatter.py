@@ -619,6 +619,8 @@ class _Formatter:
                 ret = f" -> {type_text(lam.ret)}" if lam.ret else ""
                 self.header(s, indent, self.wrap_signature(indent, f"fn {lam.name}", params, ret, 1), first_in_block)
                 self.block(lam.body, indent + 1)
+            case ast.ConstDef():
+                self.line(s.line, indent, "const " + self.assign_text(s, indent), first_in_block)
             case ast.Assign():
                 self.line(s.line, indent, self.assign_text(s, indent), first_in_block)
             case ast.Unpack(targets, value):

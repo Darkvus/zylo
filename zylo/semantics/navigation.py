@@ -409,6 +409,7 @@ class FileIndex:
         self.aliases: dict[str, ModuleBinding] = {}
         self.froms: dict[str, FromBinding] = {}
         self.pubs: set[str] = set()
+        self.consts: dict[str, ast.ConstDef] = {}
         self.globals: set[str] = set()
         self.collect()
 
@@ -458,6 +459,8 @@ class FileIndex:
                 self.collect_from(s)
             elif isinstance(s, ast.Assign) and isinstance(s.target, ast.Name):
                 self.globals.add(s.target.id)
+                if isinstance(s, ast.ConstDef):
+                    self.consts.setdefault(s.target.id, s)
             elif isinstance(s, ast.Unpack):
                 self.globals.update(t.id for t in s.targets)
 
@@ -533,6 +536,9 @@ class FileIndex:
             return self.local_import(name)
         if name in self.aliases:
             return self.module_entity(name)
+        if name in self.consts:  # a `const` is visible inside every function of the file
+            t = self.consts[name].target
+            return Entity("variable", name, ("var", self.path, t.line, t.col), self.path, t.line, t.col)
         return None
 
 
