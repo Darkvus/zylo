@@ -773,3 +773,11 @@ def test_a_default_value_can_use_enum_variants_and_is_resolved(solo):
     w = solo("enum C:\n    Red\n    Blue\n\nfn paint(c: C = C.Red) -> int:\n    return 1\n")
     assert w.definition("doc.zy", "Red)") == [("doc.zy", 1, 4)]
     assert w.definition("doc.zy", "C = ") == [("doc.zy", 0, 5)]
+
+
+def test_hover_shows_a_function_and_method_doc_string(solo):
+    w = solo('fn add(a: int, b: int) -> int:\n    "Adds two numbers."\n    return a + b\n\n'
+             'struct P:\n    x: int\n\n    fn get(self) -> int:\n        "The x."\n        return self.x\n\n'
+             'fn main():\n    p = P(x=1)\n    print(add(1, 2))\n    print(p.get())\n')
+    assert "Adds two numbers." in w.hover("doc.zy", "add", 1)
+    assert "The x." in w.hover("doc.zy", "get", 1)

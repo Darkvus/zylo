@@ -1,0 +1,18 @@
+fn add(a: int, b: int) -> int:
+    "Adds two numbers."
+    return a + b
+
+fn note():
+    "Only a doc string: the body does nothing."
+
+struct Counter:
+    n: int
+
+    fn bump(self) -> int:
+        "Returns the next number."
+        return self.n + 1
+
+note()
+c = Counter(n=4)
+print(add(1, 2))
+print(c.bump())

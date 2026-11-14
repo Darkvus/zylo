@@ -594,14 +594,14 @@ class _Formatter:
 
     # -- statements --
 
-    def block(self, body: list[ast.Stmt], indent: int, top: bool = False) -> None:
-        """Write a list of statements."""
+    def block(self, body: list[ast.Stmt], indent: int, top: bool = False, first: bool = True) -> None:
+        """Write a list of statements; `first` is False when a doc string was already written above them."""
         previous_def = False
         for n, s in enumerate(body):
             is_def = isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef, ast.TraitDef))
             if top and n and (is_def or previous_def):
                 self.blank()
-            self.stmt(s, indent, first_in_block=n == 0 and not top)
+            self.stmt(s, indent, first_in_block=n == 0 and not top and first)
             previous_def = is_def
 
     def header(self, s: ast.Stmt, indent: int, text: str, first_in_block: bool) -> None:
@@ -644,7 +644,9 @@ class _Formatter:
                 self.line(s.line, indent, "extern " + self.signature(s, indent, len(tail), 7) + tail, first_in_block)
             case ast.FnDef():
                 self.header(s, indent, self.signature(s, indent, 1), first_in_block)
-                self.block(s.body, indent + 1)
+                if s.doc is not None:
+                    self.line(s.doc_line, indent + 1, quote(s.doc), first_in_block=True)
+                self.block(s.body, indent + 1, first=s.doc is None)
             case ast.StructDef():
                 self.struct(s, indent, first_in_block)
             case ast.EnumDef():

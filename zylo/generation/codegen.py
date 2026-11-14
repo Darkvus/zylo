@@ -617,6 +617,9 @@ class Gen:
         ]
         ret = "" if f.ty.ret == UNIT else f" -> {rust_type(f.ty.ret)}"
         name = mident(f.name) if f.has_self else ident(f.name)
+        if f.doc is not None:
+            for text in f.doc.splitlines() or [""]:
+                self.line(f"/// {text}".rstrip())
         self.line(f"fn {name}({', '.join(params)}){ret} {{")
         self.block(f.body)
         self.line("}")
