@@ -25,7 +25,7 @@ class Symbol:
 
     Attributes:
         name: Its name.
-        kind: "function", "struct", "enum", "trait", "method", "field", "variant" or "variable".
+        kind: "function", "struct", "enum", "trait", "method", "field", "variant", "variable" or "constant".
         line: 1-based line where it starts.
         col: 1-based column of its name.
         end_line: 1-based last line it occupies.
@@ -112,7 +112,7 @@ def document_symbols(source: str) -> list[Symbol]:
             kind_line = at(s.line)
             sym = Symbol(s.name, "function", s.line, _name_col(kind_line, s.name, s.col), end_of(i), signature_text(s))
         else:
-            sym = Symbol(s.target.id, "variable", s.line, s.col, s.line)
+            sym = Symbol(s.target.id, "constant" if isinstance(s, ast.ConstDef) else "variable", s.line, s.col, s.line)
         symbols.append(sym)
     return symbols
 

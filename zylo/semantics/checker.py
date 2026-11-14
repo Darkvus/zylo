@@ -213,6 +213,7 @@ class Checker(GenericMixin, TraitMixin):
         self.deriver = Deriver(self.structs, self.enums, lambda name: name in self.fns)  # typed JSON helpers
         self.endpoints = EndpointDeriver(self.deriver)  # `endpoint(f)` handlers
         self.fn_defs: dict[str, ast.FnDef] = {}  # top-level functions by name, for `endpoint(f)`
+        self.globals: dict[str, VarInfo] = {}  # module-level `const`s by (linked) name
         self.program: ast.Program | None = None  # the program being checked: generated functions are added to it
         # generics (see semantics/generics.py)
         self.generics: dict[str, Generic] = {}  # templates by name
@@ -293,6 +294,13 @@ class Checker(GenericMixin, TraitMixin):
             self.errors.append(e)
             return
         self.check_abstract()
+        for s in prog.body:  # constants before any function body, in order: a value may use the constants above it
+            if isinstance(s, ast.ConstDef):
+                try:
+                    self.check_const(s)
+                except ZyloError as e:
+                    self.errors.append(e)
+                    self.poisoned.add(s.target.id)
         done = 0
         while done < len(prog.body) or self.pending:  # checking can add copies of generics: check those too
             if self.pending:
@@ -304,8 +312,8 @@ class Checker(GenericMixin, TraitMixin):
                 continue
             s = prog.body[done]
             done += 1
-            if isinstance(s, ast.TraitDef):
-                continue  # a trait only exists for the checker
+            if isinstance(s, (ast.TraitDef, ast.ConstDef)):
+                continue  # a trait only exists for the checker; a constant was checked above
             if getattr(s, "tparams", None) or (getattr(s, "origin", None) and self.generics[s.origin].broken):
                 continue  # a template (checked once above, emitted never), or a copy of one that has a mistake
             try:
@@ -1294,8 +1302,64 @@ class Checker(GenericMixin, TraitMixin):
                           f"loop over the indexes (`for i in range(len(...))`, then `xs[i].field = ...`), or use the "
                           f"copy afterwards (append it to a new list)", s)
 
+    CONST_VALUES = (ast.Int, ast.Float, ast.Str, ast.Bool, ast.NoneLit, ast.BinOp, ast.UnaryOp, ast.ListLit, ast.DictLit,
+                    ast.SetLit, ast.TupleLit, ast.Index, ast.Attr, ast.NamedArg, ast.TypeRef)
+
+    def check_const(self, s: ast.ConstDef) -> None:
+        """Check a `const`: its value is built from literals, constructors and earlier constants, then it is a global.
+
+        Args:
+            s: The constant.
+
+        Raises:
+            ZyloError: If the value calls a function or uses a variable, or its type does not match the annotation.
+        """
+        name = s.target.id
+        shown = name.rsplit("·", 1)[-1]
+        if name in self.globals:
+            raise err(f"{shown!r} is already defined", s)
+        self.check_const_value(s.value, shown)
+        declared = self.resolve(s.annotation) if s.annotation else None
+        t = self.expr(s.value, declared)
+        if declared is not None and t != declared:
+            raise err(f"{shown!r} is {declared} but {t} is assigned", s.value)
+        if t == UNIT or isinstance(t, FnT):
+            raise err(f"the value of a constant must be data, not {'nothing' if t == UNIT else 'a function'}", s.value)
+        s.var = self.globals[name] = VarInfo(name, t, captured=True, glob=True)
+        s.target.ty = t
+
+    def check_const_value(self, e: ast.Expr, shown: str) -> None:
+        """Reject what a constant's value may not hold: it is computed once, so it only builds data.
+
+        Allowed: literals, operators, list/dict/set/tuple literals, struct and enum constructors, `cell`, `some`, `ok`,
+        `err`, and the constants defined above it. Anything else (function calls, methods, closures, variables,
+        interpolated strings) is an error.
+        """
+        for n in ast.walk(e):
+            if isinstance(n, ast.Name):
+                if n.id not in self.globals and n.id not in self.enums and not (n.id in self.generics and self.generics[n.id].kind == "enum"):
+                    what = ("a function" if n.id in self.fns or n.id in self.generics else "not a constant defined above it")
+                    raise err(f"the value of constant {shown!r} cannot use {n.id.rsplit('·', 1)[-1]!r}: it is {what}", n)
+            elif isinstance(n, ast.Call):
+                ok = n.func in ("cell", "some", "ok", "err") or n.func in self.structs or (
+                    n.func in self.generics and self.generics[n.func].kind == "struct")
+                if not ok:
+                    raise err(f"the value of constant {shown!r} cannot call {n.func.rsplit('·', 1)[-1]!r}: only constructors "
+                              f"(structs, enum variants, `cell`, `some`, `ok`, `err`) run in a constant", n)
+            elif isinstance(n, ast.MethodCall):
+                base = n.value
+                if not (isinstance(base, ast.Name) and (base.id in self.enums or base.id in self.generics)):
+                    raise err(f"the value of constant {shown!r} cannot call a method: only enum variants can be built here", n)
+            elif not isinstance(n, self.CONST_VALUES):
+                raise err(f"this expression cannot be the value of constant {shown!r}: use literals, collections, constructors "
+                          f"and other constants", n)
+
     def captured_error(self, name: str, node: ast.Node) -> ZyloError:
-        """The error for modifying a variable that a closure captured."""
+        """The error for modifying a variable that a closure captured, or a constant."""
+        if name in self.globals and self.scopes.lookup(name) is None:
+            shown = name.rsplit("·", 1)[-1]
+            return err(f"cannot modify the constant {shown!r}: a `const` is fixed once defined; hold changing state in a "
+                       f"`Cell` (`const {shown} = cell(...)`, then `{shown}.set(...)`)", node)
         return err(f"cannot modify {name!r} inside a function that captured it: closures capture a copy of the variables "
                    f"they use, so the change would be lost; share state with a `Cell` (`c = cell(0)`, then `c.set(...)`) or return the new value", node)
 
@@ -1318,7 +1382,7 @@ class Checker(GenericMixin, TraitMixin):
                 found, info = i, self.scopes.stack[i][name]
                 break
         if info is None:
-            return None
+            return self.globals.get(name)  # a module-level `const`: visible everywhere, never captured
         info.uses.add(id(node))
         for frame in self.closures:  # outermost first, so a nested closure copies the outer closure's copy
             if frame.base > found:

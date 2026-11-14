@@ -213,6 +213,11 @@ def ident(name: str) -> str:
     return name + "_" if name in RUST_KEYWORDS else name
 
 
+def gname(name: str) -> str:
+    """The Rust name of the thread-local that holds a module-level `const`."""
+    return "__ZG_" + ident(name)
+
+
 def mident(name: str) -> str:
     """Method name: besides keywords, avoid shadowing trait methods (`clone`, `eq`...); a copy of a generic method is `map[str]`."""
     name = UNSAFE.sub(lambda m: f"_{ord(m.group()):x}_", name)
@@ -396,13 +401,18 @@ class Gen:
         structs = [s for s in body if isinstance(s, ast.StructDef)]
         fns = [s for s in body if isinstance(s, ast.FnDef) and not isinstance(s, ast.ExternFn)]
         enums = [s for s in body if isinstance(s, ast.EnumDef)]
-        rest = [s for s in body if not isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef, ast.TraitDef))]
+        consts = [s for s in body if isinstance(s, ast.ConstDef)]
+        rest = [s for s in body if not isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef, ast.TraitDef, ast.ConstDef))]
         self.opaque = fn_holders(structs, enums)
         for ed in enums:
             self.enum(ed)
             self.out.append("")
         for sd in structs:
             self.struct(sd)
+            self.out.append("")
+        for c in consts:  # a thread-local, computed the first time it is read (see docs/guide.md, "Constants")
+            self.line(f"thread_local! {{ static {gname(c.target.id)}: {rust_type(c.var.ty)} = {emit(c.value)}; }}")
+        if consts:
             self.out.append("")
         for f in fns:
             self.fn(f)
@@ -799,6 +809,8 @@ def emit(e: ast.Expr) -> str:
     code = emit_ref(e)
     if isinstance(e, ast.Name) and e.var is None:
         return code  # a top-level function used as a value: already a fresh function value
+    if isinstance(e, ast.Name) and e.var is not None and e.var.glob:
+        return code  # a constant: reading it already makes a copy
     if isinstance(e, (ast.Name, ast.Index, ast.Attr)) and not is_copy(e.ty) and not getattr(e, "variant", None):
         return f"{code}.clone()"
     return code
@@ -851,6 +863,8 @@ def emit_ref(e: ast.Expr) -> str:
             return "true" if v else "false"
         case ast.Name(i) if e.var is None and isinstance(e.ty, FnT):
             return fn_value(e.inst or i)
+        case ast.Name(i) if e.var is not None and e.var.glob:
+            return f"{gname(i)}.with(|g| g.clone())"
         case ast.Name(i):
             return f"(*{ident(i)})" if e.var is not None and e.var.by_ref else ident(i)
         case ast.Lambda():

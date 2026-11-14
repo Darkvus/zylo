@@ -316,6 +316,8 @@ class Parser:
                     return self.parse_from_import()
                 case "pub":
                     return self.parse_pub()
+                case "const":
+                    return self.parse_const()
                 case "if":
                     return self.parse_if()
                 case "while":
@@ -572,6 +574,21 @@ class Parser:
         alias = self.expect("IDENT").value if self.match("KW", "as") else None
         self.expect("NEWLINE")
         return ast.Import(module, alias, line=kw.line, col=kw.col)
+
+    def parse_const(self) -> ast.ConstDef:
+        """Parse `const NAME [: type] = value`, which is only allowed at the top level of a module."""
+        kw = self.advance()
+        if self.depth > 0:
+            raise ZyloError("`const` is only allowed at the top level of a module", kw.line, kw.col)
+        name = self.expect("IDENT")
+        target = ast.Name(name.value, line=name.line, col=name.col)
+        ann = None
+        if self.match("OP", ":"):
+            ann = self.parse_type()
+        self.expect("OP", "=")
+        value = self.tuple_tail(self.parse_expr(), name)
+        self.expect("NEWLINE")
+        return ast.ConstDef(target, ann, value, line=kw.line, col=kw.col)
 
     def parse_pub(self) -> ast.FromImport:
         """Parse `pub from a.b import x [as y], ...`: an import that is also part of this module's public surface."""
