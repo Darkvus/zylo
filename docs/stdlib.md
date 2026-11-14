@@ -253,6 +253,27 @@ Decisions and limits:
 - **Port 0** lets the system pick, but the server does not report which; pick a free port yourself in tests.
 - The server prints `listening on http://HOST:PORT` to stderr when it starts.
 
+## std.web
+
+The data model behind the `endpoint(f)` built-in (see [the guide](guide.md#endpoints)): what a typed function becomes,
+for a web framework to mount. It imports `std.http` (so a program using it is built with the HTTP crates) and
+`std.json`, and is loaded automatically when a program calls `endpoint`.
+
+| Item | Description |
+|---|---|
+| `struct Endpoint` | `handler: fn(Request) -> Response`, `operation: Operation`, `schemas: dict[str, Json]` |
+| `struct Operation` | OpenAPI description: `method`, `path`, `summary = ""`, `description = ""`, `tags = []`, `params = []`, `request_body: Json? = none`, `responses = []`, `operation_id = ""` |
+| `struct Param` | `name`, `location` (`"path"`, `"query"`, `"header"`), `description = ""`, `required = true`, `type_name = "string"` (an OpenAPI primitive) |
+| `struct ResponseSpec` | `status`, `description`, `schema: Json? = none` |
+| `struct HttpError` | `status: int`, `detail: str`: the error of a `Result[T, HttpError]` return type, answered as `{"detail": detail}` |
+| `route_operation(op, method, path)` | a copy of `op` with `method` and `path` set and the parameters named `{name}` in `path` turned into required path parameters |
+| `json_reply(status, body)` | a JSON `Response` from a `Json` value |
+| `error_reply(status, message)` | a JSON `Response` `{"detail": message}` |
+
+`Operation`, `Param` and `ResponseSpec` have the same fields as the structs of the HighApi library's `openapi.zy`;
+because `endpoint` has to build them, they live here, and a library that wants them imports them from `std.web`.
+Functions starting with `_` are called by the generated code and are not part of the interface.
+
 ## Modules that need crates
 
 A standard library module `std.x` may ship two sidecar files next to `x.zy`: `x.rs`, Rust support code that its

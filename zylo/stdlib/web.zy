@@ -1,0 +1,194 @@
+# std.web: the data model behind the `endpoint(f)` built-in. See docs/stdlib.md.
+#
+# `endpoint(f)` turns a typed function into an `Endpoint`: a request handler, the OpenAPI description of the operation
+# and the JSON Schemas it uses. The structs here are the contract between the compiler and a web framework built on
+# top of it. The private functions (`_name`) are called by the code the compiler generates.
+from std.http import Request, Response, json_response
+from std.json import Json
+import std.json as json
+
+# An error a handler returns as `Result[T, HttpError]`: answered as `{"detail": detail}` with the status.
+struct HttpError:
+    status: int
+    detail: str
+
+# One parameter of an operation. `location` is "path", "query" or "header"; `type_name` is an OpenAPI primitive.
+struct Param:
+    name: str
+    location: str
+    description: str = ""
+    required: bool = true
+    type_name: str = "string"
+
+# One response of an operation. `schema` is a JSON Schema, or none for no body.
+struct ResponseSpec:
+    status: int
+    description: str
+    schema: Json? = none
+
+# The OpenAPI description of one operation. `endpoint(f)` leaves `method` and `path` empty and marks every scalar
+# parameter as a query parameter: `route_operation` fills them in once the route is known.
+struct Operation:
+    method: str
+    path: str
+    summary: str = ""
+    description: str = ""
+    tags: list[str] = []
+    params: list[Param] = []
+    request_body: Json? = none
+    responses: list[ResponseSpec] = []
+    operation_id: str = ""
+
+# What `endpoint(f)` produces. `handler` answers one request (it reads path parameters from `req.path_params`, query
+# parameters from `req.query` and the body from `req.body`); `schemas` maps component names to JSON Schemas.
+struct Endpoint:
+    handler: fn(Request) -> Response
+    operation: Operation
+    schemas: dict[str, Json]
+
+# A JSON response from a `Json` value.
+fn json_reply(status: int, body: Json) -> Response:
+    return json_response(status, json.stringify(body))
+
+# An error response: `{"detail": message}`.
+fn error_reply(status: int, message: str) -> Response:
+    members: dict[str, Json] = {}
+    members["detail"] = Json.Str(message)
+    return json_reply(status, Json.Obj(members))
+
+# The operation of a route: `method` and `path` set, and each parameter whose name is `{name}` in `path` made a
+# required path parameter.
+fn route_operation(op: Operation, method: str, path: str) -> Operation:
+    params: list[Param] = []
+    for p in op.params:
+        if path.count("{" + p.name + "}") > 0:
+            params.append(Param(p.name, "path", p.description, true, p.type_name))
+        else:
+            params.append(p)
+    return Operation(
+        method,
+        path,
+        op.summary,
+        op.description,
+        op.tags,
+        params,
+        op.request_body,
+        op.responses,
+        op.operation_id,
+    )
+
+# ---- helpers of the generated handlers ----
+
+fn _no_schemas() -> dict[str, Json]:
+    out: dict[str, Json] = {}
+    return out
+
+fn _dict(j: Json) -> dict[str, Json]:
+    return json.as_dict(j).unwrap_or(_no_schemas())
+
+fn _where(req: Request, name: str) -> str:
+    if req.path_params.get(name) is some:
+        return "path"
+    return "query"
+
+fn _raw(req: Request, name: str) -> str?:
+    found = req.path_params.get(name)
+    if found is some:
+        return some(found)
+    return req.query.get(name)
+
+fn _blank(body: str) -> bool:
+    return body.strip() == ""
+
+fn _item(loc: list[Json], msg: str, kind: str) -> Json:
+    m: dict[str, Json] = {}
+    m["loc"] = Json.Arr(loc)
+    m["msg"] = Json.Str(msg)
+    m["type"] = Json.Str(kind)
+    return Json.Obj(m)
+
+fn _param_loc(where: str, name: str) -> list[Json]:
+    return [Json.Str(where), Json.Str(name)]
+
+fn _missing(where: str, name: str) -> Json:
+    return _item(_param_loc(where, name), "Field required", "missing")
+
+fn _missing_body() -> Json:
+    return _item([Json.Str("body")], "Field required", "missing")
+
+fn _bad(where: str, name: str, msg: str, kind: str) -> Json:
+    return _item(_param_loc(where, name), msg, kind)
+
+fn _int(s: str, where: str, name: str) -> Result[int, Json]:
+    n = parse_int(s.strip())
+    if n is none:
+        return err(_bad(where, name, "Input should be a valid integer", "int_parsing"))
+    return ok(n)
+
+fn _float(s: str, where: str, name: str) -> Result[float, Json]:
+    x = parse_float(s.strip())
+    if x is none:
+        return err(_bad(where, name, "Input should be a valid number", "float_parsing"))
+    return ok(x)
+
+fn _bool(s: str, where: str, name: str) -> Result[bool, Json]:
+    t = s.strip().lower()
+    if t == "true" or t == "1" or t == "yes" or t == "on":
+        return ok(true)
+    if t == "false" or t == "0" or t == "no" or t == "off":
+        return ok(false)
+    return err(_bad(where, name, "Input should be a valid boolean", "bool_parsing"))
+
+fn _str(s: str, where: str, name: str) -> Result[str, Json]:
+    return ok(s)
+
+# The error list a `from_json` failure ("$.tags[1].name: expected str, got int") stands for: `loc` is ["body", "tags", 1,
+# "name"] and `msg` the text after the path.
+fn _body_item(text: str) -> Json:
+    cut = text.find(": ")
+    path = text
+    msg = text
+    if cut is some:
+        path = text[0:cut]
+        msg = text[cut + 2:len(text)]
+    if path.startswith("$"):
+        path = path[1:len(path)]
+    loc: list[Json] = [Json.Str("body")]
+    token = ""
+    inside = false
+    for ch in path:
+        if inside:
+            if ch == "]":
+                inside = false
+                n = parse_int(token)
+                if n is some:
+                    loc.append(Json.Num(float(n)))
+                else:
+                    loc.append(Json.Str(token.replace("\"", "")))
+                token = ""
+            else:
+                token += ch
+        elif ch == "[":
+            if token != "":
+                loc.append(Json.Str(token))
+                token = ""
+            inside = true
+        elif ch == ".":
+            if token != "":
+                loc.append(Json.Str(token))
+                token = ""
+        else:
+            token += ch
+    if token != "":
+        loc.append(Json.Str(token))
+    kind = "value_error"
+    if msg.count("missing") > 0:
+        kind = "missing"
+    elif msg.count("expected") > 0:
+        kind = "type_error"
+    return _item(loc, msg, kind)
+
+fn _unprocessable(errors: list[Json]) -> Response:
+    m: dict[str, Json] = {}
+    m["detail"] = Json.Arr(errors)
+    return json_reply(422, Json.Obj(m))
