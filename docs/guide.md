@@ -1522,11 +1522,12 @@ How each parameter is read:
 |---|---|
 | `int`, `float`, `bool`, `str` | the path parameter of that name if the route has one, else the query string; required unless it has a default or is `T?` |
 | `T?` of these | optional; `none` when missing |
-| a struct, enum, `Json`, list or dict | the JSON request body (at most one); required unless it has a default |
+| an enum none of whose variants has data | like a scalar: the variant name (`?sort=Desc`), `422` with `type` `enum` when unknown; described by a `$ref` in `Param.schema` |
+| a struct, an enum with data, `Json`, list or dict | the JSON request body (at most one); required unless it has a default |
 | `Request` | the raw request |
 | default `depends(g)` | a dependency, see [Dependencies](#dependencies-depends) |
 
-Anything else (a tuple, a set, a `Cell`, a function) is a compile error naming the parameter. Query values are
+(An enum is a body only when some variant carries data; `Json` is always a body.) Anything else (a tuple, a set, a `Cell`, a function) is a compile error naming the parameter. Query values are
 converted with `int`, `float`, `bool` (`true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`) or as they are.
 
 What the handler answers:
@@ -1587,9 +1588,41 @@ fn list_pets(limit: int = 10, pets: list[Pet] = depends(get_store), user: str = 
 ep = endpoint(list_pets)
 ```
 
-- `g` is a top-level function (not generic, not an `extern fn`) that returns a value. Its own parameters may only be a
-  `Request` and further `depends(...)` parameters; any other parameter is a compile error, because **a dependency's
-  own query, path and body parameters are not merged into the endpoint's operation in this version**.
+- `g` is a top-level function (not generic, not an `extern fn`) that returns a value. Its own parameters are read like
+  an endpoint function's, by the same rules: `Request` is the raw request, scalars and data-less enums come from the
+  path or the query string, a struct, an enum with data, `Json`, list or dict is the JSON body, a default or `T?` makes
+  a parameter optional, and `depends(...)` nests. An unsupported type is a compile error naming the parameter and the
+  dependency.
+- Its parameters are read and validated together with the endpoint's own: every problem of the endpoint and of all
+  its dependencies is collected in the same `422` `detail` list (`loc` as before), before any dependency runs.
+- The operation merges the inputs: parameters with the same name and the same type (ignoring optionality) become one
+  `Param`, required when any function requires it, and the value is read once for the error report (each function still
+  applies its own default); the same name with different types is a compile error. At most one JSON body may be read by
+  the endpoint and all its dependencies together (a second is a compile error); it becomes the `request_body`. The
+  dependency's struct/enum types are part of `schemas`.
+
+```zylo
+import std.web as web
+from std.http import Request
+
+struct Page:
+    limit: int
+    offset: int
+
+fn paging(limit: int = 10, offset: int = 0) -> Page:
+    return Page(limit, offset)
+
+fn auth(req: Request, token: str) -> Result[str, web.HttpError]:
+    if token != "s3cret":
+        return err(web.HttpError(403, "bad token"))
+    return ok(req.headers.get("x-user").unwrap_or("anon"))
+
+fn list_notes(page: Page = depends(paging), who: str = depends(auth)) -> str:
+    return who + " " + str(page.limit)
+
+# params: limit, offset (optional), token (required); a missing token and a bad limit are both in one 422
+```
+
 - It runs **once per request**: the handler calls each distinct dependency once, dependencies before their
   dependents, and every parameter or dependency that names it receives that same value. (The order is known at compile
   time, so there is no run-time cache.) Dependency cycles are a compile error.
@@ -1597,7 +1630,7 @@ ep = endpoint(list_pets)
   (an `err` answers the request with its status and `{"detail": ...}` and the function is not called) or the whole
   `Result` (the function sees the outcome itself). Any other type is a compile error.
 - Dependencies run after the parameters were read and validated: bad input answers 422 before any dependency runs.
-- Dependency parameters are not part of the operation (no `Param`, no request body).
+- A dependency's own parameters do appear in the operation (see above); the `depends(...)` parameters themselves do not.
 - `depends(g)` only means something in a function given to `endpoint`. Calling such a function yourself must pass the
   parameter explicitly; leaving it out is an error. A dependency parameter does not count as optional for the rule that
   required parameters cannot follow optional ones. `depends` is a built-in name (no import) and cannot be redefined.

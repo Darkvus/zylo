@@ -263,7 +263,7 @@ for a web framework to mount. It imports `std.http` (so a program using it is bu
 |---|---|
 | `struct Endpoint` | `handler: fn(Request) -> Response`, `operation: Operation`, `schemas: dict[str, Json]` |
 | `struct Operation` | OpenAPI description: `method`, `path`, `summary = ""`, `description = ""`, `tags = []`, `params = []`, `request_body: Json? = none`, `responses = []`, `operation_id = ""` |
-| `struct Param` | `name`, `location` (`"path"`, `"query"`, `"header"`), `description = ""`, `required = true`, `type_name = "string"` (an OpenAPI primitive) |
+| `struct Param` | `name`, `location` (`"path"`, `"query"`, `"header"`), `description = ""`, `required = true`, `type_name = "string"` (an OpenAPI primitive), `schema: Json? = none` (a JSON Schema that describes the parameter more exactly: `endpoint(f)` fills it for enum parameters with a `$ref`; `route_operation` keeps it) |
 | `struct ResponseSpec` | `status`, `description`, `schema: Json? = none` |
 | `struct HttpError` | `status: int`, `detail: str`: the error of a `Result[T, HttpError]` return type, answered as `{"detail": detail}` |
 | `route_operation(op, method, path)` | a copy of `op` with `method` and `path` set and the parameters named `{name}` in `path` turned into required path parameters |
@@ -272,7 +272,7 @@ for a web framework to mount. It imports `std.http` (so a program using it is bu
 
 `endpoint(f)` fills `operation.operation_id` with the function's name and, for `Result[T, HttpError]` results, one
 `ResponseSpec` per literal `HttpError(status, ...)` it finds; `endpoint(f, status=201)` sets the success status. A
-parameter with the default `depends(g)` is injected by the generated handler and left out of `params`; see
+parameter with the default `depends(g)` is injected by the generated handler; the request parameters of `g` are read with the endpoint's own and merged into `params`, `request_body` and `schemas`; see
 [the guide](guide.md#dependencies-depends).
 
 A library module may also define `const` bindings (see [the guide](guide.md#constants-module-level-bindings)), for

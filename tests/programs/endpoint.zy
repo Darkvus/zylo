@@ -98,10 +98,14 @@ fn main():
     show(d.handler(request("GET", q, "", p)))
 
     m = endpoint(set_mood)
-    show(m.handler(request("PATCH", q, "\"Sad\"", p)))
+    q["mood"] = "Sad"
+    show(m.handler(request("PATCH", q, "", p)))
     q["times"] = "2"
-    show(m.handler(request("PATCH", q, "\"Happy\"", p)))
-    show(m.handler(request("PATCH", q, "\"Angry\"", p)))
+    q["mood"] = "Happy"
+    show(m.handler(request("PATCH", q, "", p)))
+    q["mood"] = "Angry"
+    show(m.handler(request("PATCH", q, "", p)))
+    q.pop("mood")
     show(endpoint(total).handler(request("POST", q, "[1, 2, \"x\"]", p)))
     show(endpoint(total).handler(request("POST", q, "[1, 2, 3]", p)))
     show(endpoint(raw).handler(request("GET", q, "", p)))

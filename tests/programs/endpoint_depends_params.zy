@@ -1,0 +1,124 @@
+# Dependencies with their own request parameters: pagination, auth (a header through Request plus a query token) and a body.
+import std.web as web
+from std.http import Request, Response
+import std.json as json
+
+struct Page:
+    limit: int
+    offset: int
+
+struct NewNote:
+    text: str
+
+struct Note:
+    text: str
+    by: str
+
+enum Sort:
+    Asc
+    Desc
+
+const runs = cell(0)
+
+fn paging(limit: int = 10, offset: int = 0) -> Page:
+    runs.update(fn(n) => n + 1)
+    return Page(limit, offset)
+
+fn auth(req: Request, token: str) -> Result[str, web.HttpError]:
+    runs.update(fn(n) => n + 1)
+    if token != "s3cret":
+        return err(web.HttpError(403, "bad token"))
+    match req.headers.get("x-user"):
+        some(u):
+            return ok(u)
+        none:
+            return err(web.HttpError(401, "who are you?"))
+
+fn note_body(note: NewNote) -> NewNote:
+    return note
+
+fn listing(
+    page: Page = depends(paging),
+    who: str = depends(auth),
+    sort: Sort = Sort.Asc,
+    limit_note: str? = none,
+) -> str:
+    "List notes."
+    return (
+        who
+        + " "
+        + str(page.limit)
+        + " "
+        + str(page.offset)
+        + " "
+        + str(sort == Sort.Desc)
+    )
+
+fn add(
+    n: NewNote = depends(note_body),
+    who: str = depends(auth),
+    page: Page = depends(paging),
+    limit: int = 3,
+) -> Note:
+    return Note(n.text, who + str(page.limit) + str(limit))
+
+fn twice(a: Page = depends(paging), b: Page = depends(paging)) -> int:
+    return a.limit + b.limit
+
+fn call(e: web.Endpoint, method: str, q: dict[str, str], h: dict[str, str], body: str):
+    p: dict[str, str] = {}
+    r = e.handler(Request(method, "/x", q, h, body, p))
+    print(r.status, r.body)
+
+fn main():
+    q: dict[str, str] = {}
+    h: dict[str, str] = {}
+    ls = endpoint(listing)
+    call(ls, "GET", q, h, "")
+    q["limit"] = "x"
+    q["offset"] = "y"
+    q["sort"] = "Up"
+    call(ls, "GET", q, h, "")
+    q["limit"] = "20"
+    q["offset"] = "5"
+    q["sort"] = "Desc"
+    q["token"] = "nope"
+    runs.set(0)
+    call(ls, "GET", q, h, "")
+    print("runs", runs.get())
+    q["token"] = "s3cret"
+    call(ls, "GET", q, h, "")
+    h["x-user"] = "ann"
+    runs.set(0)
+    call(ls, "GET", q, h, "")
+    print("runs", runs.get())
+
+    ad = endpoint(add, status=201)
+    call(ad, "POST", q, h, "{\"text\": \"hi\"}")
+    call(ad, "POST", q, h, "{}")
+    q["limit"] = "bad"
+    call(ad, "POST", q, h, "")
+
+    runs.set(0)
+    q.clear()
+    call(endpoint(twice), "GET", q, h, "")
+    print("runs", runs.get())
+
+    for r in ls.operation.params:
+        print("param", r.name, r.required, r.type_name, r.schema is some)
+    print(
+        "add",
+        len(ad.operation.params),
+        ad.operation.request_body is some,
+        len(ad.schemas),
+    )
+    print(
+        "list",
+        len(ls.operation.params),
+        ls.operation.request_body is none,
+        len(ls.schemas),
+    )
+    op = web.route_operation(ls.operation, "GET", "/notes")
+    print(op.params[0].name, op.params[0].location)
+
+main()

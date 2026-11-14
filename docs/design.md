@@ -202,7 +202,7 @@ a `CallValue`; `obj.field(x)` is a method call node that the checker marks as a 
 
 **Endpoints (`endpoint(f)`) reuse that path.** `semantics/endpoint.py` writes two functions per endpoint function, through
 the same queue as the typed JSON helpers (`Deriver.emit`): a handler `fn(Request) -> Response` that reads every parameter
-of `f` (collecting the errors of all of them before answering 422), calls it and writes the response with the existing
+of `f` (collecting the errors of all of them, and of the parameters of its `depends(g)` functions, before answering 422), calls it and writes the response with the existing
 `to_json` / `from_json` / `json_schema` helpers, and a function returning `Endpoint(handler, operation, schemas)`. The call
 `endpoint(f)` is rewritten into a call of the latter. The route is not known at expansion time, so path parameters are
 recognised at run time (a name present in `req.path_params` is a path parameter, otherwise a query parameter), and

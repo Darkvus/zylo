@@ -198,6 +198,12 @@ def test_depends_status_operation_id_and_error_statuses(build):
     assert build(PROGRAMS / "endpoint_depends.zy") == (PROGRAMS / "endpoint_depends.expected").read_text()
 
 
+@needs_cargo
+def test_dependencies_with_request_parameters(build):
+    """Pagination and auth dependencies: merged parameters, one 422 listing everything, body in a dependency."""
+    assert build(PROGRAMS / "endpoint_depends_params.zy") == (PROGRAMS / "endpoint_depends_params.expected").read_text()
+
+
 # ---- depends(g) ---------------------------------------------------------------------------------------------------
 
 DEP = "fn dep() -> int:\n    return 1\n"
@@ -214,10 +220,31 @@ def test_depends_checks(tmp_path):
     fails(tmp_path, DEP + "fn f(x: int = depends(dep)) -> int:\n    return 1\nf()\n", "injected by `endpoint`")
 
 
-def test_a_dependency_may_only_take_request_and_depends_parameters(tmp_path):
-    src = "fn dep(n: int) -> int:\n    return n\nfn f(x: int = depends(dep)) -> int:\n    return x\ne = endpoint(f)\n"
-    e = fails(tmp_path, src, "the dependency dep has the parameter 'n'")
-    assert "not merged" in str(e)
+def test_a_dependency_parameter_must_be_readable_from_a_request(tmp_path):
+    src = "fn dep(pair: tuple[int, int]) -> int:\n    return 1\nfn f(x: int = depends(dep)) -> int:\n    return x\ne = endpoint(f)\n"
+    e = fails(tmp_path, src, "parameter 'pair' of dep has the type tuple\\[int, int\\], which cannot be read from a request")
+    assert "supported" in str(e)
+
+
+def test_parameters_with_one_name_must_have_one_type(tmp_path):
+    src = "fn dep(n: str) -> str:\n    return n\nfn f(n: int, x: str = depends(dep)) -> int:\n    return n\ne = endpoint(f)\n"
+    fails(tmp_path, src, "parameter 'n' is int in f but str in dep")
+
+
+def test_a_dependency_may_not_add_a_second_body(tmp_path):
+    src = ("struct A:\n    x: int\nfn dep(a: A) -> int:\n    return a.x\n"
+           "fn f(b: A, x: int = depends(dep)) -> int:\n    return x\ne = endpoint(f)\n")
+    fails(tmp_path, src, "parameter 'a' of dep is a JSON body, and f already reads one")
+    src = ("struct A:\n    x: int\nfn d1(a: A) -> int:\n    return a.x\nfn d2(a: A) -> int:\n    return a.x\n"
+           "fn f(x: int = depends(d1), y: int = depends(d2)) -> int:\n    return x\ne = endpoint(f)\n")
+    fails(tmp_path, src, "parameter 'a' of d2 is a JSON body, and d1 already reads one")
+
+
+def test_an_enum_with_data_is_still_a_body_and_a_plain_enum_is_a_scalar(tmp_path):
+    ok = "enum E:\n    A\n    B\nfn f(e: E, k: E? = none) -> int:\n    return 1\ne = endpoint(f)\n"
+    check(load_program(project(tmp_path, {"main.zy": HEAD + ok})))
+    src = "enum E:\n    A\n    B(int)\nfn f(e: E?) -> int:\n    return 1\ne = endpoint(f)\n"
+    fails(tmp_path, src, "cannot be read from a request")
 
 
 def test_a_dependency_cycle_is_an_error(tmp_path):

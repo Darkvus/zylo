@@ -14,7 +14,7 @@
 422 {"detail":[{"loc":["query","loud"],"msg":"Input should be a valid boolean","type":"bool_parsing"}]}
 200 "sad 1"
 200 "happy 2"
-422 {"detail":[{"loc":["body"],"msg":"unknown variant \"Angry\", expected one of \"Happy\", \"Sad\"","type":"type_error"}]}
+422 {"detail":[{"loc":["query","mood"],"msg":"unknown variant \"Angry\", expected one of \"Happy\", \"Sad\"","type":"enum"}]}
 422 {"detail":[{"loc":["body",2],"msg":"expected int, got string","type":"type_error"}]}
 200 6
 202 raw

@@ -10,9 +10,11 @@ How a parameter of `f` is read:
 - `Request` is the request itself;
 - `int`, `float`, `bool`, `str` and `T?` of these come from a path parameter of that name when the route has one,
   from the query string otherwise; a default value or `T?` makes them optional;
-- a struct, an enum, `Json`, a list or a dict is the JSON body (at most one);
+- an enum without data is read like a scalar, by variant name;
+- a struct, an enum with data, `Json`, a list or a dict is the JSON body (at most one, counting the dependencies);
 - a parameter whose default is `depends(g)` is not read from the request: the handler calls the top-level function `g`
-  (once per request, however many parameters and other dependencies use it) and passes the result.
+  (once per request, however many parameters and other dependencies use it) and passes the result. The parameters of
+  `g` are read by these same rules, together with the endpoint's own, and merged into the operation.
 """
 import hashlib
 import re
@@ -36,7 +38,7 @@ from zylo.domain.types import (
     TupleT,
     Type,
 )
-from zylo.semantics.derive import JSON, PLACEHOLDER, SCHEMA_TYPES, Deriver, lit
+from zylo.semantics.derive import JSON, JSON_T, PLACEHOLDER, SCHEMA_TYPES, Deriver, lit
 
 W = "std·web·"  # the linker's name for the items of std.web
 HTTP = "std·http·"
@@ -120,48 +122,31 @@ class EndpointDeriver:
         def fail(why: str, at: ast.Node = node) -> ZyloError:
             return ZyloError(f"endpoint({shown}): {why}", at.line, at.col, at.file)
 
-        body = "    zw_errors: list[%s] = []\n" % JSON
+        st = Inputs()
+        st.defaults, st.schema_types = defaults, schema_types
+
+        def read(p: ast.Param, ty: Type, owner: str) -> str:
+            return self.read(st, p, ty, owner, fail)
+
+        deps = Dependencies(resolve, fail, read)
         args: list[str] = []
-        params: list[str] = []
-        request_body = ""
-        has_input = False
-        bodies = 0
-        deps = Dependencies(resolve, fail)
         error_statuses: set[int] = set(literal_statuses(defn))
-        for i, (p, ty) in enumerate(zip(defn.params, sig.params)):
+        for p, ty in zip(defn.params, sig.params):
             if isinstance(ty, StructT) and ty.name == REQUEST:
                 args.append("zw_req")
-                continue
-            if ast.is_depends(p.default):
+            elif ast.is_depends(p.default):
                 args.append(deps.inject(p.default.args[0].id, ty, p, [name]))
-                continue
-            has_input = True
-            inner = ty.inner if isinstance(ty, OptionT) else ty
-            if inner in SCALARS:
-                chunk, arg, param = self.scalar(i, p, ty, inner, defaults)
-                body += chunk
-                args.append(arg)
-                params.append(param)
-                continue
-            if isinstance(ty, OptionT) or not isinstance(ty, (StructT, EnumT, ListT, DictT)):
-                kinds = "int, float, bool, str, an optional of these, a struct, an enum, Json, a list, a dict or Request"
-                raise fail(f"parameter {p.name!r} has the type {ty}, which cannot be read from a request (supported: {kinds})", p)
-            if isinstance(ty, StructT) and ty.name == RESPONSE:
-                raise fail(f"parameter {p.name!r} is a Response; a handler receives the Request", p)
-            bodies += 1
-            if bodies > 1:
-                raise fail(f"parameter {p.name!r} is a second JSON body; a function reads at most one", p)
-            self.d.validate("endpoint", ty, f"parameter {p.name!r}", str(ty), set(), p)
-            chunk, arg = self.body(i, p, ty, defaults)
-            body += chunk
-            args.append(arg)
-            schema_types.append(ty)
-            request_body = f"some({self.d.schema_expr(ty)})"
+            else:
+                args.append(read(p, ty, shown))
+        has_input = st.has_input
+        body = "    zw_errors: list[%s] = []\n" % JSON + st.body
         if has_input:
             body += f"    if len(zw_errors) > 0:\n        return {W}_unprocessable(zw_errors)\n"
         body += deps.source()
         for g in deps.order:
             error_statuses.update(literal_statuses(deps.defs[g]))
+        params = [st.param_expr(n) for n in st.params]
+        request_body = st.request_body
         call = f"{name}({', '.join(args)})"
         reply, response = self.reply(sig.ret, call, schema_types, fail, node, status)
         body += reply
@@ -180,13 +165,65 @@ class EndpointDeriver:
         parts.append(f"responses=[{', '.join(responses)}]")
         return body, f"{W}Operation({', '.join(parts)})"
 
-    def scalar(self, i: int, p: ast.Param, ty: Type, inner: Type, defaults: dict) -> tuple[str, str, str]:
-        """Source that reads one scalar parameter from the path or the query string.
+    def read(self, st: "Inputs", p: ast.Param, ty: Type, owner: str, fail) -> str:
+        """Plan the reading of one parameter of the endpoint function or of a dependency.
+
+        Args:
+            st: What has been read so far (the statements, the merged parameters, the body).
+            p: The parameter.
+            ty: Its type.
+            owner: The function that declares it, for error messages.
+            fail: Builds the error to raise.
 
         Returns:
-            The statements, the argument to pass, and the `Param(...)` expression for the operation.
+            The argument to pass to the function.
+        """
+        st.has_input = True
+        st.n += 1
+        i = st.n
+        inner = ty.inner if isinstance(ty, OptionT) else ty
+        if inner in SCALARS or self.dataless_enum(inner):
+            chunk, arg = self.scalar(st, i, p, ty, inner, owner, fail)
+            st.body += chunk
+            return arg
+        if isinstance(ty, OptionT) or not isinstance(ty, (StructT, EnumT, ListT, DictT)):
+            kinds = ("int, float, bool, str, an optional of these, an enum without data, a struct, an enum, Json, a list, "
+                     "a dict or Request")
+            raise fail(f"parameter {p.name!r} of {owner} has the type {ty}, which cannot be read from a request "
+                       f"(supported: {kinds})", p)
+        if isinstance(ty, StructT) and ty.name == RESPONSE:
+            raise fail(f"parameter {p.name!r} is a Response; a handler receives the Request", p)
+        if st.body_owner:
+            where = "a second JSON body" if st.body_owner == owner else f"a JSON body, and {st.body_owner} already reads one"
+            raise fail(f"parameter {p.name!r} of {owner} is {where}; an endpoint and its dependencies read at most one", p)
+        st.body_owner = owner
+        self.d.validate("endpoint", ty, f"parameter {p.name!r}", str(ty), set(), p)
+        chunk, arg = self.body(i, p, ty, st.defaults)
+        st.body += chunk
+        st.schema_types.append(ty)
+        st.request_body = f"some({self.d.schema_expr(ty)})"
+        return arg
+
+    def dataless_enum(self, ty: Type) -> bool:
+        """Whether a type is an enum none of whose variants carries data (read from a query or path value by name)."""
+        return (isinstance(ty, EnumT) and ty != JSON_T and ty.name in self.d.enums
+                and all(not ts for ts in self.d.enums[ty.name].variants.values()))
+
+    def scalar(self, st: "Inputs", i: int, p: ast.Param, ty: Type, inner: Type, owner: str, fail) -> tuple[str, str]:
+        """Source that reads one scalar (or data-less enum) parameter from the path or the query string.
+
+        A parameter of the same name read by another function of the endpoint is merged: the types must agree, the
+        parameter is required when any reader requires it, and each problem is reported once.
+
+        Returns:
+            The statements and the argument to pass.
         """
         var, name = f"zw_a{i}", lit(p.name)
+        defaults = st.defaults
+        known = st.params.get(p.name)
+        if known and known.inner != inner:
+            raise fail(f"parameter {p.name!r} is {known.inner} in {known.owner} but {inner} in {owner}; "
+                       f"the same name must have the same type", p)
         optional = isinstance(ty, OptionT)
         if p.default is not None:
             ph = PLACEHOLDER.format(f"e{i}")
@@ -197,13 +234,25 @@ class EndpointDeriver:
         else:
             decl, arg, required = f"    {var}: {ty}? = none\n", f"{var}.unwrap()", True
         value = f"some(zw_v{i})" if (optional or required) else f"zw_v{i}"
-        miss = f"            append(zw_errors, {W}_missing(zw_w{i}, {name}))\n" if required else "            pass\n"
+        report_missing = required and not (known and known.required)
+        miss = f"            append(zw_errors, {W}_missing(zw_w{i}, {name}))\n" if report_missing else "            pass\n"
+        bad = f"                    append(zw_errors, zw_e{i})\n" if known is None else "                    pass\n"
+        if inner in SCALARS:
+            reader = f"{W}{READERS[inner]}(zw_s{i}, zw_w{i}, {name})"
+        else:
+            reader = f"{W}_enum_param({self.d.from_expr(inner, f'{JSON}.Str(zw_s{i})', lit('$'))}, zw_w{i}, {name})"
         chunk = (f"{decl}    zw_w{i} = {W}_where(zw_req, {name})\n    match {W}_raw(zw_req, {name}):\n        some(zw_s{i}):\n"
-                 f"            match {W}{READERS[inner]}(zw_s{i}, zw_w{i}, {name}):\n                ok(zw_v{i}):\n"
-                 f"                    {var} = {value}\n                err(zw_e{i}):\n                    append(zw_errors, zw_e{i})\n"
+                 f"            match {reader}:\n                ok(zw_v{i}):\n"
+                 f"                    {var} = {value}\n                err(zw_e{i}):\n{bad}"
                  f"        none:\n{miss}")
-        param = f'{W}Param({name}, "query", "", {"true" if required else "false"}, {lit(SCHEMA_TYPES[inner])})'
-        return chunk, arg, param
+        if known:
+            known.required = known.required or required
+        else:
+            schema = "" if inner in SCALARS else f"some({self.d.schema_expr(inner)})"
+            st.params[p.name] = Slot(inner, required, owner, schema)
+            if schema:
+                st.schema_types.append(inner)
+        return chunk, arg
 
     def body(self, i: int, p: ast.Param, ty: Type, defaults: dict) -> tuple[str, str]:
         """Source that parses the request body as JSON into a parameter.
@@ -267,6 +316,55 @@ class EndpointDeriver:
 J_PARSE = "std·json·parse"
 
 
+class Slot:
+    """One query or path parameter of the operation, shared by every function of the endpoint that reads that name.
+
+    Attributes:
+        inner: Its type without the optional.
+        required: Whether any reader requires it.
+        owner: The first function that declared it.
+        schema: The `some(schema)` expression of an enum parameter, or "".
+    """
+
+    def __init__(self, inner: Type, required: bool, owner: str, schema: str = "") -> None:
+        """Create the slot."""
+        self.inner, self.required, self.owner, self.schema = inner, required, owner, schema
+
+
+class Inputs:
+    """What the handler reads from the request: the statements, the merged parameters and the body.
+
+    Attributes:
+        body: The statements parsing and validating every input, in order.
+        params: The scalar parameters by name (the operation's `params`).
+        request_body: The `Optional[Json]` expression of the body schema, or "".
+        body_owner: The function that reads the JSON body, or "".
+        has_input: Whether anything is read from the request (so a 422 is possible).
+        n: A counter that gives every parameter its own variable names.
+        defaults: The default values to substitute into the generated function.
+        schema_types: The types whose schemas the endpoint needs.
+    """
+
+    def __init__(self) -> None:
+        """Create an empty plan."""
+        self.body = ""
+        self.params: dict[str, Slot] = {}
+        self.request_body = ""
+        self.body_owner = ""
+        self.has_input = False
+        self.n = -1
+        self.defaults: dict = {}
+        self.schema_types: list[Type] = []
+
+    def param_expr(self, name: str) -> str:
+        """The `Param(...)` expression of one merged parameter."""
+        slot = self.params[name]
+        text = f'{W}Param({lit(name)}, "query", "", {"true" if slot.required else "false"}, {lit(SCHEMA_TYPES.get(slot.inner, "string"))}'
+        if slot.schema:
+            text += f", {slot.schema}"
+        return text + ")"
+
+
 class Dependencies:
     """The `depends(g)` functions of one endpoint, resolved at compile time.
 
@@ -278,14 +376,15 @@ class Dependencies:
         defs: Their definitions.
     """
 
-    def __init__(self, resolve, fail) -> None:
+    def __init__(self, resolve, fail, read) -> None:
         """Create the resolver.
 
         Args:
             resolve: Maps a function name to its definition and type, or None when it is not a plain top-level function.
             fail: Builds the error to raise (`fail(message, node)`).
+            read: Plans the reading of a request parameter of a dependency: `read(param, type, function)` gives the argument.
         """
-        self.resolve, self.fail = resolve, fail
+        self.resolve, self.fail, self.read = resolve, fail, read
         self.order: list[str] = []
         self.defs: dict[str, ast.FnDef] = {}
         self.vars: dict[str, str] = {}
@@ -334,9 +433,7 @@ class Dependencies:
             elif ast.is_depends(gp.default):
                 args.append(self.inject(gp.default.args[0].id, gt, gp, [*stack, g]))
             else:
-                raise self.fail(f"the dependency {shown} has the parameter {gp.name!r}; a dependency may only take a Request or "
-                                f"depends(...) parameters (its own query, path and body parameters are not merged into the "
-                                f"endpoint in this version)", gp)
+                args.append(self.read(gp, gt, shown))
         var = f"zw_d{len(self.order)}"
         self.vars[g], self.rets[g], self.defs[g], self.args[g] = var, gsig.ret, gdef, args
         self.order.append(g)
