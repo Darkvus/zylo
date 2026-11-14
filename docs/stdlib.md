@@ -270,6 +270,14 @@ for a web framework to mount. It imports `std.http` (so a program using it is bu
 | `json_reply(status, body)` | a JSON `Response` from a `Json` value |
 | `error_reply(status, message)` | a JSON `Response` `{"detail": message}` |
 
+`endpoint(f)` fills `operation.operation_id` with the function's name and, for `Result[T, HttpError]` results, one
+`ResponseSpec` per literal `HttpError(status, ...)` it finds; `endpoint(f, status=201)` sets the success status. A
+parameter with the default `depends(g)` is injected by the generated handler and left out of `params`; see
+[the guide](guide.md#dependencies-depends).
+
+A library module may also define `const` bindings (see [the guide](guide.md#constants-module-level-bindings)), for
+example the store a web framework's handlers share.
+
 `Operation`, `Param` and `ResponseSpec` have the same fields as the structs of the HighApi library's `openapi.zy`;
 because `endpoint` has to build them, they live here, and a library that wants them imports them from `std.web`.
 Functions starting with `_` are called by the generated code and are not part of the interface.
@@ -290,7 +298,7 @@ crates. With a `zylo.toml` the build directory is `.zylo-build/` next to it, as 
 
 ## Writing a standard library module
 
-Add `zylo/stdlib/<name>.zy` (library rules: only imports, functions, structs and enums; names starting with `_`
+Add `zylo/stdlib/<name>.zy` (library rules: only imports, constants, functions, structs and enums; names starting with `_`
 are private), document it here, and add tests: a program in `tests/programs/` with an expected `.out`, and for anything
 with a specification a conformance test like `tests/test_json.py` against an independent implementation. Prefer plain
 Zylo; use an `extern fn` only for something the language cannot do or cannot do fast, and keep it private (`_name`).
