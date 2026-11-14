@@ -41,6 +41,7 @@ from zylo.domain.types import (
     is_copy_type,
 )
 from zylo.semantics.derive import JSON_T, Deriver
+from zylo.semantics.endpoint import EndpointDeriver
 from zylo.semantics.exhaustive import Pat, Space, lower
 from zylo.semantics.generics import (
     Generic,
@@ -210,6 +211,8 @@ class Checker(GenericMixin, TraitMixin):
         # parameters (or struct fields) with their defaults, for calls: by function name, `Type.method` or struct name
         self.specs: dict[str, list] = {}
         self.deriver = Deriver(self.structs, self.enums, lambda name: name in self.fns)  # typed JSON helpers
+        self.endpoints = EndpointDeriver(self.deriver)  # `endpoint(f)` handlers
+        self.fn_defs: dict[str, ast.FnDef] = {}  # top-level functions by name, for `endpoint(f)`
         self.program: ast.Program | None = None  # the program being checked: generated functions are added to it
         # generics (see semantics/generics.py)
         self.generics: dict[str, Generic] = {}  # templates by name
@@ -846,6 +849,7 @@ class Checker(GenericMixin, TraitMixin):
             raise err(f"function {f.name!r} is already defined", f)
         f.ty = self.fns[f.name] = self.signature(f)
         self.specs[f.name] = f.params
+        self.fn_defs[f.name] = f
         if isinstance(f, ast.ExternFn):
             self.externs.add(f.name)
 
@@ -2214,6 +2218,37 @@ class Checker(GenericMixin, TraitMixin):
         e.func = helper
         return self.fns[helper].ret
 
+    def endpoint(self, e: ast.Call) -> Type:
+        """Type `endpoint(f)`: the call becomes a call of a generated function that builds the `Endpoint` of `f`.
+
+        Args:
+            e: The call.
+
+        Returns:
+            The type `std.web.Endpoint`.
+
+        Raises:
+            ZyloError: If the argument is not the name of an ordinary top-level function, or its signature cannot be served.
+        """
+        if not self.endpoints.available:
+            raise err("endpoint needs the module std.web; compile a file instead of a string", e)
+        if len(e.args) != 1 or e.named:
+            raise err(f"endpoint takes 1 argument, the name of a function, got {len(e.args)}", e)
+        arg = e.args[0]
+        name = arg.id if isinstance(arg, ast.Name) else None
+        if name is None or self.scopes.lookup(name) is not None or name not in self.fn_defs and name not in self.generics:
+            raise err("the argument of endpoint must be the name of a top-level function", arg)
+        if name in self.generics:
+            raise err(f"endpoint cannot take the generic function {name!r}; write a plain function that calls it", arg)
+        if name in self.externs:
+            raise err(f"endpoint cannot take the `extern fn` {name!r}; wrap it in a plain function", arg)
+        helper = self.endpoints.endpoint(name, self.fn_defs[name], self.fns[name], e)
+        for f in self.deriver.take():
+            self.declare_fn(f)
+            self.program.body.append(f)
+        e.func, e.args = helper, []
+        return self.fns[helper].ret
+
     def type_name(self, e: ast.Call) -> Type:
         """Type `type_name(T)`: the call becomes a string literal holding the type as written.
 
@@ -2256,6 +2291,8 @@ class Checker(GenericMixin, TraitMixin):
                 return self.typed_json(e)
             case "type_name":
                 return self.type_name(e)
+            case "endpoint":
+                return self.endpoint(e)
             case "print":  # any number of values, separated by spaces
                 for a in args:
                     self.printable(a)

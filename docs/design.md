@@ -200,6 +200,14 @@ methods, typed variables, fields). Multi-statement bodies are a local `fn name(.
 a variable assigned a block-bodied lambda, so there is a single closure mechanism. A call whose callee is not a plain name is
 a `CallValue`; `obj.field(x)` is a method call node that the checker marks as a field call when the field has a function type.
 
+**Endpoints (`endpoint(f)`) reuse that path.** `semantics/endpoint.py` writes two functions per endpoint function, through
+the same queue as the typed JSON helpers (`Deriver.emit`): a handler `fn(Request) -> Response` that reads every parameter
+of `f` (collecting the errors of all of them before answering 422), calls it and writes the response with the existing
+`to_json` / `from_json` / `json_schema` helpers, and a function returning `Endpoint(handler, operation, schemas)`. The call
+`endpoint(f)` is rewritten into a call of the latter. The route is not known at expansion time, so path parameters are
+recognised at run time (a name present in `req.path_params` is a path parameter, otherwise a query parameter), and
+`route_operation` fixes the documentation once the route is known. The linker loads `std.web` when it sees the call.
+
 **Typed JSON is expanded by the checker into ordinary Zylo.** Rather than generic functions, `to_json(x)`, `from_json(T, j)`,
 `json_schema(T)` and `json_schema_defs(T)` are built-ins that the checker resolves per type (the parser reads the first
 argument of the last three as a type, so `list[int]`, `T?` and `mod.Struct` work and the linker mangles it like any type

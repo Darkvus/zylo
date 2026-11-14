@@ -186,14 +186,22 @@ class Deriver:
             return name
         self.made.add(name)
         defaults: dict[str, ast.Expr] = {}
-        src = getattr(self, f"gen_{kind}")(name, ty, defaults)
+        self.emit(getattr(self, f"gen_{kind}")(name, ty, defaults), defaults)
+        return name
+
+    def emit(self, src: str, defaults: dict[str, ast.Expr]) -> None:
+        """Parse the source of a generated function and queue it for the checker.
+
+        Args:
+            src: The function, written as Zylo source.
+            defaults: The values the placeholders in `src` stand for.
+        """
         prog = parse(src)
         fn = prog.body[0]
         for n in ast.walk(fn):  # an error in generated code is reported where the built-in is called
             n.line, n.col, n.file = self.where.line, self.where.col, self.where.file
         self.substitute(fn, defaults)
         self.fresh.append(fn)
-        return name
 
     def substitute(self, node: ast.Node, defaults: dict[str, ast.Expr]) -> None:
         """Replace each placeholder name in a generated function by a copy of the default value it stands for."""

@@ -1,0 +1,29 @@
+200 [{"id":10,"name":"rex","tag":"none"}]
+422 {"detail":[{"loc":["query","limit"],"msg":"Input should be a valid integer","type":"int_parsing"}]}
+200 [{"id":3,"name":"rex","tag":"x"}]
+422 {"detail":[{"loc":["body","name"],"msg":"expected str, got number","type":"type_error"}]}
+200 {"id":7,"name":"a","tag":"t"}
+400 {"detail":"invalid JSON body: expected a string key but found 'o' at line 1, column 2"}
+422 {"detail":[{"loc":["body"],"msg":"Field required","type":"missing"}]}
+422 {"detail":[{"loc":["body","name"],"msg":"missing required field","type":"missing"}]}
+404 {"detail":"pet not found"}
+200 {"id":1,"name":"rex","tag":""}
+422 {"detail":[{"loc":["path","id"],"msg":"Input should be a valid integer","type":"int_parsing"}]}
+200 "/x 2.5 false"
+200 "/x 2.5 true"
+422 {"detail":[{"loc":["query","loud"],"msg":"Input should be a valid boolean","type":"bool_parsing"}]}
+200 "sad 1"
+200 "happy 2"
+422 {"detail":[{"loc":["body"],"msg":"unknown variant \"Angry\", expected one of \"Happy\", \"Sad\"","type":"type_error"}]}
+422 {"detail":[{"loc":["body",2],"msg":"expected int, got string","type":"type_error"}]}
+200 6
+202 raw
+422 {"detail":[{"loc":["query","n"],"msg":"Field required","type":"missing"}]}
+nothing 4
+200 null
+GET /pets/{id} Find a pet. id path true
+Optionally filtered by tag. false false
+2 422 2 1
+{"$ref":"#/components/schemas/NewPet"}
+{"items":{"$ref":"#/components/schemas/Pet"},"type":"array"}
+{"NewPet":{"properties":{"name":{"type":"string"},"tag":{"default":"","type":"string"}},"required":["name"],"type":"object"},"Pet":{"description":"A pet.","properties":{"id":{"type":"integer"},"name":{"type":"string"},"tag":{"default":"","type":"string"}},"required":["id","name"],"type":"object"}}

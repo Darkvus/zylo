@@ -1426,6 +1426,77 @@ A string literal as the first line of a struct or enum is its description, and a
 (or an enum variant) describes that field. They become `description` in the schema and nothing else; the formatter
 keeps them.
 
+## Endpoints
+
+`endpoint(f)` describes a function as an HTTP endpoint. `f` must be the name of an ordinary top-level function (not
+generic, not an `extern fn`); the result is a `std.web.Endpoint`, and `std.web` is loaded for you:
+
+```zylo
+import std.web as web
+from std.http import Request
+
+struct Pet:
+    id: int
+    name: str
+
+struct NewPet:
+    name: str
+
+fn list_pets(limit: int = 10, tag: str? = none) -> list[Pet]:
+    "List pets.\nOptionally filtered by tag."
+    return [Pet(1, "rex")]
+
+fn create_pet(body: NewPet) -> Pet:
+    return Pet(7, body.name)
+
+fn get_pet(id: int) -> Result[Pet, web.HttpError]:
+    if id == 1:
+        return ok(Pet(1, "rex"))
+    return err(web.HttpError(404, "pet not found"))
+
+ep = endpoint(get_pet)
+print(ep.operation.summary)          # "Find a pet." when get_pet has that doc string
+reply = ep.handler                   # fn(Request) -> Response: call it with a Request
+```
+
+An `Endpoint` has three fields:
+
+- `handler: fn(Request) -> Response` answers one request. It does not know its URL: a router matches the path and
+  puts the matched `{name}` segments in `req.path_params` before calling it.
+- `operation: Operation` is the OpenAPI description built from the signature, the return type and the doc string (the
+  first line is `summary`, the rest `description`). `method` and `path` are empty, and every scalar parameter is a
+  `query` parameter: `web.route_operation(op, "GET", "/pets/{id}")` fills in the route and turns the parameters named
+  in the path into required `path` parameters.
+- `schemas: dict[str, Json]` holds the JSON Schema of every struct and enum the body and the return type mention
+  (the same entries as `json_schema_defs`), to be merged into `components/schemas`.
+
+How each parameter is read:
+
+| Parameter | Source |
+|---|---|
+| `int`, `float`, `bool`, `str` | the path parameter of that name if the route has one, else the query string; required unless it has a default or is `T?` |
+| `T?` of these | optional; `none` when missing |
+| a struct, enum, `Json`, list or dict | the JSON request body (at most one); required unless it has a default |
+| `Request` | the raw request |
+
+Anything else (a tuple, a set, a `Cell`, a function) is a compile error naming the parameter. Query values are
+converted with `int`, `float`, `bool` (`true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`) or as they are.
+
+What the handler answers:
+
+- The return value is serialised with `to_json`: `200` with the JSON body. A function with no return type answers
+  `200` and `null`; one returning a `Response` is passed through unchanged.
+- `Result[T, HttpError]` documents `T` and turns `err(HttpError(status, detail))` into `{"detail": detail}` with that
+  status. Any other error type is a compile error.
+- Bad input answers `422` with `{"detail": [{"loc": [...], "msg": "...", "type": "..."}]}`, listing every problem:
+  `loc` is `["query", "limit"]`, `["path", "id"]` or `["body", "tags", 1, "name"]` (the JSON path of a `from_json`
+  error), `type` is `missing`, `int_parsing`, `float_parsing`, `bool_parsing`, `type_error` or `value_error`. A body that
+  is not JSON answers `400` with `{"detail": "invalid JSON body: ..."}`.
+
+The handler and the `Endpoint` constructor are ordinary Zylo functions written by the checker (`_zw_h_*`, `_zw_ep_*`),
+like the helpers of typed JSON, so they work across modules and are checked and compiled like user code. Dependencies
+(`depends(...)`) are not part of `endpoint`.
+
 ## Modules and packages
 
 A program can be split over several files, and use libraries written by others.
@@ -1528,10 +1599,11 @@ trust rules are in [rust-interop.md](rust-interop.md).
 | `exit(code)` | stop the program with an exit code |
 | `cell(v)` | a shared mutable `Cell[T]`, see above |
 | `to_json(x)`, `from_json(T, j)`, `json_schema(T)`, `json_schema_defs(T)` | typed JSON, see above |
+| `endpoint(f)` | an HTTP `Endpoint` for the function `f`, see [Endpoints](#endpoints) |
 | `range(n)`, `range(a, b)` | only in a `for` |
 
 A program may define its own function with the name of any built-in above except the core ones
-(`print`, `len`, `int`, `float`, `str`, `append`, `range`, `exit`, `some`, `ok`, `err`) and the typed JSON built-ins.
+(`print`, `len`, `int`, `float`, `str`, `append`, `range`, `exit`, `some`, `ok`, `err`) `endpoint` and the typed JSON built-ins.
 
 ## Runtime errors
 

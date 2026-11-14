@@ -149,6 +149,7 @@ class Linker:
         """
         self.entry_dir = entry.resolve().parent
         main = self.load(entry, is_entry=True, stack=[])
+        self.load_web_if_used()
         self.load_json_if_used()
         body: list[ast.Stmt] = []
         for m in self.order:
@@ -156,6 +157,15 @@ class Linker:
                 body += [s for s in m.program.body if isinstance(s, DEFINITIONS)]
         body += [s for s in main.program.body if not isinstance(s, (ast.Import, ast.FromImport))]
         return ast.Program(body, line=1, col=1, file=str(entry))
+
+    def load_web_if_used(self) -> None:
+        """Load `std.web` when a program uses `endpoint`: the code generated for it builds that module's `Endpoint`."""
+        if any(m.id == f"{STD}.web" for m in self.order):
+            return
+        if any(isinstance(n, ast.Call) and n.func == "endpoint" for m in self.order for n in ast.walk(m.program)):
+            found = stdlib_module([STD, "web"])
+            if found is not None:
+                self.load(found, False, [])
 
     def load_json_if_used(self) -> None:
         """Load `std.json` when a program uses the typed JSON built-ins: the code generated for them needs its `Json`."""

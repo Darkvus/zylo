@@ -1,0 +1,136 @@
+# endpoint(f): handlers, operations and schemas generated from typed functions.
+import std.web as web
+from std.http import Request, Response, text
+from std.json import Json
+import std.json as json
+
+struct Pet:
+    "A pet."
+    id: int
+    name: str
+    tag: str = ""
+
+struct NewPet:
+    name: str
+    tag: str = ""
+
+enum Mood:
+    Happy
+    Sad
+
+fn list_pets(limit: int = 10, tag: str? = none) -> list[Pet]:
+    "List pets.\nOptionally filtered by tag."
+    return [Pet(limit, "rex", tag.unwrap_or("none"))]
+
+fn create(body: NewPet) -> Pet:
+    "Create a pet."
+    return Pet(7, body.name, body.tag)
+
+fn get_pet(id: int) -> Result[Pet, web.HttpError]:
+    "Find a pet."
+    if id == 1:
+        return ok(Pet(1, "rex"))
+    return err(web.HttpError(404, "pet not found"))
+
+fn describe(req: Request, price: float, loud: bool = false) -> str:
+    return req.path + " " + str(price) + " " + str(loud)
+
+fn set_mood(mood: Mood, times: int = 1) -> str:
+    match mood:
+        Mood.Happy:
+            return "happy " + str(times)
+        Mood.Sad:
+            return "sad " + str(times)
+
+fn total(xs: list[int]) -> int:
+    return sum(xs)
+
+fn raw() -> Response:
+    return text(202, "raw")
+
+fn nothing(n: int):
+    print("nothing", n)
+
+fn request(
+    method: str,
+    query: dict[str, str],
+    body: str,
+    pp: dict[str, str],
+) -> Request:
+    h: dict[str, str] = {}
+    return Request(method, "/x", query, h, body, pp)
+
+fn show(r: Response):
+    print(r.status, r.body)
+
+fn main():
+    q: dict[str, str] = {}
+    p: dict[str, str] = {}
+    pets = endpoint(list_pets)
+    show(pets.handler(request("GET", q, "", p)))
+    q["limit"] = "abc"
+    show(pets.handler(request("GET", q, "", p)))
+    q["limit"] = "3"
+    q["tag"] = "x"
+    show(pets.handler(request("GET", q, "", p)))
+
+    make = endpoint(create)
+    show(make.handler(request("POST", q, "{\"name\": 5}", p)))
+    show(make.handler(request("POST", q, "{\"name\": \"a\", \"tag\": \"t\"}", p)))
+    show(make.handler(request("POST", q, "{oops", p)))
+    show(make.handler(request("POST", q, "", p)))
+    show(make.handler(request("POST", q, "{}", p)))
+
+    one = endpoint(get_pet)
+    p["id"] = "2"
+    show(one.handler(request("GET", q, "", p)))
+    p["id"] = "1"
+    show(one.handler(request("GET", q, "", p)))
+    p["id"] = "x"
+    show(one.handler(request("GET", q, "", p)))
+
+    d = endpoint(describe)
+    q["price"] = "2.5"
+    show(d.handler(request("GET", q, "", p)))
+    q["loud"] = "true"
+    show(d.handler(request("GET", q, "", p)))
+    q["loud"] = "maybe"
+    show(d.handler(request("GET", q, "", p)))
+
+    m = endpoint(set_mood)
+    show(m.handler(request("PATCH", q, "\"Sad\"", p)))
+    q["times"] = "2"
+    show(m.handler(request("PATCH", q, "\"Happy\"", p)))
+    show(m.handler(request("PATCH", q, "\"Angry\"", p)))
+    show(endpoint(total).handler(request("POST", q, "[1, 2, \"x\"]", p)))
+    show(endpoint(total).handler(request("POST", q, "[1, 2, 3]", p)))
+    show(endpoint(raw).handler(request("GET", q, "", p)))
+    show(endpoint(nothing).handler(request("GET", q, "", p)))
+    q["n"] = "4"
+    show(endpoint(nothing).handler(request("GET", q, "", p)))
+
+    op = web.route_operation(one.operation, "GET", "/pets/{id}")
+    print(
+        op.method,
+        op.path,
+        op.summary,
+        op.params[0].name,
+        op.params[0].location,
+        op.params[0].required,
+    )
+    print(
+        pets.operation.description,
+        pets.operation.params[0].required,
+        pets.operation.params[1].required,
+    )
+    print(
+        len(pets.operation.responses),
+        pets.operation.responses[1].status,
+        len(make.schemas),
+        len(m.schemas),
+    )
+    print(json.stringify(make.operation.request_body.unwrap()))
+    print(json.stringify(pets.operation.responses[0].schema.unwrap()))
+    print(json.stringify(Json.Obj(make.schemas)))
+
+main()
