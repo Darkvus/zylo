@@ -365,13 +365,9 @@ class FromBinding:
 
 
 def doc_of(node: ast.Node | None) -> str | None:
-    """The description of a definition: the string written right after it, or a function's leading string statement."""
-    if isinstance(node, (ast.StructDef, ast.EnumDef, ast.TraitDef, ast.Field, ast.Variant)):
+    """The description of a definition: the string literal written right after it (a function's doc string)."""
+    if isinstance(node, (ast.StructDef, ast.EnumDef, ast.TraitDef, ast.Field, ast.Variant, ast.FnDef)):
         return node.doc
-    if isinstance(node, ast.FnDef) and node.body:
-        first = node.body[0]
-        if isinstance(first, ast.ExprStmt) and isinstance(first.expr, ast.Str):
-            return first.expr.value
     return None
 
 

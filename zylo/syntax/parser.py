@@ -386,13 +386,14 @@ class Parser:
         self.expect("NEWLINE")
         return ast.Return(value, line=kw.line, col=kw.col)
 
-    def parse_fn(self, in_struct: bool = False, extern: bool = False, signature: bool = False) -> ast.FnDef:
+    def parse_fn(self, in_struct: bool = False, extern: bool = False, signature: bool = False, local: bool = False) -> ast.FnDef:
         """Parse a function, a method, a trait's method signature or an `extern fn`.
 
         Args:
             in_struct: True inside a struct, enum or trait body, where a leading `self` parameter is allowed.
             extern: True when the `extern` keyword was already consumed: the body is a Rust string after `=`.
             signature: True inside a trait: the line ends after the return type and there is no body.
+            local: True for a function inside a block, which keeps a leading string as an ordinary statement.
 
         Returns:
             The function node (an `ExternFn` when `extern` is True).
@@ -430,7 +431,12 @@ class Parser:
             self.expect("NEWLINE")
             return ast.ExternFn(name, params, ret, [], template=template, line=kw.line, col=kw.col)
         body = self.parse_block()
-        return ast.FnDef(name, params, ret, body, has_self, tparams=tparams, line=kw.line, col=kw.col)
+        doc, doc_line = None, 0
+        if not local and body and isinstance(body[0], ast.ExprStmt) and isinstance(body[0].expr, ast.Str):
+            doc, doc_line = body[0].expr.value, body[0].line  # a leading string is the doc string, not a statement
+            body = body[1:]
+        return ast.FnDef(name, params, ret, body, has_self, tparams=tparams, doc=doc, doc_line=doc_line,
+                         line=kw.line, col=kw.col)
 
     def parse_tparams(self) -> list[ast.TypeParam]:
         """Parse the optional type parameters after a definition's name: `[T]`, `[K, V]`, `[T: Ord + Show]`, `[T = int]`.
@@ -470,7 +476,7 @@ class Parser:
         Returns:
             An assignment of a block-bodied `Lambda` to `name`.
         """
-        f = self.parse_fn()
+        f = self.parse_fn(local=True)
         for p in f.params:
             if p.default is not None:
                 raise ZyloError(f"a local function cannot have default values ({p.name!r}); write them on a top-level `fn`",

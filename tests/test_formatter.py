@@ -13,7 +13,7 @@ from zylo.syntax.formatter import _scan_comments, float_text, format_source, quo
 from zylo.syntax.parser import parse
 
 ROOT = Path(__file__).parent.parent
-SKIP_FIELDS = ast._ANNOTATIONS | {"line", "col", "file", "ty"}
+SKIP_FIELDS = ast._ANNOTATIONS | {"line", "col", "file", "ty", "doc_line"}
 
 
 def dump(node):

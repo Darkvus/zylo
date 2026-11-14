@@ -158,6 +158,22 @@ changes a value that is thrown away, and is the error `loop variable 'q' is modi
 the indexes (`for i in range(len(ps)): ps[i].x = 9`) to change the list, or use the copy afterwards (`append(out, q)`),
 which makes it deliberate.
 
+### Documenting functions
+
+A string literal as the first line of a function or method body is its doc string. It is not a statement: it does not
+run and is not part of the body, so a function whose body is only a doc string is valid (it does nothing, and a
+function that returns a value still needs its `return`). Only the first string counts; one later in the body is an
+ordinary expression statement. A local `fn` inside another function keeps a leading string as a plain statement.
+
+```zylo
+fn area(w: int, h: int) -> int:
+    "The area of a rectangle."
+    return w * h
+```
+
+The formatter keeps it, hover and signature help in the editor show it, and the generated Rust carries it as a `///`
+doc comment on the function. The compiler also keeps it with the function, so a later feature can read it.
+
 ### Default and named arguments
 
 A parameter can have a default value, written `name: type = value`. Callers may leave it out, and may

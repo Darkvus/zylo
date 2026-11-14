@@ -460,6 +460,8 @@ class FnDef(Node):
         self_mut: True when the checker found that the method modifies `self`.
         tparams: The type parameters of a generic function or method (`fn first[T](...)`); empty for an ordinary one.
         instance: True for a copy of a generic function or method made by the checker for one list of type arguments.
+        doc: The description: a string literal written as the first statement of the body (not a statement itself), or None.
+        doc_line: Source line of that description.
     """
     name: str
     params: list[Param]
@@ -469,6 +471,8 @@ class FnDef(Node):
     self_mut: bool = False  # filled in by the checker: the method modifies `self`
     tparams: list[TypeParam] = field(default_factory=list)
     instance: bool = False  # a copy made by the checker for one list of type arguments
+    doc: str | None = None  # the string literal written as the first line of the body
+    doc_line: int = 0
 
 
 @dataclass
