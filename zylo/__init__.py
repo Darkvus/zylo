@@ -3,4 +3,4 @@
 See `docs/architecture.md` for how the package is organised.
 """
 
-__version__ = "0.34.0"
+__version__ = "0.35.0"

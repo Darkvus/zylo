@@ -233,3 +233,23 @@ def test_local_module_resolution_is_relative_to_the_importing_file(tmp_path):
     files = {"sub/inner.zy": "fn g() -> int:\n    return 1\n", "sub/outer.zy": "import inner\nfn f() -> int:\n    return inner.g()\n",
              "main.zy": "import sub.outer\nprint(outer.f())\n"}
     compile_ok(tmp_path, files)
+
+
+def test_a_constant_of_the_entry_file_does_not_leak_into_the_modules_it_imports(tmp_path):
+    """`pets` is a constant of main.zy; `store.zy` may use `pets` as a plain local (it used to fail with "cannot modify")."""
+    store = "fn add(n: int) -> int:\n    pets = n + 1\n    pets = pets + 1\n    return pets\n"
+    main = "from store import add\nconst pets = cell(0)\nprint(add(2))\npets.set(1)\nprint(pets.get())\n"
+    check(load_program(project(tmp_path, {"store.zy": store, "main.zy": main})))
+
+
+def test_a_constant_is_visible_only_in_its_own_module_and_where_imported(tmp_path):
+    lib = "const limit = 3\nfn get() -> int:\n    return limit\n"
+    use = "from lib import limit\nfn twice() -> int:\n    return limit * 2\n"
+    main = "import lib\nimport use\nconst secret = 1\nprint(lib.get(), use.twice(), lib.limit, secret)\n"
+    check(load_program(project(tmp_path, {"lib.zy": lib, "use.zy": use, "main.zy": main})))
+    leak = "fn peek() -> int:\n    return secret\n"  # the entry's constant is not a name here
+    with pytest.raises(ZyloError):
+        check(load_program(project(tmp_path, {"leak.zy": leak, "main.zy": "import leak\nconst secret = 1\nprint(leak.peek())\n"})))
+    unimported = "fn peek() -> int:\n    return limit\n"  # a constant of another module needs an import
+    with pytest.raises(ZyloError):
+        check(load_program(project(tmp_path, {"lib.zy": lib, "other.zy": unimported, "main.zy": "import lib\nimport other\nprint(other.peek())\n"})))

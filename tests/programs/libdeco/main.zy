@@ -1,0 +1,25 @@
+# The entry file imports the libraries; their decorators register before the entry's own statements run.
+import std.web as web
+from std.http import Request
+from registry import router
+import things
+import users
+
+@router.get("/own")
+fn own() -> str:
+    return "own"
+
+fn call(e: web.Endpoint, path: str, name: str, value: str) -> str:
+    q: dict[str, str] = {}
+    h: dict[str, str] = {}
+    p: dict[str, str] = {}
+    if value != "":
+        p[name] = value
+    r = e.handler(Request("GET", path, q, h, "", p))
+    return str(r.status) + " " + r.body
+
+print(router.log.get())
+for r in router.routes.get():
+    print(r.method, r.path, len(r.ep.operation.params))
+print(call(router.routes.get()[0].ep, "/users/7", "id", "7"))
+print(call(router.routes.get()[3].ep, "/things/4", "n", "4"))

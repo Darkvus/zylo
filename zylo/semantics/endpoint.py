@@ -12,6 +12,9 @@ How a parameter of `f` is read:
   from the query string otherwise; a default value or `T?` makes them optional;
 - an enum without data is read like a scalar, by variant name;
 - a struct, an enum with data, `Json`, a list or a dict is the JSON body (at most one, counting the dependencies);
+- a default written `query(10, ge=1, le=100, description="...")` (or `path(...)`) is the same parameter with its
+  default taken from the first argument (none: required), its constraints checked (a 422 on failure) and written to the
+  operation, and a description;
 - a parameter whose default is `depends(g)` is not read from the request: the handler calls the top-level function `g`
   (once per request, however many parameters and other dependencies use it) and passes the result. The parameters of
   `g` are read by these same rules, together with the endpoint's own, and merged into the operation.
@@ -21,6 +24,7 @@ import re
 from http import HTTPStatus
 
 from zylo.domain import ast
+from zylo.domain import params as markers
 from zylo.domain.errors import ZyloError
 from zylo.domain.types import (
     BOOL,
@@ -186,6 +190,9 @@ class EndpointDeriver:
             chunk, arg = self.scalar(st, i, p, ty, inner, owner, fail)
             st.body += chunk
             return arg
+        if markers.is_marker(p.default):
+            raise fail(f"parameter {p.name!r} of {owner} has the type {ty}, but {p.default.func}(...) describes an int, "
+                       f"float, bool, str or enum (or an optional of these) read from the path or the query string", p)
         if isinstance(ty, OptionT) or not isinstance(ty, (StructT, EnumT, ListT, DictT)):
             kinds = ("int, float, bool, str, an optional of these, an enum without data, a struct, an enum, Json, a list, "
                      "a dict or Request")
@@ -224,10 +231,19 @@ class EndpointDeriver:
         if known and known.inner != inner:
             raise fail(f"parameter {p.name!r} is {known.inner} in {known.owner} but {inner} in {owner}; "
                        f"the same name must have the same type", p)
+        spec = markers.spec_of(p)
+        limits = dict(spec.limits) if spec else {}
+        if known:
+            for key, value in limits.items():
+                if key in known.limits and known.limits[key] != value:
+                    raise fail(f"parameter {p.name!r} has {key}={value} in {owner} but {key}={known.limits[key]} in "
+                               f"{known.owner}; the same name must have the same constraints", p)
+        fresh = {k: v for k, v in limits.items() if not known or k not in known.limits}  # the ones no earlier reader checks
         optional = isinstance(ty, OptionT)
-        if p.default is not None:
+        default = markers.default_of(p)
+        if default is not None:
             ph = PLACEHOLDER.format(f"e{i}")
-            defaults[ph] = p.default
+            defaults[ph] = default
             decl, arg, required = f"    {var}: {ty} = {ph}\n", var, False
         elif optional:
             decl, arg, required = f"    {var}: {ty} = none\n", var, False
@@ -241,15 +257,22 @@ class EndpointDeriver:
             reader = f"{W}{READERS[inner]}(zw_s{i}, zw_w{i}, {name})"
         else:
             reader = f"{W}_enum_param({self.d.from_expr(inner, f'{JSON}.Str(zw_s{i})', lit('$'))}, zw_w{i}, {name})"
+        assign = f"                    {var} = {value}\n"
+        if fresh:
+            assign = (f"                    match {check_expr(inner, fresh, f'zw_v{i}', f'zw_w{i}', name)}:\n"
+                      f"                        some(zw_x{i}):\n                            append(zw_errors, zw_x{i})\n"
+                      f"                        none:\n                            {var} = {value}\n")
         chunk = (f"{decl}    zw_w{i} = {W}_where(zw_req, {name})\n    match {W}_raw(zw_req, {name}):\n        some(zw_s{i}):\n"
                  f"            match {reader}:\n                ok(zw_v{i}):\n"
-                 f"                    {var} = {value}\n                err(zw_e{i}):\n{bad}"
+                 f"{assign}                err(zw_e{i}):\n{bad}"
                  f"        none:\n{miss}")
         if known:
             known.required = known.required or required
+            known.limits.update(fresh)
+            known.description = known.description or (spec.description if spec else "")
         else:
             schema = "" if inner in SCALARS else f"some({self.d.schema_expr(inner)})"
-            st.params[p.name] = Slot(inner, required, owner, schema)
+            st.params[p.name] = Slot(inner, required, owner, schema, limits, spec.description if spec else "")
             if schema:
                 st.schema_types.append(inner)
         return chunk, arg
@@ -324,11 +347,16 @@ class Slot:
         required: Whether any reader requires it.
         owner: The first function that declared it.
         schema: The `some(schema)` expression of an enum parameter, or "".
+        limits: The constraints (`ge`, `le`, `min_length`...) of every reader, merged.
+        description: The first description a reader gave, or "".
     """
 
-    def __init__(self, inner: Type, required: bool, owner: str, schema: str = "") -> None:
+    def __init__(self, inner: Type, required: bool, owner: str, schema: str = "", limits: dict | None = None,
+                 description: str = "") -> None:
         """Create the slot."""
         self.inner, self.required, self.owner, self.schema = inner, required, owner, schema
+        self.limits: dict[str, int | float] = limits or {}
+        self.description = description
 
 
 class Inputs:
@@ -359,9 +387,12 @@ class Inputs:
     def param_expr(self, name: str) -> str:
         """The `Param(...)` expression of one merged parameter."""
         slot = self.params[name]
-        text = f'{W}Param({lit(name)}, "query", "", {"true" if slot.required else "false"}, {lit(SCHEMA_TYPES.get(slot.inner, "string"))}'
+        kind = SCHEMA_TYPES.get(slot.inner, "string")
+        text = f'{W}Param({lit(name)}, "query", {lit(slot.description)}, {"true" if slot.required else "false"}, {lit(kind)}'
         if slot.schema:
             text += f", {slot.schema}"
+        elif slot.limits:
+            text += f", some({limits_expr(kind, slot.limits)})"
         return text + ")"
 
 
@@ -450,6 +481,28 @@ class Dependencies:
                         f"            return {W}error_reply(zw_de{var[4:]}.status, zw_de{var[4:]}.detail)\n"
                         f"        ok(zw_dv{var[4:]}):\n            pass\n")
         return out
+
+
+def number(inner: Type, value: int | float) -> str:
+    """The source of a constraint value for a parameter of type `inner` (an `int` stays whole, a `float` gets a point)."""
+    return str(int(value)) if inner == INT else repr(float(value))
+
+
+def check_expr(inner: Type, limits: dict[str, int | float], value: str, where: str, name: str) -> str:
+    """The call of the `std.web` helper that checks a parsed value against constraints; it gives `some(error)` or none."""
+    if inner == STR:
+        args = [f"some({limits[k]})" if k in limits else "none" for k in ("min_length", "max_length")]
+        return f"{W}_length({value}, {where}, {name}, {', '.join(args)})"
+    args = [f"some({number(inner, limits[k])})" if k in limits else "none" for k in ("ge", "gt", "le", "lt")]
+    return f"{W}{'_range_int' if inner == INT else '_range_float'}({value}, {where}, {name}, {', '.join(args)})"
+
+
+def limits_expr(kind: str, limits: dict[str, int | float]) -> str:
+    """The source of the JSON Schema of a constrained parameter (`{"type": "integer", "minimum": 1}`)."""
+    pick = {"ge": "minimum", "le": "maximum", "gt": "exclusiveMinimum", "lt": "exclusiveMaximum",
+            "min_length": "minLength", "max_length": "maxLength"}
+    args = [f"some({float(limits[k])!r})" if k in limits else "none" for k in pick]
+    return f"{W}_limited({lit(kind)}, {', '.join(args)})"
 
 
 def is_http_result(t: Type) -> bool:

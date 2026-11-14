@@ -1,0 +1,9 @@
+["GET /users/{id}", "POST /users", "GET /things", "GET /things/{n}", "GET /things-alias/{n}", "GET /own"]
+GET /users/{id} 1
+POST /users 1
+GET /things 0
+GET /things/{n} 1
+GET /things-alias/{n} 1
+GET /own 0
+200 {"id":7,"name":"user7"}
+200 8

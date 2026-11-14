@@ -1,0 +1,80 @@
+# query(...) and path(...): defaults, constraints (422 with FastAPI's types), descriptions and the operation's schemas.
+import std.web as web
+import std.json as json
+from std.http import Request
+
+fn paging(
+    limit: int = query(10, ge=1, le=100, description="Page size"),
+    offset: int = query(0, ge=0),
+) -> int:
+    return limit + offset
+
+fn search(
+    id: int = path(ge=1, description="The item"),
+    q: str = query(min_length=2, max_length=5, description="Search text"),
+    page: int = depends(paging),
+    score: float? = query(none, gt=0.5, lt=9.5),
+    offset: int = query(0, ge=0),
+) -> str:
+    return q + " " + str(page) + " " + str(id)
+
+fn plain(n: int = query(7)) -> int:
+    return n
+
+fn strict(n: int = query(ge=5)) -> int:
+    return n
+
+# `n` is first read without constraints; the dependency's constraint still applies, once.
+fn later(n: int, s: int = depends(strict)) -> int:
+    return n + s
+
+fn call(e: web.Endpoint, q: dict[str, str], p: dict[str, str]):
+    h: dict[str, str] = {}
+    r = e.handler(Request("GET", "/x", q, h, "", p))
+    print(r.status, r.body)
+
+fn main():
+    q: dict[str, str] = {}
+    p: dict[str, str] = {}
+    e = endpoint(search)
+    p["id"] = "3"
+    q["q"] = "abc"
+    call(e, q, p)
+    q["q"] = "a"
+    q["limit"] = "0"
+    q["offset"] = "-1"
+    q["score"] = "0.5"
+    p["id"] = "0"
+    call(e, q, p)
+    q["q"] = "abcdefg"
+    q["limit"] = "101"
+    q["score"] = "9.5"
+    p["id"] = "2"
+    call(e, q, p)
+    q["limit"] = "100"
+    q["offset"] = "0"
+    q["score"] = "9.4"
+    q["q"] = "ab"
+    call(e, q, p)
+    q.clear()
+    p.clear()
+    call(e, q, p)
+    call(endpoint(plain), q, p)
+    q["n"] = "x"
+    call(endpoint(plain), q, p)
+    q["n"] = "2"
+    call(endpoint(later), q, p)
+    q["n"] = "6"
+    call(endpoint(later), q, p)
+    print(plain(), search(2, "zz", 1, none, 3))
+    for r in e.operation.params:
+        s = r.schema.unwrap_or(json.Json.Null)
+        print(
+            r.name,
+            r.required,
+            r.type_name,
+            "[" + r.description + "]",
+            json.stringify(s),
+        )
+
+main()

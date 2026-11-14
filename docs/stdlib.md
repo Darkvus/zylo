@@ -275,6 +275,13 @@ for a web framework to mount. It imports `std.http` (so a program using it is bu
 parameter with the default `depends(g)` is injected by the generated handler; the request parameters of `g` are read with the endpoint's own and merged into `params`, `request_body` and `schemas`; see
 [the guide](guide.md#dependencies-depends).
 
+A parameter whose default is `query(10, ge=1, le=100, description="...")` (or `path(...)`) reads the same way and adds
+constraints: a value that breaks one is a `422` item with FastAPI's `type` (`greater_than_equal`, `greater_than`,
+`less_than_equal`, `less_than`, `string_too_short`, `string_too_long`) and a `ctx`, and the operation's `Param` gets
+the `description` and a `schema` with `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `minLength` and
+`maxLength`; see [the guide](guide.md#constraints-query-and-path). The private functions of `std.web` (`_range_int`,
+`_range_float`, `_length`, `_limited`) are what the generated code calls.
+
 A library module may also define `const` bindings (see [the guide](guide.md#constants-module-level-bindings)), for
 example the store a web framework's handlers share.
 

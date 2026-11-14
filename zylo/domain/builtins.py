@@ -11,7 +11,7 @@ BUILTINS = {"print", "range", "len", "int", "float", "str", "append", "exit",
             "argv", "input", "read_line", "read_stdin", "read_file", "write_file", "append_file",
             "file_exists", "list_dir", "env", "eprint", "time", "sleep",
             "cell", "to_json", "from_json", "json_schema", "json_schema_defs", "type_name",
-            "endpoint", "depends"}
+            "endpoint", "depends", "query", "path"}
 # Built-ins whose first argument is a type, written like any type (`from_json(list[int], j)`).
 TYPE_ARG_BUILTINS = {"from_json", "json_schema", "json_schema_defs", "type_name"}
 # Builtins a program may redefine with its own function (the core ones may not).
@@ -89,6 +89,8 @@ FUNCTIONS: dict[str, Builtin] = {b.name: b for b in [
     _b("type_name", "type", "str", "The name of a type as written (`int`, `list[str]`, `Box[int]`); inside a generic function, the name of the type argument of each copy."),
     _b("endpoint", "f: fn", "Endpoint", "Turns a typed top-level function into a `std.web.Endpoint`: a request handler, its OpenAPI operation and its JSON schemas."),
     _b("depends", "f: fn", "T", "Only as the default of a parameter of a function given to `endpoint`: the value `f` returns for the request, injected into the parameter."),
+    _b("query", "default: T; ge: T; gt: T; le: T; lt: T; min_length: int; max_length: int; description: str", "T", "Only as the default of a parameter of a function given to `endpoint`: the default value (leave it out to require the parameter) and the constraints of a query parameter, written into the OpenAPI document and checked with a 422."),
+    _b("path", "ge: T; gt: T; le: T; lt: T; min_length: int; max_length: int; description: str", "T", "Only as the default of a parameter of a function given to `endpoint`: the constraints and description of a path parameter (always required)."),
     _b("json_schema", "type", "Json", "The JSON Schema of a type."),
     _b("json_schema_defs", "type", "Json", "The JSON Schema of a type, with the `$defs` of the types it uses."),
 ]}

@@ -1,0 +1,15 @@
+# A library module with decorated handlers, registered on a constant imported by name.
+from registry import router
+
+struct User:
+    id: int
+    name: str
+
+@router.get("/users/{id}")
+fn get_user(id: int) -> User:
+    "Read a user."
+    return User(id, "user" + str(id))
+
+@router.post("/users", status=201)
+fn make_user(name: str) -> User:
+    return User(0, name)

@@ -352,6 +352,10 @@ The rules:
 - **Modules**: constants of a library module are importable like functions (`import lib` then `lib.store`, or
   `from lib import store`); a name starting with `_` is private. All the importers see the same cell. A constant has
   to be of the module that defines it: assigning to an imported one is an error.
+- **Visibility**: a constant is visible only in its own module and in the modules that import it by name. A `const` of
+  the entry file is not visible to the modules it imports (the entry file cannot be imported), so a local variable of
+  a library function may have the same name as it without any clash; a library cannot read a constant of the entry file
+  or of a module it does not import.
 - **Threads**: a constant compiles to a Rust `thread_local!` (consistent with `Cell` being `Rc<RefCell<T>>`), so every
   thread has its own copy. The `std.http` server runs handlers on the thread that called `serve`, so handlers share
   the state of the constants initialised there. Zylo has no threads of its own.
@@ -1525,6 +1529,7 @@ How each parameter is read:
 | an enum none of whose variants has data | like a scalar: the variant name (`?sort=Desc`), `422` with `type` `enum` when unknown; described by a `$ref` in `Param.schema` |
 | a struct, an enum with data, `Json`, list or dict | the JSON request body (at most one); required unless it has a default |
 | `Request` | the raw request |
+| default `query(...)` / `path(...)` | the same parameter with a default, constraints and a description, see [Constraints](#constraints-query-and-path) |
 | default `depends(g)` | a dependency, see [Dependencies](#dependencies-depends) |
 
 (An enum is a body only when some variant carries data; `Json` is always a body.) Anything else (a tuple, a set, a `Cell`, a function) is a compile error naming the parameter. Query values are
@@ -1538,7 +1543,7 @@ What the handler answers:
   status. Any other error type is a compile error.
 - Bad input answers `422` with `{"detail": [{"loc": [...], "msg": "...", "type": "..."}]}`, listing every problem:
   `loc` is `["query", "limit"]`, `["path", "id"]` or `["body", "tags", 1, "name"]` (the JSON path of a `from_json`
-  error), `type` is `missing`, `int_parsing`, `float_parsing`, `bool_parsing`, `type_error` or `value_error`. A body that
+  error), `type` is `missing`, `int_parsing`, `float_parsing`, `bool_parsing`, `type_error`, `value_error`, or a constraint (see [Constraints](#constraints-query-and-path)). A body that
   is not JSON answers `400` with `{"detail": "invalid JSON body: ..."}`.
 
 The handler and the `Endpoint` constructor are ordinary Zylo functions written by the checker (`_zw_h_*`, `_zw_ep_*`),
@@ -1557,6 +1562,55 @@ like the helpers of typed JSON, so they work across modules and are checked and 
   dependencies it uses), described by the standard reason phrase (`Not Found`). Only a number literal as the first
   argument (or `status=`) is detected; an `HttpError` built elsewhere or with a computed status is still answered but
   not listed.
+
+### Constraints: `query` and `path`
+
+A scalar parameter may use `query(...)` (or `path(...)`) as its default, like FastAPI's `Query(...)`. Both are built-in
+names (no import), only meaningful in a function given to `endpoint`, and they add a default, constraints and a
+description:
+
+```zylo
+struct Pet:
+    id: int
+
+fn list_pets(
+    id: int = path(ge=1, description="The shop"),
+    name: str = query(min_length=2, max_length=20),
+    limit: int = query(10, ge=1, le=100, description="Page size"),
+    min_price: float? = query(none, gt=0.0),
+) -> list[Pet]:
+    return []
+```
+
+- **The default**: the first positional argument of `query(...)` is the default value (a constant, as for any default).
+  `query(ge=1)` with no default makes the parameter required. `path(...)` takes no default: a path parameter is always
+  required (it is the same as a `query` with no default; the route decides where the value comes from, and the
+  operation marks it `in: path` when the route has `{name}`). The usual rule still holds: a required parameter cannot
+  follow one with a default, so write the required ones first. A parameter that is `depends(...)` does not count.
+- **Constraints** (named arguments, every value a literal): `ge`, `gt`, `le`, `lt` for `int` and `float` (and their
+  optionals; an `int` takes whole numbers, a `float` takes either, `-1` and `-0.5` are fine), `min_length` and
+  `max_length` (whole numbers, 0 or more) for `str` and `str?`. `description="..."` is a string literal. A constraint on
+  another type, a value that is not a literal, a repeated or unknown name, or `query` on a body type (struct, list...)
+  is a compile error naming the parameter. (Lists are not read from the query string, so there is no list constraint.)
+- **Validation**: a value that parses but breaks a constraint is a `422` item in the same `detail` list as the other
+  problems, with FastAPI's `type` and an optional `ctx` holding the limit:
+  `{"loc": ["query", "limit"], "msg": "Input should be greater than or equal to 1", "type": "greater_than_equal", "ctx": {"ge": 1}}`.
+  The types are `greater_than_equal` (`ge`), `greater_than` (`gt`), `less_than_equal` (`le`), `less_than` (`lt`),
+  `string_too_short` (`min_length`) and `string_too_long` (`max_length`). Only the first broken limit of a parameter is
+  reported (`ge`, `gt`, `le`, `lt` in that order). Defaults are not validated.
+- **The operation**: the parameter's `Param.schema` becomes `{"type": "integer", "minimum": 1, "maximum": 100}` (also
+  `exclusiveMinimum`, `exclusiveMaximum`, `minLength`, `maxLength`) and `Param.description` is the description.
+- **Dependencies**: the same markers work in the parameters of a `depends(g)` function. A parameter name read by the
+  endpoint and by dependencies is one parameter: their constraints are merged (each constraint is checked and reported
+  once, the first description wins). Giving the same constraint different values (`ge=1` in one, `ge=2` in the other) is
+  a compile error.
+- **Calling the function yourself** uses the default of `query(10, ...)` (a `query(...)` with no default is a required
+  argument); constraints are not checked then, only by the handler.
+- `query` and `path` may still be used as the names of your own functions or variables; in the default of a parameter
+  they always mean the markers.
+
+`body(description=...)` is not available: a request body is described by the schema of its type (see
+[Documenting types](#documenting-types)).
 
 ### Dependencies: `depends`
 
@@ -1663,6 +1717,44 @@ pets.get("/", endpoint(list_pets))
 - The rewrite happens in the parser, so the checker sees ordinary code; errors point at the decorator line. `zylo fmt`
   keeps decorators as written.
 
+#### Decorators in library modules
+
+A library module (any file that is not the entry file) may hold decorated functions, so a program can split its
+routes over files:
+
+```
+# routes/pets.zy
+from app import router          # `const router = Router(...)` defined in app.zy
+
+@router.get("/pets")
+fn list_pets() -> list[Pet]:
+    return []
+```
+
+The statement a decorator stands for is a *registration*. Registrations of library modules are not run when the
+module is imported (a module has no top-level code), but when the program starts. The exact rules:
+
+- **Target**: the decorator must be a method call on a `const`: a constant of the same module, one imported by name
+  (`from app import router`), or one reached through a module (`@app.router.get(...)`). A decorator that is a plain
+  call (`@name(args)`), or whose target is anything else, is a compile error in a library module (it stays allowed in
+  the entry file, where it is an ordinary top-level statement). The constant normally holds a `Cell`: that is what a
+  registration changes.
+- **Only decorators**: a hand-written `router.get(...)` line is still rejected in a library module ("library modules
+  can only contain..."); decorators are the one way for a library to run something.
+- **When**: once, before the entry file's own statements (so before everything it prints or serves). Constants are
+  computed on first read, so the constant a registration uses is created right then, and every module that imports it
+  shares it.
+- **Order**: modules in import order, then source order. Imports are loaded depth-first in the order written: a module's
+  own imports are registered before the module itself, a module imported from several places registers once (at its
+  first position), and the entry file's own decorators come last, interleaved with its other statements as written. In
+  one module the decorated functions register top to bottom, and the several decorators of one function in the order
+  written (top to bottom).
+- **Reaching a library**: a module only registers if it is part of the program, which means something imports it. A
+  module with only decorators is imported for its effect: `import routes.pets` (no name needs to be used).
+- The arguments of the decorator (`"/pets"`, `status=201`, ...) are evaluated at start-up, like those of the entry
+  file; keep them to constants and literals.
+
+
 ## Modules and packages
 
 A program can be split over several files, and use libraries written by others.
@@ -1681,7 +1773,7 @@ fn area(r: Rect) -> int:
   `from shapes import area, Rect` brings the names in directly; `as` renames either form.
 - `pub from shapes import Rect, area` inside a module re-exports those names, so a package's entry file can offer
   one import point (`from mylib import Rect, area`); see [packages.md](packages.md#re-exports).
-- A library module may only contain imports, functions and structs. Names starting with `_` are private.
+- A library module may only contain imports, constants, functions (decorated or not, see [Decorators](#decorators)), structs, enums and traits. Names starting with `_` are private.
 - `import a.b` loads `a/b.zy`, relative to the file that imports it; if there is no such file, it
   looks for an installed package named `a`.
 - Import cycles are an error.
@@ -1767,10 +1859,11 @@ trust rules are in [rust-interop.md](rust-interop.md).
 | `to_json(x)`, `from_json(T, j)`, `json_schema(T)`, `json_schema_defs(T)` | typed JSON, see above |
 | `endpoint(f)`, `endpoint(f, status=201)` | an HTTP `Endpoint` for the function `f`, see [Endpoints](#endpoints) |
 | `depends(g)` | only as a parameter default of a function given to `endpoint`: injects the result of `g`, see [Endpoints](#endpoints) |
+| `query(default, ge=, gt=, le=, lt=, min_length=, max_length=, description=)`, `path(...)` | only as a parameter default of a function given to `endpoint`: default, constraints and description of a query or path parameter, see [Endpoints](#constraints-query-and-path) |
 | `range(n)`, `range(a, b)` | only in a `for` |
 
 A program may define its own function with the name of any built-in above except the core ones
-(`print`, `len`, `int`, `float`, `str`, `append`, `range`, `exit`, `some`, `ok`, `err`), `endpoint`, `depends` and the typed JSON built-ins.
+(`print`, `len`, `int`, `float`, `str`, `append`, `range`, `exit`, `some`, `ok`, `err`), `endpoint`, `depends` and the typed JSON built-ins. (`query` and `path` can be redefined, but as a parameter default they always mean the markers.)
 
 ## Runtime errors
 

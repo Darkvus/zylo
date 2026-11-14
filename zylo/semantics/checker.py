@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass, field
 
 from zylo.domain import ast
+from zylo.domain import params as markers
 from zylo.domain.builtins import BUILTINS, SHADOWABLE  # noqa: F401
 from zylo.domain.errors import ZyloError
 from zylo.domain.types import (
@@ -818,13 +819,24 @@ class Checker(GenericMixin, TraitMixin):
                 if what != "parameter" or len(d.args) != 1 or d.named or not isinstance(d.args[0], ast.Name):
                     raise err("depends(f) goes in the default of a function parameter and takes the name of a top-level function", d)
                 continue
+            default = item.default
+            if markers.is_marker(default):  # `query(10, ge=1)` / `path(ge=1)`: the first argument is the default, if any
+                if what != "parameter":
+                    raise err(f"{default.func}(...) goes in the default of a function parameter", default)
+                spec = markers.spec_of(item)
+                markers.check_limits(spec, ty, item.name)
+                default = spec.default
+                if default is None:  # required: no default, like a parameter written without one
+                    if previous is not None:
+                        raise err(f"{what} {item.name!r} has no default but follows {previous!r}, which has one", item)
+                    continue
             previous = previous or item.name
-            if not self.is_constant(item.default):
+            if not self.is_constant(default):
                 raise err("a default value must be a constant: a number, string, true/false, none, an empty list or dict, "
-                          "or a tuple of those", item.default)
-            t = self.expr(item.default, ty)
+                          "or a tuple of those", default)
+            t = self.expr(default, ty)
             if t != ty:
-                raise err(f"the default of {what} {item.name!r} is {t} but it is declared {ty}", item.default)
+                raise err(f"the default of {what} {item.name!r} is {t} but it is declared {ty}", default)
 
     # ---- functions ------------------------------------------------------------------
 
@@ -931,6 +943,8 @@ class Checker(GenericMixin, TraitMixin):
                 p.info = self.scopes.declare(p.name, pt)
                 if ast.is_depends(p.default):
                     self.check_depends(p, pt, owner)
+                elif markers.is_marker(p.default) and owner:
+                    raise err(f"{p.default.func}(...) works on top-level functions, not on methods", p.default)
             before = len(self.errors)
             self.block(f.body)
             # a `return` that failed to check is not a missing return: do not pile a second error on the first
@@ -2239,7 +2253,7 @@ class Checker(GenericMixin, TraitMixin):
             if slots[i] is not None:
                 raise err(f"argument {n.name!r} of {name} is given more than once", n)
             slots[i] = n.value
-        missing = [p.name for p, v in zip(specs, slots) if v is None and p.default is None]
+        missing = [p.name for p, v in zip(specs, slots) if v is None and markers.default_of(p) is None]
         if missing:
             raise err(f"{name} is missing {'argument' if len(missing) == 1 else 'arguments'} "
                       f"{', '.join(repr(m) for m in missing)}", e)
@@ -2248,7 +2262,7 @@ class Checker(GenericMixin, TraitMixin):
                 raise err(f"parameter {p.name!r} of {name} is injected by `endpoint`; pass it explicitly when calling "
                           f"{name} yourself", e)
             if slots[i] is None:
-                slots[i] = copy.deepcopy(p.default)
+                slots[i] = copy.deepcopy(markers.default_of(p))
         e.named = []
         return slots  # type: ignore[return-value]
 
@@ -2408,6 +2422,8 @@ class Checker(GenericMixin, TraitMixin):
                 return self.endpoint(e)
             case "depends":
                 raise err("depends(f) can only be the default of a parameter of a function you give to endpoint(...)", e)
+            case "query" | "path":
+                raise err(f"{name}(...) can only be the default of a parameter of a function you give to endpoint(...)", e)
             case "print":  # any number of values, separated by spaces
                 for a in args:
                     self.printable(a)

@@ -1,0 +1,12 @@
+# Imports `users` first, so its routes register before these; reaches the registry through the module.
+import registry
+import users
+
+@registry.router.get("/things")
+fn things() -> list[str]:
+    return ["a", "b"]
+
+@registry.router.get("/things/{n}")
+@registry.router.get("/things-alias/{n}")
+fn thing(n: int) -> int:
+    return n * 2
