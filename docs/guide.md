@@ -1602,14 +1602,24 @@ ep = endpoint(list_pets)
   dependency's struct/enum types are part of `schemas`.
 
 ```zylo
+import std.web as web
+from std.http import Request
+
+struct Page:
+    limit: int
+    offset: int
+
 fn paging(limit: int = 10, offset: int = 0) -> Page:
     return Page(limit, offset)
 
-fn auth(req: Request, token: str) -> Result[str, web.HttpError]:  # a query token and a header
-    ...
+fn auth(req: Request, token: str) -> Result[str, web.HttpError]:
+    if token != "s3cret":
+        return err(web.HttpError(403, "bad token"))
+    return ok(req.headers.get("x-user").unwrap_or("anon"))
 
-fn list_notes(page: Page = depends(paging), who: str = depends(auth)) -> list[Note]:
-    ...
+fn list_notes(page: Page = depends(paging), who: str = depends(auth)) -> str:
+    return who + " " + str(page.limit)
+
 # params: limit, offset (optional), token (required); a missing token and a bad limit are both in one 422
 ```
 

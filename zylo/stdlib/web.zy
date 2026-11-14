@@ -64,7 +64,9 @@ fn route_operation(op: Operation, method: str, path: str) -> Operation:
     params: list[Param] = []
     for p in op.params:
         if path.count("{" + p.name + "}") > 0:
-            params.append(Param(p.name, "path", p.description, true, p.type_name, p.schema))
+            params.append(
+                Param(p.name, "path", p.description, true, p.type_name, p.schema),
+            )
         else:
             params.append(p)
     return Operation(
