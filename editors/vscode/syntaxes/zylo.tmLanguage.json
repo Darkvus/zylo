@@ -16,6 +16,9 @@
       "include": "#strings"
     },
     {
+      "include": "#decorators"
+    },
+    {
       "include": "#definitions"
     },
     {
@@ -204,6 +207,17 @@
           ]
         }
       ]
+    },
+    "decorators": {
+      "match": "^(\\s*)(@)([A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*)",
+      "captures": {
+        "2": {
+          "name": "punctuation.decorator.zylo"
+        },
+        "3": {
+          "name": "entity.name.function.decorator.zylo"
+        }
+      }
     },
     "definitions": {
       "patterns": [

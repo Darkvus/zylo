@@ -1497,6 +1497,34 @@ The handler and the `Endpoint` constructor are ordinary Zylo functions written b
 like the helpers of typed JSON, so they work across modules and are checked and compiled like user code. Dependencies
 (`depends(...)`) are not part of `endpoint`.
 
+### Decorators
+
+A decorator is sugar for a call that registers a function. `@target.method(args)` on its own line above a top-level `fn`
+means: define the function, then run the statement `target.method(args, endpoint(f))`.
+
+```
+@pets.get("/")
+fn list_pets(limit: int = 10) -> list[Pet]:
+    "List pets."
+    return store.list(limit)
+
+# means exactly
+fn list_pets(limit: int = 10) -> list[Pet]:
+    "List pets."
+    return store.list(limit)
+pets.get("/", endpoint(list_pets))
+```
+
+- `endpoint(f)` is inserted after the last positional argument and before the named ones, so
+  `@app.get("/x", summary="a")` becomes `app.get("/x", endpoint(f), summary="a")`. With no arguments, `@app.get()`
+  becomes `app.get(endpoint(f))`.
+- `@name(args)` (no dot) calls the function `name`: `name(args, endpoint(f))`.
+- Several decorators are allowed; their statements follow the function in the order written, top to bottom.
+- Decorators work on top-level `fn` only (not methods, local functions or `extern fn`), and must be calls. The module
+  needs `import std.web`, as with any use of `endpoint`.
+- The rewrite happens in the parser, so the checker sees ordinary code; errors point at the decorator line. `zylo fmt`
+  keeps decorators as written.
+
 ## Modules and packages
 
 A program can be split over several files, and use libraries written by others.
