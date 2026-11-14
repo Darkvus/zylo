@@ -59,7 +59,7 @@ def grammar() -> dict:
         "scopeName": "source.zylo",
         "fileTypes": ["zy"],
         "patterns": [{"include": f"#{n}"} for n in (
-            "comments", "fstrings", "strings", "definitions", "keywords", "constants", "numbers", "types", "builtins",
+            "comments", "fstrings", "strings", "decorators", "definitions", "keywords", "constants", "numbers", "types", "builtins",
             "self", "struct-names", "calls", "operators")],
         "repository": {
             "comments": {"name": "comment.line.number-sign.zylo", "match": "#.*$"},
@@ -67,6 +67,9 @@ def grammar() -> dict:
             "fstrings": {"patterns": [fstring_rule('"'), fstring_rule("'")]},
             "strings": {"patterns": [string_rule('"', "string.quoted.double.zylo"),
                                      string_rule("'", "string.quoted.single.zylo")]},
+            "decorators": {"match": r"^(\s*)(@)([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
+                           "captures": {"2": {"name": "punctuation.decorator.zylo"},
+                                        "3": {"name": "entity.name.function.decorator.zylo"}}},
             "definitions": {"patterns": [
                 {"match": r"\b(extern)\s+(fn)\s+([A-Za-z_]\w*)",
                  "captures": {"1": {"name": "storage.modifier.zylo"}, "2": {"name": "storage.type.function.zylo"},

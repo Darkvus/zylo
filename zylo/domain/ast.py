@@ -337,8 +337,14 @@ Expr = (Int | Float | Str | Bool | Name | BinOp | UnaryOp | Call | ListLit | Ind
 
 @dataclass
 class ExprStmt(Node):
-    """An expression evaluated for its effect, such as a call."""
+    """An expression evaluated for its effect, such as a call.
+
+    Attributes:
+        expr: The expression.
+        sugar: True for the call a decorator expands to; the formatter leaves it out because the decorator is kept.
+    """
     expr: Expr
+    sugar: bool = False
 
 
 @dataclass
@@ -462,6 +468,9 @@ class FnDef(Node):
         instance: True for a copy of a generic function or method made by the checker for one list of type arguments.
         doc: The description: a string literal written as the first statement of the body (not a statement itself), or None.
         doc_line: Source line of that description.
+        decorators: The decorator calls written above the function, exactly as written. The parser has already added
+            the statements they stand for after the function (see `ExprStmt.sugar`); the formatter uses this list to
+            write the decorators back.
     """
     name: str
     params: list[Param]
@@ -473,6 +482,7 @@ class FnDef(Node):
     instance: bool = False  # a copy made by the checker for one list of type arguments
     doc: str | None = None  # the string literal written as the first line of the body
     doc_line: int = 0
+    decorators: list["Expr"] = field(default_factory=list)  # `@target.method(args)` lines as written (sugar, v0.32)
 
 
 @dataclass

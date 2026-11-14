@@ -1,0 +1,49 @@
+# Decorators: `@target.method(args)` above a fn is sugar for `target.method(args, endpoint(f))` after it.
+import std.web as web
+from std.http import Request, Response
+
+struct Router:
+    prefix: str
+    routes: list[str] = []
+    handlers: list[web.Endpoint] = []
+
+    fn get(self, path: str, e: web.Endpoint, status: int = 200):
+        self.routes.append("GET " + self.prefix + path + " " + str(status))
+        self.handlers.append(e)
+
+fn add(path: str, e: web.Endpoint, status: int = 200, tag: str = ""):
+    print("add", path, status, tag, e.operation.summary)
+
+pets = Router("/pets")
+app = Router("")
+
+@pets.get("/")
+fn list_pets(limit: int = 10) -> int:
+    "List pets."
+    return limit
+
+@pets.get("/{id}", status=201)
+@app.get("/other")
+fn get_pet(id: int) -> int:
+    return id
+
+@add("/plain", tag="t")
+@add("/twice")
+fn plain() -> str:
+    "Plain function."
+    return "hi"
+
+fn call(e: web.Endpoint, id: str) -> str:
+    q: dict[str, str] = {}
+    h: dict[str, str] = {}
+    p: dict[str, str] = {}
+    p["id"] = id
+    r = e.handler(Request("GET", "/", q, h, "", p))
+    return str(r.status) + " " + r.body
+
+for r in pets.routes:
+    print(r)
+print(app.routes[0])
+print(call(pets.handlers[1], "7"))
+print(call(app.handlers[0], "8"))
+print(pets.handlers[0].operation.summary)

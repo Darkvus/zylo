@@ -1,0 +1,8 @@
+add /plain 200 t Plain function.
+add /twice 200  Plain function.
+GET /pets/ 200
+GET /pets/{id} 201
+GET /other 200
+200 7
+200 8
+List pets.

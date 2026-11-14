@@ -4,6 +4,7 @@ A hand-written recursive-descent parser. Statements are dispatched on their lead
 precedence climbing. It knows the grammar only: whether names and types exist is the checker's concern.
 """
 
+import copy
 import dataclasses
 
 from zylo.domain import ast
@@ -210,12 +211,49 @@ class Parser:
             depth: The indentation depth the statement is at.
         """
         try:
-            body.append(self.parse_stmt())
+            if self.check("OP", "@"):
+                body.extend(self.parse_decorated())
+            else:
+                body.append(self.parse_stmt())
         except ZyloError as e:
             if not self.collect:
                 raise
             self.errors.append(e)
             self.recover(depth)
+
+    def parse_decorated(self) -> list[ast.Stmt]:
+        """Parse `@target.method(args)` lines and the top-level `fn` below them, as sugar.
+
+        Each decorator becomes the statement `target.method(args, endpoint(f))` placed after the function, in the order
+        the decorators are written. The `endpoint(f)` argument goes after the last positional argument and before the
+        named ones. The decorators are also kept on the function (`FnDef.decorators`) for the formatter.
+
+        Returns:
+            The function followed by one statement per decorator.
+
+        Raises:
+            ZyloError: If the decorator is not a call, is not at the top level, or is not followed by a `fn`.
+        """
+        if self.depth > 0:
+            raise ZyloError("decorators are only allowed on top-level functions", self.cur.line, self.cur.col)
+        decorators: list[tuple[Token, ast.Expr]] = []
+        while self.check("OP", "@"):
+            at = self.advance()
+            expr = self.parse_expr()
+            if not isinstance(expr, (ast.Call, ast.MethodCall)):
+                raise ZyloError("a decorator is a call: `@target.method(args)` or `@name(args)`", at.line, at.col)
+            self.expect("NEWLINE")
+            decorators.append((at, expr))
+        if not self.check("KW", "fn") or self.peek().kind != "IDENT":
+            raise ZyloError("a decorator must be followed by a function (`fn name(...)`)", decorators[0][0].line, decorators[0][0].col)
+        fn = self.parse_fn()
+        fn.decorators = [d for _, d in decorators]
+        out: list[ast.Stmt] = [fn]
+        for at, d in decorators:
+            call = copy.deepcopy(d)
+            call.args.append(ast.Call("endpoint", [ast.Name(fn.name, line=at.line, col=at.col)], line=at.line, col=at.col))
+            out.append(ast.ExprStmt(call, sugar=True, line=at.line, col=at.col))
+        return out
 
     def parse_block(self) -> list[ast.Stmt]:
         """Parse `: NEWLINE INDENT statements DEDENT`.
@@ -650,6 +688,8 @@ class Parser:
                 self.expect("NEWLINE")
                 fields.append(ast.Field(tok.value, typ, default, line=tok.line, col=tok.col))
             else:
+                if tok.kind == "OP" and tok.value == "@":
+                    raise ZyloError("decorators are only allowed on top-level functions, not on methods", tok.line, tok.col)
                 raise ZyloError("a struct body can only contain fields (`name: type`) and methods (`fn`)", tok.line, tok.col)
         self.expect("DEDENT")
         d = ast.StructDef(name.value, fields, methods, tparams=tparams, traits=traits, line=name.line, col=name.col)

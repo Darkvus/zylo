@@ -597,6 +597,7 @@ class _Formatter:
     def block(self, body: list[ast.Stmt], indent: int, top: bool = False, first: bool = True) -> None:
         """Write a list of statements; `first` is False when a doc string was already written above them."""
         previous_def = False
+        body = [s for s in body if not (isinstance(s, ast.ExprStmt) and s.sugar)]  # decorators are written above their fn
         for n, s in enumerate(body):
             is_def = isinstance(s, (ast.FnDef, ast.StructDef, ast.EnumDef, ast.TraitDef))
             if top and n and (is_def or previous_def):
@@ -643,7 +644,9 @@ class _Formatter:
                 tail = f" = {quote(s.template)}"
                 self.line(s.line, indent, "extern " + self.signature(s, indent, len(tail), 7) + tail, first_in_block)
             case ast.FnDef():
-                self.header(s, indent, self.signature(s, indent, 1), first_in_block)
+                for n, d in enumerate(s.decorators):
+                    self.line(d.line, indent, self.fit(indent, "@", d), first_in_block and n == 0)
+                self.header(s, indent, self.signature(s, indent, 1), first_in_block and not s.decorators)
                 if s.doc is not None:
                     self.line(s.doc_line, indent + 1, quote(s.doc), first_in_block=True)
                 self.block(s.body, indent + 1, first=s.doc is None)
